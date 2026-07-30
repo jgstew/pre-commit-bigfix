@@ -11,12 +11,19 @@ Add this to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
+      - id: validate-bes
       - id: check-bes-conventions
 ```
 
 ## Hooks
+
+### validate-bes
+
+Validates that BigFix BES XML files (`.bes`, `.ojo`) are well-formed XML that
+satisfies the BES.xsd schema, via the
+[validate_bes_xml](https://pypi.org/project/validate-bes-xml/) package.
 
 ### check-bes-conventions
 

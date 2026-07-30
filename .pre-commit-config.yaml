@@ -110,6 +110,16 @@ repos:
   # imports must be declared via additional_dependencies.
   - repo: local
     hooks:
+      - id: validate-bes-local
+        name: validate-bes-local
+        entry: python pre_commit_bigfix/validate_bes.py
+        language: python
+        # isolated venv: declare the third-party import used by validate_bes.py
+        additional_dependencies: [validate_bes_xml]
+        pass_filenames: True
+        files: \.(bes|ojo)$
+  - repo: local
+    hooks:
       - id: check-bes-conventions-local
         name: check-bes-conventions-local
         entry: python pre_commit_bigfix/bigfix_bes_check_conventions.py

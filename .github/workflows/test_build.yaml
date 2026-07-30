@@ -69,6 +69,12 @@ jobs:
       - name: Test pre-commit hook invoke
         shell: bash
         run: >-
+          python -c "import pre_commit_bigfix.validate_bes;
+          pre_commit_bigfix.validate_bes.main(
+          ['tests/examples/example-test.bes'])"
+      - name: Test pre-commit hook invoke
+        shell: bash
+        run: >-
           python -c "import pre_commit_bigfix.bigfix_bes_check_conventions;
           pre_commit_bigfix.bigfix_bes_check_conventions.main(
           ['--auto-fix=no', 'tests/examples/example-test.bes'])"

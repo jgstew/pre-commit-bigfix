@@ -1,3 +1,11 @@
+- id: validate-bes
+  name: Validate BigFix BES Files
+  description: This hook validates BigFix BES XML Files
+  entry: validate-bes
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: \.(bes|ojo)$
 - id: check-bes-conventions
   name: Check BigFix BES conventions
   description: >
