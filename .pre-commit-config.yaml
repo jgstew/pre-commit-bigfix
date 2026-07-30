@@ -117,6 +117,7 @@ repos:
         pass_filenames: True
         args: ["--auto-fix=no"]
         files: \.bes$
+        exclude: ^tests/examples/example-test-bad.bes
   # - repo: local
   #   hooks:
   #     - id: try-repo
