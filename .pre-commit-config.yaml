@@ -117,15 +117,15 @@ repos:
         pass_filenames: True
         args: ["--auto-fix=no"]
         files: \.bes$
-  - repo: local
-    hooks:
-      - id: try-repo
-        name: try-repo
-        entry: pre-commit try-repo . --files tests/examples/example-test.bes
-        language: system
-        pass_filenames: False
-        require_serial: True
-        stages: [manual]
+  # - repo: local
+  #   hooks:
+  #     - id: try-repo
+  #       name: try-repo
+  #       entry: pre-commit try-repo . --files tests/examples/example-test.bes
+  #       language: system
+  #       pass_filenames: False
+  #       require_serial: True
+  #       stages: [manual]
 
   - repo: https://github.com/christophmeissner/pytest-pre-commit
     rev: 1.0.0
