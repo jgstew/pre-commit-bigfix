@@ -26,9 +26,10 @@ repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
     rev: v0.2.0
     hooks:
-      # `validate-bes` is the deprecated alias of `bes-schema-validate`; it is
-      # used here because rev v0.2.0 predates the rename. Switch this to
-      # `bes-schema-validate` once a release carrying the new id is tagged.
+      # `validate-bes` and `check-bes-conventions` are the deprecated aliases of
+      # `bes-schema-validate` and `bes-conventions-check`; they are used here
+      # because rev v0.2.0 predates the renames. Switch both to the new ids
+      # (and bump the rev) once a release carrying them is tagged.
       - id: validate-bes
       - id: check-bes-conventions
         exclude: ^tests/examples/example-test-bad.bes
@@ -139,9 +140,9 @@ repos:
         files: \.(bes|ojo)$
   - repo: local
     hooks:
-      - id: check-bes-conventions-local
-        name: check-bes-conventions-local
-        entry: python pre_commit_bigfix/bigfix_bes_check_conventions.py
+      - id: bes-conventions-check-local
+        name: bes-conventions-check-local
+        entry: python pre_commit_bigfix/bes_conventions_check.py
         language: python
         pass_filenames: True
         args: ["--auto-fix=no"]

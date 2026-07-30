@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for pre_commit_bigfix/bigfix_bes_check_conventions.py.
+"""Tests for pre_commit_bigfix/bes_conventions_check.py.
 
 These exercise the BES content checks (E200-E214, W200-W211), the auto-fixers
 (DownloadSize, missing dates, blank-line collapse, CDATA wrap, Title trim,
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pre_commit_bigfix import bigfix_bes_check_conventions as checker
+from pre_commit_bigfix import bes_conventions_check as checker
 
 FIXED_NOW = datetime(2026, 7, 14, 18, 32, 35, tzinfo=timezone.utc)
 
@@ -592,8 +592,10 @@ def test_disable_e208_skips(tmp_path):
 
 
 def test_file_skip_marker(tmp_path):
+    # uses checker.SKIP_MARKER rather than a literal so a future marker rename
+    # cannot leave this test silently exercising the old string
     content = task(mimetype="application/x-python").replace(
-        "\t<Task>", "\t<!-- pre-commit-skip: bes-conventions -->\n\t<Task>", 1
+        "\t<Task>", f"\t<!-- {checker.SKIP_MARKER} -->\n\t<Task>", 1
     )
     assert codes(tmp_path, content) == []
 

@@ -11,12 +11,16 @@ Add this to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
       - id: bes-schema-validate
-      - id: check-bes-conventions
+      - id: bes-conventions-check
       - id: bes-actionscript-lint-schclass
 ```
+
+The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
+v0.3.0. The previous ids (`validate-bes`, `check-bes-conventions`) still work
+as deprecated aliases, so existing configs need no changes.
 
 ## Hooks
 
@@ -31,7 +35,7 @@ configs keep working: both ids run the same entry point, so there is no
 behavior difference and no rush to migrate. New configs should use
 `bes-schema-validate`.
 
-### check-bes-conventions
+### bes-conventions-check
 
 Picky, opinionated content checks + auto-fixes for BigFix BES files that the
 BES.xsd schema (`bes-schema-validate`) cannot express: ActionScript MIMEType,
@@ -48,8 +52,13 @@ the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`
 to also fail on warnings. Unparsable files are skipped (`bes-schema-validate`
 owns validity).
 
+Renamed from `check-bes-conventions`, which is kept as a deprecated alias so
+existing configs keep working; both ids run the same entry point. Note that
+the file-level opt-out marker moved with it, from `pre-commit-skip:
+bes-conventions` to `pre-commit-skip: bes-conventions-check`.
+
 See the docstring in
-[bigfix_bes_check_conventions.py](pre_commit_bigfix/bigfix_bes_check_conventions.py)
+[bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
 ### bes-actionscript-lint-schclass

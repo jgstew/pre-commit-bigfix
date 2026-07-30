@@ -21,7 +21,7 @@
   pass_filenames: True
   types: [text]
   files: \.(bes|ojo)$
-- id: check-bes-conventions
+- id: bes-conventions-check
   name: Check BigFix BES conventions
   description: >
     Picky, opinionated content checks + auto-fixes for BigFix BES files that the
@@ -40,7 +40,22 @@
     hook; pass --strict to also fail on warnings.
   language: python
   pass_filenames: True
-  entry: check-bes-conventions
+  entry: bes-conventions-check
+  types: [text]
+  files: \.bes$
+# Deprecated alias: `check-bes-conventions` was this hook's id before it was
+# renamed to `bes-conventions-check` (type-subtype-action naming). It is kept
+# so existing .pre-commit-config.yaml files keep working, and runs the very
+# same entry point -- there is no behavior difference. Prefer the new id in new
+# configs. tests/test_hook_declarations.py asserts the two stay in lockstep.
+- id: check-bes-conventions
+  name: Check BigFix BES conventions (deprecated alias for bes-conventions-check)
+  description: >
+    DEPRECATED alias for bes-conventions-check, kept so pre-rename configs keep
+    working; it runs the same entry point. Use bes-conventions-check instead.
+  language: python
+  pass_filenames: True
+  entry: bes-conventions-check
   types: [text]
   files: \.bes$
 - id: bes-actionscript-lint-schclass

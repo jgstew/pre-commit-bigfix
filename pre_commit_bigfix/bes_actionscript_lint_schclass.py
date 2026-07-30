@@ -30,7 +30,7 @@ Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (or no MIMEType, which defaults to it) are BigFix ActionScript; x-sh,
 x-AppleScript, x-Fixlet-Windows-PowerShell, and text/x-uri bodies are other
 languages and are skipped silently (an unknown MIMEType is E200's problem in
-check-bes-conventions).
+bes-conventions-check).
 
 Checks:
     E300  a line's first token is not a known command verb, a // comment, a
@@ -77,7 +77,7 @@ Known limitations: multi-word verbs need single spaces (`add  prefetch item`
 does not match -- the console colorizer behaves the same way); a line of a
 multi-line string that happens to start with `createfile until` is mistaken
 for a heredoc opener. A dynamic `download` line is lexically VALID here while
-still advisory-warned (W211) in check-bes-conventions -- different altitudes,
+still advisory-warned (W211) in bes-conventions-check -- different altitudes,
 both intentional.
 
 Exit codes:
@@ -293,7 +293,7 @@ def check_file(path, disabled=frozenset(), strict=False):
     """Check one file; return (issues, fixed) like the sibling checkers.
 
     `fixed` is always [] (this hook has no auto-fixes yet); the tuple shape
-    stays parallel with bigfix_bes_check_conventions.check_file. `strict` is
+    stays parallel with bes_conventions_check.check_file. `strict` is
     accepted for the same parity and does not change what is reported (the
     caller decides whether warnings fail).
     """

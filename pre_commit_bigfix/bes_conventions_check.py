@@ -93,14 +93,14 @@ explicitly, but to no when auto-discovering, so a bare run is read-only. An
 auto-fixed file fails the hook so the change is reviewed and re-staged.
 
 Usage:
-    bigfix_bes_check_conventions.py [--strict] [--auto-fix=yes|no]
+    bes_conventions_check.py [--strict] [--auto-fix=yes|no]
         [--disable E200,W201] [file.bes ...]
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
 
 A file can opt out of all checks with an XML comment anywhere in it:
-    <!-- pre-commit-skip: bes-conventions -->
+    <!-- pre-commit-skip: bes-conventions-check -->
 or out of a single check family with the matching marker (also anywhere in the
 file, e.g. in an XML comment):
     mimetype-ok             (E200)
@@ -142,7 +142,7 @@ import sys
 from datetime import datetime, timezone
 from xml.etree import ElementTree
 
-SKIP_MARKER = "pre-commit-skip: bes-conventions"
+SKIP_MARKER = "pre-commit-skip: bes-conventions-check"
 
 # per-check opt-out markers (matched anywhere in the file text)
 MIMETYPE_MARKER = "mimetype-ok"  # E200

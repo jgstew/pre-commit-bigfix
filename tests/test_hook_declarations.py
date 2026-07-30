@@ -30,7 +30,10 @@ CONFIG_FILE = REPO / ".pre-commit-config.yaml"
 SETUP_CFG = REPO / "setup.cfg"
 
 # hook ids kept only so pre-rename configs keep working: {old id: current id}
-DEPRECATED_ALIASES = {"validate-bes": "bes-schema-validate"}
+DEPRECATED_ALIASES = {
+    "validate-bes": "bes-schema-validate",
+    "check-bes-conventions": "bes-conventions-check",
+}
 
 
 def load_hooks():
