@@ -1,0 +1,80 @@
+---
+name: test_build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**.py"
+      - "setup.cfg"
+      - "MANIFEST.in"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/test_build.yaml"
+      - ".github/workflows/tag_and_release.yaml"
+  pull_request:
+    paths:
+      - "**.py"
+      - "setup.cfg"
+      - "MANIFEST.in"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - ".github/workflows/test_build.yaml"
+      - ".github/workflows/tag_and_release.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  test_build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        py-version: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: ${{ matrix.py-version }}
+      - name: Install requirements
+        run: if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Test python import from src
+        shell: bash
+        run: python -c "import pre_commit_bigfix; print(pre_commit_bigfix.__version__)"
+      - name: Run pytest
+        shell: bash
+        run: |
+          pip install pytest
+          python -m pytest -q
+      - name: Install build tools
+        run: pip install setuptools wheel build
+      - name: Get version from setup.cfg
+        run: python setup.py --version
+      - name: Run build
+        run: python3 -m build
+      - name: Get Wheel File Path
+        id: getwheelfile
+        shell: bash
+        run: echo "wheelfile=$(find "dist" -type f -name "*.whl")" >> $GITHUB_OUTPUT
+      - name: Test pip install of wheel
+        shell: bash
+        run: pip install $(find "dist" -type f -name "*.whl")
+      - name: Test python import
+        shell: bash
+        run: python -c "import pre_commit_bigfix; print(pre_commit_bigfix.__version__)"
+      - name: Test pre-commit hook invoke
+        shell: bash
+        run: >-
+          python -c "import pre_commit_bigfix.bigfix_bes_check_conventions;
+          pre_commit_bigfix.bigfix_bes_check_conventions.main(
+          ['--auto-fix=no', 'tests/examples/example-test.bes'])"
+      - name: pip install of pre-commit
+        shell: bash
+        run: pip install pre-commit
+      - name: pre-commit try-repo
+        shell: bash
+        run: pre-commit try-repo . --files tests/examples/example-test.bes

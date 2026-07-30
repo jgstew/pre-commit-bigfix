@@ -1,0 +1,5 @@
+rules:
+  unpinned-uses:
+    disable: true
+  archived-uses:
+    disable: true
