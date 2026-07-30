@@ -26,6 +26,9 @@ repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
     rev: v0.2.0
     hooks:
+      # `validate-bes` is the deprecated alias of `bes-schema-validate`; it is
+      # used here because rev v0.2.0 predates the rename. Switch this to
+      # `bes-schema-validate` once a release carrying the new id is tagged.
       - id: validate-bes
       - id: check-bes-conventions
         exclude: ^tests/examples/example-test-bad.bes
@@ -126,11 +129,11 @@ repos:
   # imports must be declared via additional_dependencies.
   - repo: local
     hooks:
-      - id: validate-bes-local
-        name: validate-bes-local
-        entry: python pre_commit_bigfix/validate_bes.py
+      - id: bes-schema-validate-local
+        name: bes-schema-validate-local
+        entry: python pre_commit_bigfix/bes_schema_validate.py
         language: python
-        # isolated venv: declare the third-party import used by validate_bes.py
+        # isolated venv: declare the third-party import used by the validator
         additional_dependencies: [validate_bes_xml]
         pass_filenames: True
         files: \.(bes|ojo)$

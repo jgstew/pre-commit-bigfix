@@ -1,7 +1,22 @@
-- id: validate-bes
+- id: bes-schema-validate
   name: Validate BigFix BES Files
-  description: This hook validates BigFix BES XML Files
-  entry: validate-bes
+  description: This hook validates BigFix BES XML Files against the BES.xsd schema
+  entry: bes-schema-validate
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: \.(bes|ojo)$
+# Deprecated alias: `validate-bes` was this hook's id before it was renamed to
+# `bes-schema-validate` (type-subtype-action naming). It is kept so existing
+# .pre-commit-config.yaml files keep working, and runs the very same entry
+# point -- there is no behavior difference. Prefer the new id in new configs.
+# tests/test_hook_declarations.py asserts the two stay in lockstep.
+- id: validate-bes
+  name: Validate BigFix BES Files (deprecated alias for bes-schema-validate)
+  description: >
+    DEPRECATED alias for bes-schema-validate, kept so pre-rename configs keep
+    working; it runs the same entry point. Use bes-schema-validate instead.
+  entry: bes-schema-validate
   language: python
   pass_filenames: True
   types: [text]
@@ -10,8 +25,8 @@
   name: Check BigFix BES conventions
   description: >
     Picky, opinionated content checks + auto-fixes for BigFix BES files that the
-    BES.xsd schema (validate-bes) cannot express: ActionScript MIMEType is one of
-    the allowed set; SourceReleaseDate/x-fixlet-modification-time/DownloadSize/
+    BES.xsd schema (bes-schema-validate) cannot express: ActionScript MIMEType
+    is one of the allowed set; SourceReleaseDate/x-fixlet-modification-time/DownloadSize/
     action-ui-metadata/CPE-2.3/CVENames value formats; prefetch-line shape and
     https URLs; CDATA usage; blank-line and trailing-whitespace spacing; empty
     ActionScript; dynamic download statements; a UTF-8 XML declaration; Title
@@ -21,8 +36,8 @@
     (DownloadSize -> 0, missing dates -> now, blank-line collapse, Title trim,
     trailing-whitespace strip, XML-declaration insert/normalize; and, under
     --strict, CDATA wrapping) and exits 1 when anything was fixed. Unparsable
-    files are skipped (validate-bes owns validity). E-codes fail the hook; pass
-    --strict to also fail on warnings.
+    files are skipped (bes-schema-validate owns validity). E-codes fail the
+    hook; pass --strict to also fail on warnings.
   language: python
   pass_filenames: True
   entry: check-bes-conventions
@@ -43,8 +58,8 @@
     MIMEType) bodies are BigFix ActionScript and are linted. Bodies are
     extracted with lxml, so entities are decoded, CDATA sections merged, and
     line numbers map back to the file. Unparsable files are skipped
-    (validate-bes owns validity). Scope is limited to what the grammar can
-    decide -- lexical validity per line; argument shapes, block pairing, the
+    (bes-schema-validate owns validity). Scope is limited to what the grammar
+    can decide -- lexical validity per line; argument shapes, block pairing, the
     closing-tag whitespace trap, and auto-fixes belong in a sibling
     ActionScript hook. E-codes fail the hook; pass --strict to also fail on
     warnings. Widen `files` to lint raw ActionScript text files too.

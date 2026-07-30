@@ -37,8 +37,8 @@ Checks:
           {...} substitution, a continuation, or blank
     E301  a {...} relevance substitution has no closing } before line end
     E302  a `createfile until <MARKER>` block never reaches its marker line
-    W300  the file is not parseable BES XML; skipped (advisory -- validate-bes
-          is the authority on file validity)
+    W300  the file is not parseable BES XML; skipped (advisory --
+          bes-schema-validate is the authority on file validity)
     W301  a "..." string has no closing " before line end (often benign in
           ActionScript arguments, so a warning)
     W302  a matched command verb is not lowercase (e.g. `RUN`; valid but

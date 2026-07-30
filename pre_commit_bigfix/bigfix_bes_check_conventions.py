@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pre-commit hook: check BigFix BES files for opinionated conventions.
 
-This is the BES-content companion to the `validate-bes` hook. `validate-bes`
+This is the BES-content companion to the `bes-schema-validate` hook, which
 only checks that a file is well-formed XML that satisfies the BES.xsd schema --
 it says nothing about the *content* being conventional or correct. This tool
 goes further, with PICKY, OPINIONATED checks (several AUTO-FIXABLE) that the XSD
@@ -40,8 +40,8 @@ Checks:
     E213  a <Relevance> is empty or whitespace only
     E214  the file has no XML declaration, or its declaration does not specify
           encoding="UTF-8" (fixable -> declaration inserted / encoding set)
-    W200  the file is not parseable BES XML; skipped (advisory -- validate-bes
-          is the authority on file validity)
+    W200  the file is not parseable BES XML; skipped (advisory --
+          bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
           the moment the linter ran)
     W202  a Task/Fixlet has no <SourceReleaseDate> (fixable -> today)
@@ -72,8 +72,8 @@ The allowed <ActionScript> MIMETypes are:
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT fail
 the hook unless --strict is given; wire the hook with `verbose: true` to surface
-them. W200 is how the tool stays out of validate-bes's lane: an unparsable file
-is skipped, not failed, here.
+them. W200 is how the tool stays out of bes-schema-validate's lane: an
+unparsable file is skipped, not failed, here.
 
 --auto-fix rewrites the fixable conventions in place: an invalid/empty
 DownloadSize -> 0 (E203); a missing SourceReleaseDate -> today (W202); a missing
@@ -1381,7 +1381,7 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False, now=Non
     Each of `issues` and `fixed` is a list of (lineno, code, message). A file is
     skipped (returns [], []) when it carries the file-level skip marker or looks
     like a mustache template. A file that will not parse as XML yields a single
-    advisory W200 (validate-bes owns file validity) and no other checks.
+    advisory W200 (bes-schema-validate owns file validity) and no other checks.
 
     When `auto_fix` is set, the fixable conventions are rewritten in place and
     reported under `fixed`; the CDATA wrap (W204) is applied only when `strict`

@@ -1,4 +1,4 @@
-"""Tests for pre_commit_bigfix/validate_bes.py.
+"""Tests for pre_commit_bigfix/bes_schema_validate.py.
 
 Requires the `validate_bes_xml` package (installed via requirements.txt in CI);
 skipped where it is not available.
@@ -12,7 +12,7 @@ EXAMPLES = Path(__file__).parent / "examples"
 
 pytest.importorskip("validate_bes_xml")
 
-from pre_commit_bigfix import validate_bes as hook  # noqa: E402
+from pre_commit_bigfix import bes_schema_validate as hook  # noqa: E402
 
 
 def test_valid_bes_passes():

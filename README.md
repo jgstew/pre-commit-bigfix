@@ -13,24 +13,29 @@ repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
     rev: v0.2.0
     hooks:
-      - id: validate-bes
+      - id: bes-schema-validate
       - id: check-bes-conventions
       - id: bes-actionscript-lint-schclass
 ```
 
 ## Hooks
 
-### validate-bes
+### bes-schema-validate
 
 Validates that BigFix BES XML files (`.bes`, `.ojo`) are well-formed XML that
 satisfies the BES.xsd schema, via the
 [validate_bes_xml](https://pypi.org/project/validate-bes-xml/) package.
 
+Renamed from `validate-bes`, which is kept as a deprecated alias so existing
+configs keep working: both ids run the same entry point, so there is no
+behavior difference and no rush to migrate. New configs should use
+`bes-schema-validate`.
+
 ### check-bes-conventions
 
 Picky, opinionated content checks + auto-fixes for BigFix BES files that the
-BES.xsd schema (`validate-bes`) cannot express: ActionScript MIMEType, value
-formats for SourceReleaseDate / x-fixlet-modification-time / DownloadSize /
+BES.xsd schema (`bes-schema-validate`) cannot express: ActionScript MIMEType,
+value formats for SourceReleaseDate / x-fixlet-modification-time / DownloadSize /
 action-ui-metadata / CPE-2.3 / CVENames, prefetch-line shape and https URLs,
 CDATA usage, blank-line and trailing-whitespace spacing, empty ActionScript,
 dynamic download statements, a UTF-8 XML declaration, Title placeholders and
@@ -40,8 +45,8 @@ presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`
-to also fail on warnings. Unparsable files are skipped (`validate-bes` owns
-validity).
+to also fail on warnings. Unparsable files are skipped (`bes-schema-validate`
+owns validity).
 
 See the docstring in
 [bigfix_bes_check_conventions.py](pre_commit_bigfix/bigfix_bes_check_conventions.py)
@@ -66,8 +71,8 @@ Only `application/x-Fixlet-Windows-Shell` (or missing-MIMEType) bodies are
 BigFix ActionScript and are linted; `x-sh`, `x-AppleScript`,
 `x-Fixlet-Windows-PowerShell`, and `text/x-uri` bodies are other languages and
 are skipped. E-codes fail the hook; pass `--strict` to also fail on warnings.
-Unparsable files are skipped (`validate-bes` owns validity). Non-`.bes` paths
-passed explicitly are linted as raw ActionScript text, so you can widen the
+Unparsable files are skipped (`bes-schema-validate` owns validity). Non-`.bes`
+paths passed explicitly are linted as raw ActionScript text, so you can widen the
 hook's `files` pattern to cover standalone ActionScript files.
 
 The underlying schclass loader ([schclass.py](pre_commit_bigfix/schclass.py))
