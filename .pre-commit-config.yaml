@@ -20,6 +20,19 @@ repos:
       - id: trailing-whitespace
       - id: detect-private-key
 
+  - repo: https://github.com/jgstew/pre-commit-bigfix
+    rev: v0.2.0
+    hooks:
+      - id: validate-bes
+      - id: check-bes-conventions
+        exclude: ^tests/examples/example-test-bad.bes
+
+  - repo: https://github.com/jgstew/pre-commit-jgstew
+    rev: v2.1.1
+    hooks:
+      - id: fix-files-to-ascii
+      - id: verify-files-are-ascii
+
   - repo: https://github.com/adrienverge/yamllint.git
     rev: v1.38.0
     hooks:
@@ -128,15 +141,15 @@ repos:
         args: ["--auto-fix=no"]
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
-  # - repo: local
-  #   hooks:
-  #     - id: try-repo
-  #       name: try-repo
-  #       entry: pre-commit try-repo . --files tests/examples/example-test.bes
-  #       language: system
-  #       pass_filenames: False
-  #       require_serial: True
-  #       stages: [manual]
+  - repo: local
+    hooks:
+      - id: try-repo
+        name: try-repo
+        entry: pre-commit try-repo . --files tests/examples/example-test.bes
+        language: system
+        pass_filenames: False
+        require_serial: True
+        stages: [manual]
 
   - repo: https://github.com/christophmeissner/pytest-pre-commit
     rev: 1.0.0
