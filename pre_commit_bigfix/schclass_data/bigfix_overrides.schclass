@@ -1,0 +1,28 @@
+// Supplements ExpandedActionScript.schclass for validation use.
+//
+// The vendored base file is the BigFix console's display grammar and is tuned
+// for highlighting, not validation: its `url` lexClass only matches `http:`,
+// and the console's per-operator generator drops `surrender device id` (see
+// jgstew/pre-commit-bigfix#3). Corrections belong HERE, never in the vendored
+// base file, which must stay byte-exact with the console's output.
+
+// The base url class does not end at '}', so an unquoted URL inside a {...}
+// substitution would swallow the closing brace and falsely leave the
+// substitution unterminated; add '}' to the end separators for both schemes.
+lexClass:
+	name		= url
+	end:separators	= ' ', '\t', '*', '"', '}', @eol
+
+lexClass:
+	name		= url_https
+	parent:dyn	= global
+	previous:tag	= @specs, ' ', '\t', @eol
+	start:Tag	= 'https:'
+	end:separators	= ' ', '\t', '*', '"', '}', @eol
+	txt:colorBK	= 0xC0FFC0
+	txt:Underline	= 1
+	DisplayName	= 'URL (https)'
+
+lexClass:
+	name		= keywords
+	token:tag	= 'surrender device id'

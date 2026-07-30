@@ -15,6 +15,7 @@ repos:
     hooks:
       - id: validate-bes
       - id: check-bes-conventions
+      - id: bes-actionscript-lint-schclass
 ```
 
 ## Hooks
@@ -44,6 +45,46 @@ validity).
 
 See the docstring in
 [bigfix_bes_check_conventions.py](pre_commit_bigfix/bigfix_bes_check_conventions.py)
+for the full list of check codes, opt-out markers, and options.
+
+### bes-actionscript-lint-schclass
+
+Lints every `<ActionScript>` body in BES files against the BigFix console's
+own lexical grammar: the vendored
+[ExpandedActionScript.schclass](pre_commit_bigfix/schclass_data/ExpandedActionScript.schclass)
+(the lex schema the console's editor uses, 323 command verbs) merged with a
+[small override file](pre_commit_bigfix/schclass_data/bigfix_overrides.schclass)
+of validation corrections the display grammar needs.
+
+The rule: the first token of every line must be a known command verb, a `//`
+comment, a `{...}` relevance substitution, a continuation, or the line must be
+blank (E300). A `{...}` substitution must close before line end (E301), and a
+`createfile until <MARKER>` block must reach its bare marker line (E302; the
+block's raw content is excluded from linting). Verbs match case-insensitively
+but a non-lowercase verb warns (W302), and an unbalanced `"` warns (W301).
+Only `application/x-Fixlet-Windows-Shell` (or missing-MIMEType) bodies are
+BigFix ActionScript and are linted; `x-sh`, `x-AppleScript`,
+`x-Fixlet-Windows-PowerShell`, and `text/x-uri` bodies are other languages and
+are skipped. E-codes fail the hook; pass `--strict` to also fail on warnings.
+Unparsable files are skipped (`validate-bes` owns validity). Non-`.bes` paths
+passed explicitly are linted as raw ActionScript text, so you can widen the
+hook's `files` pattern to cover standalone ActionScript files.
+
+The underlying schclass loader ([schclass.py](pre_commit_bigfix/schclass.py))
+and tokenizer engine
+([schclass_tokenizer.py](pre_commit_bigfix/schclass_tokenizer.py)) are
+generic: point them at any `.schclass` file and they lex that language.
+
+This hook's scope is deliberately limited to what the schclass grammar can
+decide - the lexical validity of each line. ActionScript checks that need
+knowledge the grammar does not carry (per-verb argument shapes, `if`/`endif`
+and prefetch-block pairing, the `]]></ActionScript>` closing-tag whitespace
+trap, http->https escalation, and any auto-fixes) belong in a separate
+ActionScript hook, so this one stays a thin consumer of the grammar files and
+needs no code changes when BigFix ships new command verbs.
+
+See the docstring in
+[bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
 
 ## Development

@@ -1,0 +1,1 @@
+recursive-include pre_commit_bigfix/schclass_data *.schclass

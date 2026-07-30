@@ -28,3 +28,28 @@
   entry: check-bes-conventions
   types: [text]
   files: \.bes$
+- id: bes-actionscript-lint-schclass
+  name: Lint BigFix ActionScript against the schclass grammar
+  description: >
+    Lints every <ActionScript> body in BES files against the BigFix console's
+    own lexical grammar (the vendored ExpandedActionScript.schclass plus a
+    small validation override): the first token of every line must be a known
+    command verb, a // comment, a {...} substitution, a continuation, or the
+    line must be blank (E300); a {...} substitution must close before line end
+    (E301); a `createfile until <MARKER>` block must reach its marker line
+    (E302, with the block's raw content excluded from linting). Verbs match
+    case-insensitively, but a non-lowercase verb warns (W302); an unbalanced
+    " warns (W301). Only application/x-Fixlet-Windows-Shell (or missing
+    MIMEType) bodies are BigFix ActionScript and are linted. Bodies are
+    extracted with lxml, so entities are decoded, CDATA sections merged, and
+    line numbers map back to the file. Unparsable files are skipped
+    (validate-bes owns validity). Scope is limited to what the grammar can
+    decide -- lexical validity per line; argument shapes, block pairing, the
+    closing-tag whitespace trap, and auto-fixes belong in a sibling
+    ActionScript hook. E-codes fail the hook; pass --strict to also fail on
+    warnings. Widen `files` to lint raw ActionScript text files too.
+  language: python
+  pass_filenames: True
+  entry: bes-actionscript-lint-schclass
+  types: [text]
+  files: \.bes$

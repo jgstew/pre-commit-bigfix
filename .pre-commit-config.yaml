@@ -16,8 +16,11 @@ repos:
       - id: check-case-conflict
       - id: check-merge-conflict
       - id: end-of-file-fixer
+        # vendored console lex schemas are byte-content-significant
+        exclude: \.schclass$
       - id: requirements-txt-fixer
       - id: trailing-whitespace
+        exclude: \.schclass$
       - id: detect-private-key
 
   - repo: https://github.com/jgstew/pre-commit-bigfix
@@ -143,6 +146,17 @@ repos:
         exclude: ^tests/examples/example-test-bad.bes
   - repo: local
     hooks:
+      - id: bes-actionscript-lint-schclass-local
+        name: bes-actionscript-lint-schclass-local
+        entry: python pre_commit_bigfix/bes_actionscript_lint_schclass.py
+        language: python
+        # isolated venv: declare the third-party import used by the linter
+        additional_dependencies: [lxml]
+        pass_filenames: True
+        files: \.bes$
+        exclude: ^tests/examples/example-test-bad.bes
+  - repo: local
+    hooks:
       - id: try-repo
         name: try-repo
         entry: pre-commit try-repo . --files tests/examples/example-test.bes
@@ -160,4 +174,5 @@ repos:
         always_run: true
         stages: [manual]
         additional_dependencies:
+          - lxml
           - validate_bes_xml
