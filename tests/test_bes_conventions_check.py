@@ -268,6 +268,14 @@ def test_e205_case_insensitive_name(tmp_path):
         '{ "version":"4.83","size":4417205 }',
         '{"version": "1.0.0", "size": 10}',
         '{ "version":"1.2","size":10,"icon":"data:image/png;base64,AAAA" }',
+        '{ "version":"1.0","size":"10" }',  # size quoted
+        '{ "size":10,"version":"1.0" }',  # key order is not significant
+        # the console's own spacing, with a quoted size and an icon
+        (
+            '{"version": "1.6.108.0", "size": "104632873", '
+            '"icon": "data:image/png;base64,iVBORw0KGgo="}'
+        ),
+        '{"version":"2019.09.29","size":0,"icon":"data:image/x-icon;base64,AAAA"}',
     ],
 )
 def test_e206_valid_metadata(tmp_path, good):
@@ -279,8 +287,15 @@ def test_e206_valid_metadata(tmp_path, good):
 @pytest.mark.parametrize(
     "bad",
     [
-        '{ "version":"1.0","size":"10" }',  # size quoted
-        '{ "size":10,"version":"1.0" }',  # wrong order
+        '{ "version":"1.0" }',  # no size
+        '{ "size":10 }',  # no version
+        '{ "version":1.0,"size":10 }',  # version not a string
+        '{ "version":"1.0","size":"lots" }',  # size not an integer
+        '{ "version":"1.0","size":-10 }',  # negative size
+        '{ "version":"v1.0","size":10 }',  # version not dotted-numeric
+        '{ "version":"1.0","size":10,"icon":"nope" }',  # icon not a data URI
+        '{ "version":"1.0","size":10,"extra":1 }',  # unrecognised key
+        '[ "version","1.0" ]',  # JSON, but not an object
         "not json at all",
     ],
 )

@@ -140,6 +140,7 @@ Exit codes:
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -213,14 +214,17 @@ DOWNLOAD_SIZE_RE = re.compile(r"^\d+$")
 # target_hw other); colons inside a component are backslash-escaped.
 CPE23_RE = re.compile(r"^cpe:2\.3:[aho*\-](:([^:\\]|\\.)+){10}$", re.IGNORECASE)
 
-# action-ui-metadata: the two shapes BigFixSetupTemplateDictionary emits
-ACTION_UI_METADATA_RES = (
-    re.compile(r'\s*{\s*"version" *: *"\d+(\.\d+)*" *, *"size" *: *\d+ *}'),
-    re.compile(
-        r'\s*{\s*"version" *: *"\d+(\.\d+)+" *, *"size" *: *\d+ *'
-        r'(,"icon":"data:.+"){0,1}\s*}\s*'
-    ),
-)
+# action-ui-metadata: the JSON object BigFixSetupTemplateDictionary emits. The
+# value is real JSON, so whitespace and key order carry no meaning and it is
+# parsed rather than pattern-matched; only the keys and their shapes are checked.
+ACTION_UI_METADATA_KEYS = frozenset(["version", "size", "icon"])
+ACTION_UI_METADATA_VERSION_RE = re.compile(r"^\d+(\.\d+)*$")
+# an inline data URI, e.g. data:image/png;base64,iVBORw0KGgo... -- the payload
+# (usually a base64-encoded icon) is not inspected beyond being non-empty.
+DATA_URI_RE = re.compile(r"^data:[\w.+-]+/[\w.+-]+(?:;[\w.+-]+)*,.+$", re.DOTALL)
+# how much of an offending value to quote in a message; an action-ui-metadata
+# icon is a base64 blob that would otherwise bury the rest of the report.
+VALUE_QUOTE_LIMIT = 120
 
 # a prefetch statement or an "add prefetch item" line (user-supplied shape)
 PREFETCH_OK_RE = re.compile(
@@ -437,8 +441,41 @@ def _valid_cpe23(value):
 
 
 def _valid_action_ui_metadata(value):
-    """True if `value` matches one of the two allowed action-ui-metadata shapes."""
-    return any(pattern.fullmatch(value) for pattern in ACTION_UI_METADATA_RES)
+    """True if `value` is a well-formed action-ui-metadata object.
+
+    It must be a JSON object with a dotted-numeric `version` string and a
+    non-negative integer `size` (quoted or bare -- the console emits both),
+    plus an optional `icon` data URI. Whitespace and key order are
+    insignificant; keys outside that set are not recognised.
+    """
+    try:
+        data = json.loads(value)
+    except ValueError:
+        return False
+    if not isinstance(data, dict) or not ACTION_UI_METADATA_KEYS.issuperset(data):
+        return False
+
+    version = data.get("version")
+    if not isinstance(version, str) or not ACTION_UI_METADATA_VERSION_RE.match(version):
+        return False
+
+    size = data.get("size")
+    if isinstance(size, str):
+        if not DOWNLOAD_SIZE_RE.match(size):
+            return False
+    elif not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        return False
+
+    icon = data.get("icon")
+    return icon is None or (isinstance(icon, str) and bool(DATA_URI_RE.match(icon)))
+
+
+def _quote(value, limit=VALUE_QUOTE_LIMIT):
+    """`value` shortened for use in a message, with an elision marker if cut."""
+    value = value.strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "..."
 
 
 # --------------------------------------------------------------------------
@@ -551,7 +588,7 @@ def check_action_ui_metadata(src):
                     _lineno(src, match.start()),
                     "E206",
                     (
-                        f'action-ui-metadata "{value}" is not well-formed; add '
+                        f'action-ui-metadata "{_quote(value)}" is not well-formed; add '
                         f"`{ACTION_UI_METADATA_MARKER}` if intentional"
                     ),
                 )
