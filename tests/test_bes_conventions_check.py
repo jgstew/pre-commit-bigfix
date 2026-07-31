@@ -688,6 +688,43 @@ def test_main_disable_suppresses(tmp_path):
     assert checker.main(["--disable", "E200", bad]) == 0
 
 
+def test_main_errors_only_hides_warnings(tmp_path, capsys):
+    warn = write(tmp_path, "warn.bes", task(srd=None))
+    assert checker.main(["--errors-only", "--auto-fix=no", warn]) == 0
+    out = capsys.readouterr().out
+    assert "W202" not in out
+    assert "warning" not in out
+
+
+def test_main_errors_only_still_reports_errors(tmp_path, capsys):
+    bad = write(tmp_path, "bad.bes", task(mimetype="application/x-python", srd=None))
+    assert checker.main(["--errors-only", "--auto-fix=no", bad]) == 1
+    out = capsys.readouterr().out
+    assert "E200" in out
+    assert "W202" not in out
+
+
+def test_main_errors_only_beats_strict(tmp_path):
+    warn = write(tmp_path, "warn.bes", task(srd=None))
+    assert checker.main(["--errors-only", "--strict", "--auto-fix=no", warn]) == 0
+
+
+def test_main_errors_only_keeps_warning_fixers(tmp_path, capsys):
+    # unlike --disable W202, --errors-only leaves the fixer running
+    warn = write(tmp_path, "warn.bes", task(srd=None))
+    assert checker.main(["--errors-only", "--auto-fix=yes", warn]) == 1
+    assert "<SourceReleaseDate>" in (tmp_path / "warn.bes").read_text(encoding="utf-8")
+    assert "auto-fixed" in capsys.readouterr().out
+
+
+def test_main_disable_skips_warning_fixers(tmp_path):
+    warn = write(tmp_path, "warn.bes", task(srd=None))
+    assert checker.main(["--disable", "W202", "--auto-fix=yes", warn]) == 0
+    assert "<SourceReleaseDate>" not in (tmp_path / "warn.bes").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_main_no_files_is_zero(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert checker.main([]) == 0

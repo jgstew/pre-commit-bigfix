@@ -93,11 +93,14 @@ explicitly, but to no when auto-discovering, so a bare run is read-only. An
 auto-fixed file fails the hook so the change is reviewed and re-staged.
 
 Usage:
-    bes_conventions_check.py [--strict] [--auto-fix=yes|no]
+    bes_conventions_check.py [--strict] [--errors-only] [--auto-fix=yes|no]
         [--disable E200,W201] [file.bes ...]
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
+--errors-only keeps every check (and every auto-fix) running but leaves W-codes
+out of the report, so only E-codes and auto-fix lines are printed; unlike
+--disable it does not turn off the W-code fixers.
 
 A file can opt out of all checks with an XML comment anywhere in it:
     <!-- pre-commit-skip: bes-conventions-check -->
@@ -132,7 +135,8 @@ Exit codes:
     0  no E-code issues and nothing auto-fixed (and, without --strict, regardless
        of warnings)
     1  an E-code issue was found, a file was auto-fixed, or a warning was found
-       while --strict is set
+       while --strict is set (--errors-only suppresses the warnings, so they
+       cannot fail the run even under --strict)
 """
 
 import argparse
@@ -1522,6 +1526,15 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--errors-only",
+        action="store_true",
+        help=(
+            "report only E-codes: warnings are left out of the output and cannot "
+            "fail the run (even with --strict), but every check and W-code "
+            "auto-fix still runs -- unlike --disable"
+        ),
+    )
+    parser.add_argument(
         "--auto-fix",
         choices=["yes", "no"],
         default=None,
@@ -1575,6 +1588,10 @@ def main(argv=None):
             print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
         for lineno, check_id, message in issues:
             if check_id.startswith("W"):
+                # --errors-only drops warnings from the report only; the checks
+                # and their fixers already ran (see --disable for skipping them)
+                if args.errors_only:
+                    continue
                 warning_count += 1
                 print(f"{path}:{lineno}: [{check_id}] warning: {message}")
             else:

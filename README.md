@@ -49,8 +49,9 @@ presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`
-to also fail on warnings. Unparsable files are skipped (`bes-schema-validate`
-owns validity).
+to also fail on warnings, or `--errors-only` to leave W-codes out of the report
+entirely (the checks and their auto-fixes still run, unlike `--disable`).
+Unparsable files are skipped (`bes-schema-validate` owns validity).
 
 Renamed from `check-bes-conventions`, which is kept as a deprecated alias so
 existing configs keep working; both ids run the same entry point. Note that
