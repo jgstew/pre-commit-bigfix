@@ -1,6 +1,10 @@
 # Release Notes
 
-## Unreleased
+## v0.4.1
+
+Fixes false `E206` errors on well-formed `action-ui-metadata` values in `bes-conventions-check`, and adds `--errors-only` for a warnings-free report that still runs every fixer.
+
+There is no v0.4.0 release; the version went from v0.3.3 straight to v0.4.1.
 
 ### Fixed
 
