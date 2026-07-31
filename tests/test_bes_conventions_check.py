@@ -387,6 +387,47 @@ def test_e207_autofix_is_not_strict_gated(tmp_path):
     assert "<![CDATA[echo a & b]]>" in out
 
 
+# --- E215 whitespace around the ActionScript CDATA terminator -------------
+
+
+def test_e215_indented_terminator(tmp_path):
+    assert "E215" in codes(tmp_path, task(body="\necho hi\n\t\t\t"))
+
+
+def test_e215_space_after_terminator(tmp_path):
+    content = task().replace("]]></ActionScript>", "]]>  </ActionScript>")
+    assert "E215" in codes(tmp_path, content)
+
+
+def test_e215_flush_terminator_ok(tmp_path):
+    assert "E215" not in codes(tmp_path, task(body="\necho hi\n"))
+
+
+def test_e215_other_elements_not_flagged(tmp_path):
+    content = task().replace("]]></Description>", "\n\t\t]]></Description>")
+    assert "E215" not in codes(tmp_path, content)
+
+
+def test_e215_marker_opts_out(tmp_path):
+    content = task(body="\necho hi\n\t\t\t", marker="cdata-close-ok")
+    assert "E215" not in codes(tmp_path, content)
+
+
+def test_e215_autofix_strips(tmp_path):
+    out, fixed = autofix(tmp_path, task(body="\necho hi\n\t\t\t"))
+    assert any(code == "E215" for _, code, _ in fixed)
+    assert "\t]]></ActionScript>" not in out
+    assert "]]></ActionScript>" in out
+    assert "E215" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_e215_autofix_after_blank_line_collapse(tmp_path):
+    out, fixed = autofix(tmp_path, task(body="\necho hi\n\n\n\t\t\t"))
+    got = {code for _, code, _ in fixed}
+    assert {"W205", "E215"} <= got
+    assert codes(tmp_path, out, name="after.bes") == []
+
+
 # --- W205 blank lines before </ActionScript> ------------------------------
 
 

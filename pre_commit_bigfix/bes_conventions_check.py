@@ -40,6 +40,10 @@ Checks:
     E213  a <Relevance> is empty or whitespace only
     E214  the file has no XML declaration, or its declaration does not specify
           encoding="UTF-8" (fixable -> declaration inserted / encoding set)
+    E215  an <ActionScript> has whitespace around its CDATA terminator, e.g. an
+          indented `]]></ActionScript>` -- that whitespace is inside the CDATA
+          and becomes a bogus whitespace-only last line of the action (fixable
+          -> stripped to `]]></ActionScript>`)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -79,7 +83,8 @@ unparsable file is skipped, not failed, here.
 DownloadSize -> 0 (E203); a missing SourceReleaseDate -> today (W202); a missing
 x-fixlet-modification-time -> the moment the linter ran (W201); collapsed blank
 lines before </ActionScript> (W205); a Title trimmed with tabs replaced by
-spaces (W209); trailing whitespace stripped from every line (W210); a missing or
+spaces (W209); trailing whitespace stripped from every line (W210); whitespace
+around an ActionScript CDATA terminator stripped (E215); a missing or
 non-UTF-8 XML declaration inserted / normalized (E214); and a
 Description/Relevance/ActionScript that entity-escapes < > & is unescaped and
 CDATA-wrapped (E207). One fix is gated behind --strict: wrapping an
@@ -114,6 +119,7 @@ file, e.g. in an XML comment):
     cpe-ok                  (E205)
     action-ui-metadata-ok   (E206)
     cdata-ok                (W204 and E207)
+    cdata-close-ok          (E215)
     action-blank-lines-ok   (W205)
     prefetch-ok             (W206)
     prefetch-https-ok       (W207)
@@ -158,6 +164,7 @@ DESCRIPTION_MARKER = "description-ok"  # E204
 CPE_MARKER = "cpe-ok"  # E205
 ACTION_UI_METADATA_MARKER = "action-ui-metadata-ok"  # E206
 CDATA_MARKER = "cdata-ok"  # W204
+CDATA_CLOSE_MARKER = "cdata-close-ok"  # E215
 ACTION_BLANK_LINES_MARKER = "action-blank-lines-ok"  # W205
 PREFETCH_MARKER = "prefetch-ok"  # W206
 PREFETCH_HTTPS_MARKER = "prefetch-https-ok"  # W207
@@ -306,6 +313,12 @@ CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 BLANK_BEFORE_CLOSE_RE = re.compile(
     r"(\n)(?:[ \t]*\n){2,}([ \t]*(?:\]\]>)?[ \t]*</ActionScript>)"
 )
+# an ActionScript CDATA terminator with the whitespace that may surround it.
+# Whitespace before `]]>` is INSIDE the CDATA (so it is action content), and
+# whitespace after it is element text that BigFix appends to the same body --
+# either way it is a spurious whitespace-only last line of the action (E215).
+CDATA_CLOSE_RE = re.compile(r"[ \t]*\]\]>[ \t]*</ActionScript>")
+CDATA_CLOSE_CANONICAL = "]]></ActionScript>"
 
 # where a new SourceReleaseDate / modification-time MIMEField may be inserted so
 # the result still satisfies the BES.xsd element ordering
@@ -337,6 +350,7 @@ KNOWN_CODES = frozenset(
         "E212",  # Relevance is the literal `true`
         "E213",  # Relevance is empty / whitespace only
         "E214",  # XML declaration missing or not encoding="UTF-8"
+        "E215",  # whitespace around an ActionScript CDATA terminator
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -678,6 +692,26 @@ def check_actionscript_blank_lines(src):
                 (
                     "more than one blank line before </ActionScript>; add "
                     f"`{ACTION_BLANK_LINES_MARKER}` if intentional"
+                ),
+            )
+        )
+    return issues
+
+
+def check_cdata_close(src):
+    """E215: no whitespace may surround an ActionScript CDATA terminator."""
+    issues = []
+    for match in CDATA_CLOSE_RE.finditer(src):
+        if match.group(0) == CDATA_CLOSE_CANONICAL:
+            continue
+        issues.append(
+            (
+                _lineno(src, match.start()),
+                "E215",
+                (
+                    "whitespace around the ActionScript CDATA terminator (it becomes "
+                    f"a whitespace-only last action line); add `{CDATA_CLOSE_MARKER}` "
+                    "if intentional"
                 ),
             )
         )
@@ -1047,6 +1081,7 @@ VALUE_CHECKS = (
     (("E210",), MIMEFIELD_DUP_MARKER, check_duplicate_mimefield_names),
     (("E211", "W209"), TITLE_MARKER, check_title),
     (("E212", "E213"), RELEVANCE_MARKER, check_relevance),
+    (("E215",), CDATA_CLOSE_MARKER, check_cdata_close),
     (("W204",), CDATA_MARKER, check_actionscript_cdata),
     (("W205",), ACTION_BLANK_LINES_MARKER, check_actionscript_blank_lines),
     (("W206",), PREFETCH_MARKER, check_prefetch_lines),
@@ -1114,6 +1149,10 @@ def _fix_block(block, marker_text, disabled, strict, now):
         fixed += got
     if "E207" not in disabled and CDATA_MARKER not in marker_text:
         block, got = fix_cdata_required(block)
+        fixed += got
+    # runs after the W205 collapse, which preserves the terminator's indentation
+    if "E215" not in disabled and CDATA_CLOSE_MARKER not in marker_text:
+        block, got = fix_cdata_close(block)
         fixed += got
     if strict and "W204" not in disabled and CDATA_MARKER not in marker_text:
         block, got = fix_actionscript_cdata(block)
@@ -1222,6 +1261,25 @@ def fix_blank_lines(src):
         return match.group(1) + "\n" + match.group(2)
 
     return BLANK_BEFORE_CLOSE_RE.sub(repl, src), fixed
+
+
+def fix_cdata_close(src):
+    """E215: strip the whitespace around an ActionScript CDATA terminator."""
+    fixed = []
+
+    def repl(match):
+        if match.group(0) == CDATA_CLOSE_CANONICAL:
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "E215",
+                "stripped whitespace around the ActionScript CDATA terminator",
+            )
+        )
+        return CDATA_CLOSE_CANONICAL
+
+    return CDATA_CLOSE_RE.sub(repl, src), fixed
 
 
 def fix_cdata_required(src):
