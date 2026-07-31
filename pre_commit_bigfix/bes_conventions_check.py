@@ -139,7 +139,7 @@ import argparse
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from xml.etree import ElementTree
 
 SKIP_MARKER = "pre-commit-skip: bes-conventions-check"
@@ -407,7 +407,7 @@ def _valid_source_release_date(value):
     if not SOURCE_RELEASE_DATE_RE.match(value):
         return False
     try:
-        datetime.strptime(value, "%Y-%m-%d")
+        date.fromisoformat(value)  # parsed only to reject impossible dates
     except ValueError:
         return False
     return True
@@ -1264,20 +1264,20 @@ def fix_missing_dates(src, now=None, fix_srd=True, fix_modtime=True):
     independently so a single per-field opt-out marker only suppresses its own.
     """
     fixed = []
-    date = _today_str(now)
+    date_now = _today_str(now)
     modtime = _modtime_str(now)
 
     def repl(match):
-        open_tag, tag, inner, close = match.groups()
+        open_tag, _tag, inner, close = match.groups()
         indent = _detect_indent(inner)
         lineno = _lineno(src, match.start())
         if fix_srd and "<SourceReleaseDate" not in inner:
             inner = _insert_ordered(
                 inner,
-                f"{indent}<SourceReleaseDate>{date}</SourceReleaseDate>\n",
+                f"{indent}<SourceReleaseDate>{date_now}</SourceReleaseDate>\n",
                 SRD_ANCHORS,
             )
-            fixed.append((lineno, "W202", f"inserted SourceReleaseDate {date}"))
+            fixed.append((lineno, "W202", f"inserted SourceReleaseDate {date_now}"))
         if fix_modtime and MODIFICATION_TIME_NAME not in inner:
             block = (
                 f"{indent}<MIMEField>\n"
@@ -1393,7 +1393,8 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False, now=Non
     if not os.path.isfile(path):
         return [(1, "W200", "file not found; skipping")], []
 
-    raw = open(path, "rb").read()
+    with open(path, "rb") as handle:
+        raw = handle.read()
     # normalize to LF in memory so the checks/fixers are line-ending agnostic;
     # `raw` is kept to inspect (and, on auto-fix, rewrite) the real endings.
     src = (

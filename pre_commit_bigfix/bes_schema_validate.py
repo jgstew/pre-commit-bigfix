@@ -1,6 +1,7 @@
 """A pre-commit hook to validate BigFix BES files."""
 
 import argparse
+import sys
 
 import validate_bes_xml
 
@@ -33,4 +34,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

@@ -166,9 +166,10 @@ class Tokenizer:
             """Longest matching literal from an iterable, or None."""
             best = None
             for literal in literals:
-                if low.startswith(self._fold(literal), pos):
-                    if best is None or len(literal) > len(best):
-                        best = literal
+                if low.startswith(self._fold(literal), pos) and (
+                    best is None or len(literal) > len(best)
+                ):
+                    best = literal
             return best
 
         def at_bol(pos):

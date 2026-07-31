@@ -485,7 +485,8 @@ def check_file(path, disabled=frozenset(), strict=False):
     if not os.path.isfile(path):
         return [(1, "W300", "file not found; skipping")], []
 
-    raw = open(path, "rb").read()
+    with open(path, "rb") as handle:
+        raw = handle.read()
     src = (
         raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
     )

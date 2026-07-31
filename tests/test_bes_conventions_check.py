@@ -138,9 +138,26 @@ def test_e200_marker_opts_out(tmp_path):
 # --- E201 / E202 formats --------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["07/14/2026", "2026-7-14", "2026/07/14", "2026-13-01"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "07/14/2026",
+        "2026-7-14",
+        "2026/07/14",
+        "2026-13-01",
+        # right shape, impossible day: only the date parse can reject these
+        "2026-02-30",
+        "2023-02-29",
+        "2026-04-31",
+    ],
+)
 def test_e201_bad_dates(tmp_path, bad):
     assert "E201" in codes(tmp_path, task(srd=bad))
+
+
+@pytest.mark.parametrize("good", ["2026-07-14", "2024-02-29", "2026-12-31"])
+def test_e201_accepts_real_dates(tmp_path, good):
+    assert "E201" not in codes(tmp_path, task(srd=good))
 
 
 @pytest.mark.parametrize(
@@ -384,12 +401,9 @@ def test_w206_valid_prefetch_statement(tmp_path):
 
 
 def test_w206_valid_add_prefetch_item(tmp_path):
-    body = (
-        "\n\tadd prefetch item name=x.pkg sha1=%s size=10 url=https://e/x sha256=%s\n"
-        % (
-            "a" * 40,
-            "b" * 64,
-        )
+    body = "\n\tadd prefetch item name=x.pkg sha1={} size=10 url=https://e/x sha256={}\n".format(
+        "a" * 40,
+        "b" * 64,
     )
     assert "W206" not in codes(tmp_path, task(download_size="10", body=body))
 

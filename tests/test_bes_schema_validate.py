@@ -12,7 +12,7 @@ EXAMPLES = Path(__file__).parent / "examples"
 
 pytest.importorskip("validate_bes_xml")
 
-from pre_commit_bigfix import bes_schema_validate as hook  # noqa: E402
+from pre_commit_bigfix import bes_schema_validate as hook
 
 
 def test_valid_bes_passes():

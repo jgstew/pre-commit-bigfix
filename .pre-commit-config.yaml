@@ -24,7 +24,7 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/jgstew/pre-commit-bigfix
-    rev: v0.2.0
+    rev: v0.3.1
     hooks:
       # `validate-bes` and `check-bes-conventions` are the deprecated aliases of
       # `bes-schema-validate` and `bes-conventions-check`; they are used here
@@ -35,7 +35,7 @@ repos:
         exclude: ^tests/examples/example-test-bad.bes
 
   - repo: https://github.com/jgstew/pre-commit-jgstew
-    rev: v2.1.1
+    rev: v2.3.0
     hooks:
       - id: fix-files-to-ascii
       - id: verify-files-are-ascii
@@ -76,8 +76,14 @@ repos:
       - id: pydocstringformatter
         args: ["--max-summary-lines=2", "--linewrap-full-docstring"]
 
+  - repo: https://github.com/crate-ci/typos
+    # v1.48.0
+    rev: v1.48.0
+    hooks:
+      - id: typos
+
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
       - id: codespell
 
@@ -104,14 +110,15 @@ repos:
         stages: [manual]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.21
+    rev: v0.16.1
     hooks:
       - id: ruff
+
         args: [--fix, --exit-non-zero-on-fix]
 
   - repo: https://github.com/woodruffw/zizmor-pre-commit
     # Find security issues in GitHub Actions CI/CD setups.
-    rev: v1.27.0
+    rev: v1.28.0
     hooks:
       # Run the linter.
       - id: zizmor

@@ -13,3 +13,10 @@ build-backend = "setuptools.build_meta"
 # `python -m pytest` happens to work because -m adds the cwd, which masks this.
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# EXE001 (shebang but not executable) is ignored on purpose: the hook
+# modules and tests carry `#!/usr/bin/env python3` so they can be run
+# directly, but they are imported modules / console_scripts entry
+# points, not executables, so the exec bit is deliberately not set.
+ignore = ["EXE001"]
