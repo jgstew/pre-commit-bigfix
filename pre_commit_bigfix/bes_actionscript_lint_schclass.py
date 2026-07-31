@@ -11,11 +11,13 @@ console generator drops, `}` as a URL end separator, and the keyword=value
 option lines of `override wait` / `override run` blocks).
 
 SCOPE: this hook is deliberately limited to what the schclass grammar can
-decide -- lexical validity of each line. ActionScript checks that need
-knowledge the grammar does not carry (per-verb argument shapes, if/endif and
-prefetch-block pairing, the `]]></ActionScript>` closing-tag whitespace trap,
-http-vs-https escalation, and any auto-fixes) belong in a sibling
-ActionScript hook, not here. Keeping the split means this hook stays a thin,
+decide -- lexical validity of each line -- plus the two BLOCK constructs the
+grammar cannot express but which decide whether a line is a command at all:
+`createfile until` heredocs (E302) and `override run` / `override wait` option
+blocks (E303). ActionScript checks that need knowledge neither carries
+(per-verb argument shapes, if/endif and prefetch-block pairing, the
+`]]></ActionScript>` closing-tag whitespace trap, http-vs-https escalation,
+and any auto-fixes) belong in a sibling ActionScript hook, not here. Keeping the split means this hook stays a thin,
 mechanical consumer of the grammar files and needs no edits when BigFix ships
 new command verbs -- only the vendored schclass does.
 
@@ -25,7 +27,9 @@ continuation of a state carried across the line break with a backslash, or the
 line must be blank. Verbs match case-insensitively (the agent accepts `RUN`),
 but a non-lowercase verb is warned about. Lines inside a
 `createfile until <MARKER>` block are raw file content and are not linted;
-the block must reach its bare marker line.
+the block must reach its bare marker line. An `override run` / `override wait`
+line opens a block whose following `keyword=value` lines are options, not
+commands, and are checked against the documented keywords and values instead.
 
 Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (or no MIMEType, which defaults to it) are BigFix ActionScript; x-sh,
@@ -38,12 +42,18 @@ Checks:
           {...} substitution, a continuation, or blank
     E301  a {...} relevance substitution has no closing } before line end
     E302  a `createfile until <MARKER>` block never reaches its marker line
+    E303  an `override run` / `override wait` option line is wrong: an unknown
+          keyword, no value, a value outside the documented set for that
+          keyword, a non-integer `timeout_seconds`, or a `keyword=value` option
+          line outside any override block
     W300  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W301  a "..." string has no closing " before line end (often benign in
           ActionScript arguments, so a warning)
     W302  a matched command verb is not lowercase (e.g. `RUN`; valid but
           unconventional)
+    W303  an override option keyword or value is not lowercase (e.g. `RunAs`;
+          valid but unconventional)
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given. This hook has no auto-fixes and is not
@@ -68,8 +78,10 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-verb-ok           (E300)
     actionscript-substitution-ok   (E301)
     actionscript-createfile-ok     (E302)
+    actionscript-override-ok       (E303)
     actionscript-string-ok         (W301)
     actionscript-case-ok           (W302)
+    actionscript-override-case-ok  (W303)
 
 Files that look like mustache templates (containing `{{ ... }}`) are skipped
 silently: they are not real content until rendered.
@@ -105,18 +117,24 @@ SKIP_MARKER = "pre-commit-skip: bes-actionscript-lint-schclass"
 VERB_MARKER = "actionscript-verb-ok"  # E300
 SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E301
 CREATEFILE_MARKER = "actionscript-createfile-ok"  # E302
+OVERRIDE_MARKER = "actionscript-override-ok"  # E303
 STRING_MARKER = "actionscript-string-ok"  # W301
 CASE_MARKER = "actionscript-case-ok"  # W302
+OVERRIDE_CASE_MARKER = "actionscript-override-case-ok"  # W303
 
 CHECK_MARKERS = {
     "E300": VERB_MARKER,
     "E301": SUBSTITUTION_MARKER,
     "E302": CREATEFILE_MARKER,
+    "E303": OVERRIDE_MARKER,
     "W301": STRING_MARKER,
     "W302": CASE_MARKER,
+    "W303": OVERRIDE_CASE_MARKER,
 }
 
-KNOWN_CODES = frozenset(["E300", "E301", "E302", "W300", "W301", "W302"])
+KNOWN_CODES = frozenset(
+    ["E300", "E301", "E302", "E303", "W300", "W301", "W302", "W303"]
+)
 
 BES_EXTENSIONS = (".bes", ".ojo")
 
@@ -125,6 +143,46 @@ BES_EXTENSIONS = (".bes", ".ojo")
 ACTIONSCRIPT_MIMETYPE = "application/x-Fixlet-Windows-Shell"
 
 HEREDOC_VERB = "createfile until"
+
+# --- `override run` / `override wait` option blocks --------------------------
+# An override block is the verb line, then one `keyword=value` option line per
+# option, then the real command line, which closes the block:
+#     override wait
+#     hidden=true
+#     wait notepad.exe
+# None of this is expressible in the schclass grammar (the option keywords are
+# only commands INSIDE a block, and their values may be relevance
+# substitutions), so it lives here as line state -- see SCOPE above.
+#
+# Keyword and value sets are from
+# https://developer.bigfix.com/action-script/reference/execution/override.html
+# and may not be exhaustive; the reference is the place to check when a new
+# option appears. `None` means the reference gives no closed value set, so only
+# the keyword is checked. Keywords are documented case-insensitive, and values
+# "can be enclosed in {curly brackets} for Relevance substitution", so a value
+# holding a `{` is accepted unchecked -- its real value is not known until the
+# agent runs.
+OVERRIDE_VERBS = frozenset(["override run", "override wait"])
+
+OVERRIDE_OPTIONS = {
+    "completion": frozenset(["none", "process", "job"]),
+    "priority": frozenset(["normal", "low"]),
+    "hidden": frozenset(["true", "false"]),
+    "detached": frozenset(["true", "false"]),
+    "runas": frozenset(["agent", "currentuser", "localuser"]),
+    "user": None,  # a user name or a relevance expression
+    "password": frozenset(["required", "empty", "impersonate", "system"]),
+    "asadmin": frozenset(["true", "interactive"]),
+    "targetuser": None,  # a user name
+    "timeout_seconds": None,  # checked as an integer, not against a value set
+    "disposition": frozenset(["terminate", "abandon"]),
+}
+
+# 0 is the documented default (meaning "no timeout"), so it must be writable
+OVERRIDE_INTEGER_OPTIONS = frozenset(["timeout_seconds"])
+INTEGER_RE = re.compile(r"[0-9]+\Z")
+
+OVERRIDE_OPTION_RE = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)\Z")
 
 MUSTACHE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 
@@ -189,6 +247,106 @@ def _mask_heredocs(lines):
     return masked, issues
 
 
+def _override_value(raw):
+    """Return an option line's value, less a trailing //comment and quotes."""
+    value = raw.strip()
+    if "{" not in value:  # a substitution may legitimately contain '//'
+        value = value.split("//")[0].strip()
+    if len(value) > 1 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
+    return value
+
+
+def _check_override_option(lineno, keyword, raw_value):
+    """Check one override `keyword=value` line; return [(lineno, code, msg)]."""
+    canonical = keyword.lower()
+    if canonical not in OVERRIDE_OPTIONS:
+        return [
+            (
+                lineno,
+                "E303",
+                (
+                    f'"{keyword}" is not a known override option; expected one '
+                    f"of {', '.join(sorted(OVERRIDE_OPTIONS))}; add "
+                    f"`{OVERRIDE_MARKER}` if intentional"
+                ),
+            )
+        ]
+
+    issues = []
+    if keyword != canonical:
+        issues.append(
+            (
+                lineno,
+                "W303",
+                (
+                    f'override option "{keyword}" is not lowercase; use '
+                    f'"{canonical}"; add `{OVERRIDE_CASE_MARKER}` if intentional'
+                ),
+            )
+        )
+
+    value = _override_value(raw_value)
+    if not value:
+        issues.append(
+            (
+                lineno,
+                "E303",
+                (
+                    f'override option "{canonical}" has no value; add '
+                    f"`{OVERRIDE_MARKER}` if intentional"
+                ),
+            )
+        )
+        return issues
+    if "{" in value:
+        return issues  # a relevance substitution: the value is a runtime matter
+
+    if canonical in OVERRIDE_INTEGER_OPTIONS:
+        if not INTEGER_RE.match(value):
+            issues.append(
+                (
+                    lineno,
+                    "E303",
+                    (
+                        f'override option "{canonical}" must be a non-negative '
+                        f'integer or a {{...}} substitution, not "{value}"; add '
+                        f"`{OVERRIDE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        return issues
+
+    allowed = OVERRIDE_OPTIONS[canonical]
+    if allowed is None:
+        return issues  # no documented value set; the keyword was the check
+    if value.lower() not in allowed:
+        issues.append(
+            (
+                lineno,
+                "E303",
+                (
+                    f'"{value}" is not a valid value for override option '
+                    f'"{canonical}"; expected one of {", ".join(sorted(allowed))}'
+                    f"; add `{OVERRIDE_MARKER}` if intentional"
+                ),
+            )
+        )
+    elif value != value.lower():
+        issues.append(
+            (
+                lineno,
+                "W303",
+                (
+                    f'override option value "{value}" is not lowercase; use '
+                    f'"{value.lower()}"; add `{OVERRIDE_CASE_MARKER}` if '
+                    "intentional"
+                ),
+            )
+        )
+    return issues
+
+
 def lint_actionscript(body, tokenizer=None):
     """Lint one ActionScript body; return sorted [(lineno, code, message)].
 
@@ -212,6 +370,7 @@ def lint_actionscript(body, tokenizer=None):
         first_on_line.setdefault(token.line, token)
         continuation.update(range(token.line + 1, token.end_line + 1))
 
+    in_override = False
     for lineno, line in enumerate(masked_lines, start=1):
         if lineno in masked or not line.strip() or lineno in continuation:
             continue
@@ -219,7 +378,7 @@ def lint_actionscript(body, tokenizer=None):
         if token is None:
             continue
         if token.class_name in ("comment", "relevance"):
-            continue
+            continue  # neither opens nor closes an override block
         if token.keyword is not None:
             if token.text != token.keyword:
                 issues.append(
@@ -232,7 +391,31 @@ def lint_actionscript(body, tokenizer=None):
                         ),
                     )
                 )
+            # a real command line closes an override block; the override verbs
+            # themselves open one. Checked before the option shape below so a
+            # command can never be mistaken for an option (no option keyword is
+            # also a command verb).
+            in_override = token.keyword in OVERRIDE_VERBS
             continue
+        option = OVERRIDE_OPTION_RE.match(line)
+        if option is not None:
+            keyword, raw_value = option.group(1), option.group(2)
+            if in_override:
+                issues.extend(_check_override_option(lineno, keyword, raw_value))
+                continue
+            if keyword.lower() in OVERRIDE_OPTIONS:
+                issues.append(
+                    (
+                        lineno,
+                        "E303",
+                        (
+                            f'override option "{keyword}" appears outside an '
+                            "`override run` / `override wait` block; add "
+                            f"`{OVERRIDE_MARKER}` if intentional"
+                        ),
+                    )
+                )
+                continue
         issues.append(
             (
                 lineno,

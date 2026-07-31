@@ -308,18 +308,7 @@ def test_load_default_schema_has_https_and_surrender():
     # base verbs still present after the merge
     assert "add nohash prefetch item" in schema.classes["keywords"].token_tags
     assert schema.all_token_tags()["download now as"] == "download_now_as"
-    # 323 console verbs + surrender device id + 11 override option keywords
-    assert len(schema.all_token_tags()) == 335
-
-
-def test_load_default_schema_has_override_options():
-    schema = schclass.load_default_actionscript_schema()
-    cls = schema.classes["override_options"]
-    assert "completion" in cls.token_tags
-    assert "timeout_seconds" in cls.token_tags
-    # options are only recognized when followed by '=' (never a bare word)
-    assert cls.token_end_separators == ("=",)
-    assert cls.token_end_eol is False
+    assert len(schema.all_token_tags()) == 324
 
 
 def test_override_file_exists_and_parses():

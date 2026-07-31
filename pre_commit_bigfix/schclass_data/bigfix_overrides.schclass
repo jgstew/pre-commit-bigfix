@@ -27,29 +27,9 @@ lexClass:
 	name		= keywords
 	token:tag	= 'surrender device id'
 
-// `override wait` / `override run` blocks are followed by keyword=value
-// option lines (e.g. `completion=job`) that the console's display grammar
-// leaves uncolored, so the linter saw them as unknown verbs (E300). Matching
-// requires `=` as the token end separator (keywords default to whitespace),
-// which also keeps a bare `hidden` line from matching. The grammar is lexical
-// and cannot scope these to override blocks; anywhere at line start is
-// accepted. Option names per
-// https://developer.bigfix.com/action-script/reference/execution/override.html
-// (may not be exhaustive).
-lexClass:
-	name		= override_options
-	parent		= global
-	previous:tag	= @eol
-	token:end:separators = '='
-	token:tag	= 'completion'
-	token:tag	= 'priority'
-	token:tag	= 'hidden'
-	token:tag	= 'detached'
-	token:tag	= 'runas'
-	token:tag	= 'user'
-	token:tag	= 'password'
-	token:tag	= 'asadmin'
-	token:tag	= 'targetuser'
-	token:tag	= 'timeout_seconds'
-	token:tag	= 'disposition'
-	DisplayName	= 'Override option (keyword=value)'
+// `override run` / `override wait` option lines (`hidden=true`) are NOT added
+// here as token:tags. Their values may be {...} relevance substitutions, and
+// they are only legal inside an override block -- neither is expressible in a
+// lexical grammar, so the whole construct is handled as line state in
+// bes_actionscript_lint_schclass.py (E303/W303), the way `createfile until`
+// block content already is.

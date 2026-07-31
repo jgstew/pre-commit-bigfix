@@ -74,8 +74,14 @@ The rule: the first token of every line must be a known command verb, a `//`
 comment, a `{...}` relevance substitution, a continuation, or the line must be
 blank (E300). A `{...}` substitution must close before line end (E301), and a
 `createfile until <MARKER>` block must reach its bare marker line (E302; the
-block's raw content is excluded from linting). Verbs match case-insensitively
-but a non-lowercase verb warns (W302), and an unbalanced `"` warns (W301).
+block's raw content is excluded from linting). An `override run` / `override
+wait` line opens a block whose following `keyword=value` lines are options
+rather than commands, checked against the
+[documented keywords and values](https://developer.bigfix.com/action-script/reference/execution/override.html)
+(E303) -- a value in `{...}` is a relevance substitution and is accepted
+unchecked. Verbs match case-insensitively but a non-lowercase verb warns
+(W302), an override option keyword or value that is not lowercase warns (W303),
+and an unbalanced `"` warns (W301).
 Only `application/x-Fixlet-Windows-Shell` (or missing-MIMEType) bodies are
 BigFix ActionScript and are linted; `x-sh`, `x-AppleScript`,
 `x-Fixlet-Windows-PowerShell`, and `text/x-uri` bodies are other languages and

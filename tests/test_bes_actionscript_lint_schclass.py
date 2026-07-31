@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for pre_commit_bigfix/bes_actionscript_lint_schclass.py.
 
-These exercise the ActionScript line linting (E300-E302, W301-W302), the
+These exercise the ActionScript line linting (E300-E303, W301-W303), the
 lxml-based extraction of every <ActionScript> from BES XML (entity decoding,
 merged CDATA sections, sourceline-accurate linenos, MIMEType gating), raw
 non-.bes file linting, the skip/opt-out markers, --disable, W300 on
@@ -151,21 +151,128 @@ def test_override_block_options_are_clean():
     assert linter.lint_actionscript(body) == []
 
 
-def test_override_option_wrong_case_w302_not_e300():
+def test_override_run_block_options_are_clean():
+    body = (
+        "override run\n"
+        "priority=low\n"
+        "detached=true\n"
+        "runas=localuser\n"
+        "user=someuser\n"
+        "password=impersonate\n"
+        "asadmin=interactive\n"
+        "targetuser=someoneelse\n"
+        'run cmd /C echo "hello"\n'
+    )
+    assert linter.lint_actionscript(body) == []
+
+
+def test_override_option_wrong_case_w303():
     issues = linter.lint_actionscript("override wait\nRunAs=currentuser\nwait x\n")
-    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "W302")]
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "W303")]
     assert "runas" in issues[0][2]
 
 
-def test_override_option_without_equals_is_still_e300():
-    # a bare option word is not a command; only `option=value` is recognized
+def test_override_value_wrong_case_w303():
+    issues = linter.lint_actionscript("override wait\nhidden=TRUE\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "W303")]
+    assert "true" in issues[0][2]
+
+
+def test_override_option_without_equals_is_e300():
+    # a bare option word is not a command; only `option=value` is an option line
     issues = linter.lint_actionscript("override wait\nhidden\nwait x\n")
     assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E300")]
 
 
-def test_unknown_override_option_is_e300():
+def test_unknown_override_option_e303():
     issues = linter.lint_actionscript("override wait\nbogus_option=true\nwait x\n")
-    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E300")]
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E303")]
+    assert "not a known override option" in issues[0][2]
+
+
+def test_invalid_override_value_e303_lists_allowed():
+    issues = linter.lint_actionscript("override wait\ncompletion=jobs\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E303")]
+    assert "job, none, process" in issues[0][2]
+
+
+def test_override_option_with_no_value_e303():
+    issues = linter.lint_actionscript("override wait\nhidden=\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E303")]
+    assert "has no value" in issues[0][2]
+
+
+def test_override_timeout_seconds_accepts_integers():
+    for value in ("300", "0"):
+        body = f"override wait\ntimeout_seconds={value}\nwait x\n"
+        assert linter.lint_actionscript(body) == [], value
+
+
+def test_override_timeout_seconds_rejects_non_integers():
+    for value in ("abc", "-5", "1.5"):
+        body = f"override wait\ntimeout_seconds={value}\nwait x\n"
+        issues = linter.lint_actionscript(body)
+        assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E303")], value
+        assert "non-negative integer" in issues[0][2]
+
+
+def test_override_value_may_be_a_substitution():
+    # "the values can be enclosed in {curly brackets} for Relevance
+    # substitution", so an enumerated set cannot be checked against one
+    body = (
+        "override wait\n"
+        'hidden={if x then "true" else "false"}\n'
+        'timeout_seconds={parameter "t" of action}\n'
+        "wait x\n"
+    )
+    assert linter.lint_actionscript(body) == []
+
+
+def test_override_option_outside_block_e303():
+    issues = linter.lint_actionscript("run x\nhidden=true\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E303")]
+    assert "outside an" in issues[0][2]
+
+
+def test_command_line_closes_the_override_block():
+    issues = linter.lint_actionscript(
+        "override wait\nhidden=true\nwait x\ncompletion=job\n"
+    )
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(4, "E303")]
+    assert "outside an" in issues[0][2]
+
+
+def test_comment_inside_override_block_does_not_close_it():
+    body = "override wait\n// why this is hidden\nhidden=true\nwait x\n"
+    assert linter.lint_actionscript(body) == []
+
+
+def test_override_value_trailing_comment_ignored():
+    assert linter.lint_actionscript("override wait\nhidden=true // yes\nwait x\n") == []
+
+
+def test_override_quoted_free_value_ok():
+    body = 'override run\nrunas=localuser\nuser="DOMAIN\\someone"\nrun x\n'
+    assert linter.lint_actionscript(body) == []
+
+
+def test_command_with_equals_argument_is_not_an_override_option():
+    # a real verb always wins over the option shape, in or out of a block
+    assert linter.lint_actionscript("wait setup.exe /S ARG=1\ndos set X=1\n") == []
+
+
+def test_override_marker_suppresses_e303(tmp_path):
+    content = bes(
+        "\noverride wait\ncompletion=jobs\nwait x\n", marker=linter.OVERRIDE_MARKER
+    )
+    assert codes(tmp_path, content) == []
+
+
+def test_override_case_marker_suppresses_w303(tmp_path):
+    content = bes(
+        "\noverride wait\nRunAs=agent\nwait x\n", marker=linter.OVERRIDE_CASE_MARKER
+    )
+    assert codes(tmp_path, content) == []
 
 
 def test_uppercase_word_mid_line_is_not_w302():
