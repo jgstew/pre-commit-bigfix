@@ -229,6 +229,46 @@ def test_e204_marker_opts_out(tmp_path):
     )
 
 
+def analysis(description, marker=None):
+    """Build a minimal single-Analysis BES document with `description`."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xsi:noNamespaceSchemaLocation="BES.xsd">\n'
+        + (f"\t<!-- {marker} -->\n" if marker else "")
+        + "\t<Analysis>\n"
+        "\t\t<Title>Some analysis</Title>\n"
+        f"\t\t<Description><![CDATA[{description}]]></Description>\n"
+        '\t\t<Property Name="X">whose (it) of it</Property>\n'
+        "\t</Analysis>\n"
+        "</BES>\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Enter a description of the Analysis here.",
+        "ENTER A DESCRIPTION OF THE ANALYSIS HERE.",
+        "enter a description of the analysis here",
+    ],
+)
+def test_e204_analysis_placeholder(tmp_path, description):
+    # the placeholder is not Task/Fixlet-only: Analysis carries the same boilerplate
+    assert "E204" in codes(tmp_path, analysis(description))
+
+
+def test_e204_analysis_real_description(tmp_path):
+    assert codes(tmp_path, analysis("A real description of what this analyses.")) == []
+
+
+def test_e204_analysis_marker_opts_out(tmp_path):
+    assert "E204" not in codes(
+        tmp_path,
+        analysis("Enter a description of the Analysis here.", marker="description-ok"),
+    )
+
+
 # --- E205 CPE 2.3 ---------------------------------------------------------
 
 

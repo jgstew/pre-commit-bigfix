@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.5.1
+
+Broadens the `E204` description-placeholder check in `bes-conventions-check` to every content object.
+
+There is no v0.5.0 release; the version went from v0.4.2 straight to v0.5.1.
+
+### Changed
+
+- `E204` in **`bes-conventions-check`** now applies to every content object, not just `Task`/`Fixlet`. `Analysis`, `ComputerGroup`, `Baseline`, and `SingleAction` carry the same boilerplate placeholder, so `Enter a description of the Analysis here.` is now flagged. The match is on the substring `enter a description of the` and remains case-insensitive; `description-ok` still opts out.
+
 ## v0.4.2
 
 Adds `E215` to `bes-conventions-check`: whitespace around an `<ActionScript>` CDATA terminator.

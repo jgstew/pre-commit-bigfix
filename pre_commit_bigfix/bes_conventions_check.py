@@ -21,8 +21,9 @@ Checks:
           (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`)
     E203  a <DownloadSize> is not empty and not 0-or-a-positive-integer (fixable
           -> 0)
-    E204  a Task/Fixlet <Description> still contains the boilerplate placeholder
-          "enter a description of the"
+    E204  a content object's <Description> still contains the boilerplate
+          placeholder "enter a description of the" (case-insensitive), e.g.
+          "Enter a description of the Task here." or "...of the Analysis here."
     E205  an x-fixlet-cpe23-item-name value is not a valid CPE 2.3 string
     E206  an action-ui-metadata value is not well-formed
     E207  a Description / Relevance / ActionScript entity-escapes a character
@@ -196,8 +197,9 @@ ALLOWED_MIMETYPES = frozenset(
 CONTENT_TAGS = frozenset(
     ["Task", "Fixlet", "Analysis", "ComputerGroup", "Baseline", "SingleAction"]
 )
-# only these are expected to carry a SourceReleaseDate / modification time and to
-# have a real (non-placeholder) description and a download action
+# only these are expected to carry a SourceReleaseDate / modification time and a
+# download action; the description placeholder check (E204) applies to every
+# content object, since Analysis/Baseline/... carry the same boilerplate
 DATED_CONTENT_TAGS = frozenset(["Task", "Fixlet"])
 
 MODIFICATION_TIME_NAME = "x-fixlet-modification-time"
@@ -996,17 +998,36 @@ def _action_scripts_text(element):
     return "\n".join((a.text or "") for a in element.iter("ActionScript"))
 
 
-def _check_dated_element(tag, element, disabled):
-    """W201/W202/W203/E204 for one Task/Fixlet element; issues at local line 1.
+def _check_element(tag, element, disabled):
+    """E204 for any content object plus W201/W202/W203 for a Task/Fixlet.
 
-    Line 1 is the block's open tag; the caller offsets it to the file line.
+    Issues are reported at local line 1 -- the block's open tag; the caller
+    offsets it to the file line.
     """
-    if element is None or tag not in DATED_CONTENT_TAGS:
+    if element is None or tag not in CONTENT_TAGS:
         return []
     issues = []
     title = element.find("Title")
     label = (title.text or "").strip() if title is not None else ""
     where = f' ("{label}")' if label else ""
+
+    if "E204" not in disabled:
+        description = element.find("Description")
+        text = "".join(description.itertext()) if description is not None else ""
+        if DESCRIPTION_PLACEHOLDER in text.lower():
+            issues.append(
+                (
+                    1,
+                    "E204",
+                    (
+                        f"{tag}{where} Description contains the placeholder "
+                        f'"{DESCRIPTION_PLACEHOLDER}"; add `{DESCRIPTION_MARKER}` '
+                        "if intentional"
+                    ),
+                )
+            )
+    if tag not in DATED_CONTENT_TAGS:
+        return issues
 
     if "W201" not in disabled and not _has_modification_time(element):
         issues.append(
@@ -1030,21 +1051,6 @@ def _check_dated_element(tag, element, disabled):
                 ),
             )
         )
-    if "E204" not in disabled:
-        description = element.find("Description")
-        text = "".join(description.itertext()) if description is not None else ""
-        if DESCRIPTION_PLACEHOLDER in text.lower():
-            issues.append(
-                (
-                    1,
-                    "E204",
-                    (
-                        f"{tag}{where} Description contains the placeholder "
-                        f'"{DESCRIPTION_PLACEHOLDER}"; add `{DESCRIPTION_MARKER}` '
-                        "if intentional"
-                    ),
-                )
-            )
     if "W203" not in disabled:
         download = element.find("DownloadSize")
         raw = _strip_cdata(download.text or "") if download is not None else ""
@@ -1125,7 +1131,7 @@ def _run_checks(src, root, disabled):
             if marker in marker_text:
                 presence_disabled.add(code)
         tag = element.tag if element is not None else None
-        for lineno, found_code, message in _check_dated_element(
+        for lineno, found_code, message in _check_element(
             tag, element, presence_disabled
         ):
             issues.append((start_line + lineno - 1, found_code, message))
