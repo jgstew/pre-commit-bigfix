@@ -133,6 +133,41 @@ def test_lowercase_mixed_verbs_no_w302():
     assert linter.lint_actionscript("run x\nwaithidden y\n") == []
 
 
+def test_override_block_options_are_clean():
+    body = (
+        "override wait\n"
+        "hidden=true\n"
+        "completion=job\n"
+        "runas=currentuser\n"
+        "timeout_seconds=300\n"
+        "disposition=terminate\n"
+        'wait cmd /C echo "hello"\n'
+        "override run\n"
+        "priority=low\n"
+        "detached=true\n"
+        "run cmd /C echo "
+        '"hello"\n'
+    )
+    assert linter.lint_actionscript(body) == []
+
+
+def test_override_option_wrong_case_w302_not_e300():
+    issues = linter.lint_actionscript("override wait\nRunAs=currentuser\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "W302")]
+    assert "runas" in issues[0][2]
+
+
+def test_override_option_without_equals_is_still_e300():
+    # a bare option word is not a command; only `option=value` is recognized
+    issues = linter.lint_actionscript("override wait\nhidden\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E300")]
+
+
+def test_unknown_override_option_is_e300():
+    issues = linter.lint_actionscript("override wait\nbogus_option=true\nwait x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E300")]
+
+
 def test_uppercase_word_mid_line_is_not_w302():
     # only the line-opening verb is case-checked; arguments are free text
     assert linter.lint_actionscript("wait setup.exe /VERYSILENT RESTART=0\n") == []

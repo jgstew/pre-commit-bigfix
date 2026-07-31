@@ -7,7 +7,8 @@ lexical grammar: the vendored schclass_data/ExpandedActionScript.schclass (the
 lex schema the console's SyntaxEdit editor uses, 323 command verbs) merged
 with schclass_data/bigfix_overrides.schclass (validation corrections the
 display grammar needs: an https: URL class, the `surrender device id` verb the
-console generator drops, and `}` as a URL end separator).
+console generator drops, `}` as a URL end separator, and the keyword=value
+option lines of `override wait` / `override run` blocks).
 
 SCOPE: this hook is deliberately limited to what the schclass grammar can
 decide -- lexical validity of each line. ActionScript checks that need
