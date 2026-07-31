@@ -107,7 +107,7 @@ def test_deprecated_alias_is_declared_and_thin(old_id, new_id):
 
 @pytest.mark.parametrize("old_id", sorted(DEPRECATED_ALIASES))
 def test_deprecated_alias_says_so(old_id):
-    """The alias must be labelled, so nobody adopts it in a new config."""
+    """The alias must be labeled, so nobody adopts it in a new config."""
     hook = load_hooks()[old_id]
     text = f"{hook['name']} {hook.get('description', '')}".lower()
     assert "deprecated" in text
