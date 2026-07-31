@@ -16,6 +16,7 @@ repos:
       - id: bes-schema-validate
       - id: bes-conventions-check
       - id: bes-actionscript-lint-schclass
+      - id: bes-actionscript-validate-prefetch
 ```
 
 The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
@@ -106,6 +107,63 @@ needs no code changes when BigFix ships new command verbs.
 
 See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
+for the full list of check codes, opt-out markers, and options.
+
+### bes-actionscript-validate-prefetch
+
+Validates every prefetch line in every `<ActionScript>` body with
+`validate_prefetch()` from the
+[bigfix_prefetch](https://pypi.org/project/bigfix-prefetch/) package, which is
+the reference implementation of what a valid prefetch is. Both spellings are
+covered:
+
+```text
+prefetch <name> sha1:<40> size:<n> <url> sha256:<64>
+add prefetch item name=<name> sha1=<40> size=<n> url=<url> sha256=<64>
+```
+
+A line that fails validation is `E400`, carrying the reason `bigfix_prefetch`
+reported: a missing size or a size that is not > 0, a hash of the wrong
+length, a sha1 missing from a prefetch statement (where it is mandatory), or a
+line that could not be parsed at all.
+
+A missing sha256 is `E401`. `bigfix_prefetch` calls sha256 optional unless
+asked, but in 2026 it is treated as mandatory here. It gets its own code
+rather than being folded into `E400` so that a repo which still wants it
+optional can turn just that off:
+
+```yaml
+      - id: bes-actionscript-validate-prefetch
+        args: ["--disable", "E401"]
+```
+
+A prefetch block item with no sha1 warns (`W402`), and an
+`add nohash prefetch item` line is reported rather than validated (`W403`),
+since it is hashless by definition and its download cannot be verified.
+
+A file whose prefetches knowingly do not meet these rules opts out of every
+check in this hook with `prefetch-ok` anywhere in it (e.g.
+`<!-- prefetch-ok -->`) - the same marker that opts out of the prefetch-shape
+warning `W206` in `bes-conventions-check`, since it is the same judgement.
+The usual `<!-- pre-commit-skip: bes-actionscript-validate-prefetch -->` skips
+the file too.
+
+The scope is internal validity only. This hook is offline: it never downloads
+a URL and never checks that the hashes match the real file. Dynamic
+prefetches (a line holding a `{...}` relevance substitution), `//` comments,
+and the raw content of a `createfile until` block are skipped - none of them
+carry a fixed size and hash to check. The line's overall shape and its
+http-vs-https scheme are `W206`/`W207` in `bes-conventions-check`, and its
+lexical validity is `E300` in `bes-actionscript-lint-schclass`: three
+altitudes on the same line, all intentional.
+
+There are no auto-fixes, and none are planned - the correct size and hashes
+are properties of the real file, which only a download can learn. E-codes fail
+the hook; pass `--strict` to also fail on warnings. Unparsable files are
+skipped (`bes-schema-validate` owns validity).
+
+See the docstring in
+[bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
 
 ## Development

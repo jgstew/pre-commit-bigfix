@@ -168,6 +168,17 @@ repos:
         exclude: ^tests/examples/example-test-bad.bes
   - repo: local
     hooks:
+      - id: bes-actionscript-validate-prefetch-local
+        name: bes-actionscript-validate-prefetch-local
+        entry: python pre_commit_bigfix/bes_actionscript_validate_prefetch.py
+        language: python
+        # isolated venv: declare the third-party imports used by the validator
+        additional_dependencies: [lxml, bigfix_prefetch]
+        pass_filenames: True
+        files: \.bes$
+        exclude: ^tests/examples/example-test-bad.bes
+  - repo: local
+    hooks:
       - id: try-repo
         name: try-repo
         entry: pre-commit try-repo . --files tests/examples/example-test.bes
@@ -185,5 +196,6 @@ repos:
         always_run: true
         stages: [manual]
         additional_dependencies:
+          - bigfix_prefetch
           - lxml
           - validate_bes_xml
