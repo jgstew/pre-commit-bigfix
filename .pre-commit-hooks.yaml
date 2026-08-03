@@ -101,22 +101,43 @@
     length, a sha1 missing from a prefetch statement, an unparsable line).
     A missing sha256 is E401: upstream treats sha256 as optional, this hook
     treats it as mandatory, and it is its own code so a repo that still wants
-    it optional can pass --disable E401. A prefetch block item with no sha1
+    it optional can pass --disable E401, and --auto-fix-network adds the
+    missing sha256 instead of reporting it (see below). A prefetch downloading
+    the retired unzip-5.52.exe from the BigFix redist folder is E402, and is
+    this hook's offline auto-fix: with --auto-fix (the default when files are
+    given, as pre-commit does) the line is rewritten in place to the current
+    unzip-6.0.exe prefetch, built by prefetch_from_dictionary() from
+    bigfix_prefetch in whichever spelling the line already used and keeping
+    the original download's name; an auto-fixed file fails the hook so the
+    change is reviewed and re-staged. A prefetch block item with no sha1
     warns (W402), and an `add nohash prefetch item` line is reported rather
-    than validated (W403) since it is hashless by definition. A file whose
+    than validated (W403) since it is hashless by definition -- on the old
+    URL it is reported but not rewritten, since a hashed prefetch would
+    change what the line does. --auto-fix-network, OFF by default, adds the
+    missing sha256 of an E401 by DOWNLOADING the file to hash it, via
+    add_sha256_prefetch() from bigfix_prefetch (>= 1.1.5), which checks the
+    download against the size and sha1 already on the line and re-emits the
+    prefetch in the same spelling, keeping the line's own download name; each
+    URL is fetched at most once per run, each download gives up after 60
+    seconds, and a download that fails or does not match is W404, leaving the
+    line and its E401 alone. It is opt-in because it reaches out to whatever
+    URLs the content names. A file whose
     prefetches knowingly do not meet these rules opts out of the whole hook
     with `prefetch-ok` anywhere in it -- the same marker that opts out of
     W206 in bes-conventions-check.
-    Scope is internal validity only: this hook is offline and never downloads
-    a URL or verifies that the hashes match the real file. Dynamic prefetches
+    Scope of the checks is internal validity only: they are offline and never
+    download a URL or verify that the hashes match the real file (only
+    --auto-fix-network does, and only when asked). Dynamic prefetches
     (a line holding a {...} substitution), // comments, and the raw content of
     a `createfile until` block are skipped. Only
     application/x-Fixlet-Windows-Shell (or missing MIMEType) bodies are
     checked; bodies are extracted with lxml, so entities are decoded, CDATA
     sections merged, and line numbers map back to the file. Unparsable files
-    are skipped (bes-schema-validate owns validity). There are no auto-fixes:
-    the correct size and hashes are properties of the real file. E-codes fail
-    the hook; pass --strict to also fail on warnings.
+    are skipped (bes-schema-validate owns validity). E402 and (with
+    --auto-fix-network) E401 are the only auto-fixes: E400 depends on the size
+    and hashes of the real file, and a hook has no way to know which file was
+    meant. E-codes and any auto-fix fail the hook; pass --strict to also fail
+    on warnings.
   language: python
   pass_filenames: True
   entry: bes-actionscript-validate-prefetch

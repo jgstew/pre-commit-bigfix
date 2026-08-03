@@ -141,6 +141,48 @@ A prefetch block item with no sha1 warns (`W402`), and an
 `add nohash prefetch item` line is reported rather than validated (`W403`),
 since it is hashless by definition and its download cannot be verified.
 
+`--auto-fix-network` (off by default) adds the missing sha256 of an `E401` for
+you, which means downloading the file to hash it - there is no other way to
+learn a sha256. The download is handed to `add_sha256_prefetch()` from
+`bigfix_prefetch` (v1.1.5+), which streams the file, checks it against the size
+and sha1 already on the line, and re-emits the prefetch with sha256 added, in
+the same spelling and keeping the line's own download name. A download that
+does not happen or does not match is `W404`: the line is left alone and its
+`E401` stands. Each URL is fetched at most once per run, and each download
+gives up after 60 seconds.
+
+```yaml
+      - id: bes-actionscript-validate-prefetch
+        args: ["--auto-fix-network", "yes"]
+```
+
+Because this reaches out to whatever URLs the content names, it is opt-in and
+never the default - think about it before turning it on for a repo whose
+prefetches point at hosts you do not control.
+
+A prefetch that downloads the retired `unzip-5.52.exe` from the BigFix redist
+folder is `E402` - `unzip-6.0.exe` is the current one - and it is the hook's
+one auto-fix. Auto-fix is on by default; the line is rewritten in place to
+
+```text
+add prefetch item name=unzip.exe sha1=84debf12767785cd9b43811022407de7413beb6f size=204800 url=http://software.bigfix.com/download/redist/unzip-6.0.exe sha256=2122557d350fd1c59fb0ef32125330bde673e9331eb9371b454c2ad2d82091ac
+```
+
+or the `prefetch ... sha1:... size:...` statement equivalent, whichever
+spelling the line already used - the replacement string is built by
+`prefetch_from_dictionary()` from `bigfix_prefetch`, so its shape is the
+reference implementation's. The original download's *name* is kept (the rest
+of the ActionScript refers to the file by that name), while the url, size,
+sha1, and sha256 become the current file's. An `add nohash prefetch item` on
+the old URL is reported but not rewritten: swapping in a hashed prefetch would
+change what the line does, not just which file it fetches. To report `E402`
+without rewriting anything:
+
+```yaml
+      - id: bes-actionscript-validate-prefetch
+        args: ["--auto-fix", "no"]
+```
+
 A file whose prefetches knowingly do not meet these rules opts out of every
 check in this hook with `prefetch-ok` anywhere in it (e.g.
 `<!-- prefetch-ok -->`) - the same marker that opts out of the prefetch-shape
@@ -148,8 +190,10 @@ warning `W206` in `bes-conventions-check`, since it is the same judgement.
 The usual `<!-- pre-commit-skip: bes-actionscript-validate-prefetch -->` skips
 the file too.
 
-The scope is internal validity only. This hook is offline: it never downloads
-a URL and never checks that the hashes match the real file. Dynamic
+The scope of the *checks* is internal validity only, and they are offline: no
+check downloads a URL or verifies that the hashes match the real file. The one
+thing that touches the network is `--auto-fix-network`, above, and only when it
+is asked for. Dynamic
 prefetches (a line holding a `{...}` relevance substitution), `//` comments,
 and the raw content of a `createfile until` block are skipped - none of them
 carry a fixed size and hash to check. The line's overall shape and its
@@ -157,10 +201,11 @@ http-vs-https scheme are `W206`/`W207` in `bes-conventions-check`, and its
 lexical validity is `E300` in `bes-actionscript-lint-schclass`: three
 altitudes on the same line, all intentional.
 
-There are no auto-fixes, and none are planned - the correct size and hashes
-are properties of the real file, which only a download can learn. E-codes fail
-the hook; pass `--strict` to also fail on warnings. Unparsable files are
-skipped (`bes-schema-validate` owns validity).
+`E402` and (with `--auto-fix-network`) `E401` are the only auto-fixes, and no
+others are planned - `E400`'s correct size and hashes are properties of the
+real file, and a hook has no way to know which file was meant. E-codes and any
+auto-fix fail the hook; pass `--strict` to also fail on warnings. Unparsable
+files are skipped (`bes-schema-validate` owns validity).
 
 See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)

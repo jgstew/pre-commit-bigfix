@@ -14,6 +14,9 @@ build-backend = "setuptools.build_meta"
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.ruff]
+exclude = ["tests/"]
+
 [tool.ruff.lint]
 # EXE001 (shebang but not executable) is ignored on purpose: the hook
 # modules and tests carry `#!/usr/bin/env python3` so they can be run
