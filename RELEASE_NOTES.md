@@ -1,5 +1,26 @@
 # Release Notes
 
+## v0.6.1
+
+Teaches `bes-actionscript-validate-prefetch` to fix prefetches, not just report them: the retired `unzip-5.52.exe` download is replaced offline, and `--auto-fix-network` fills in a missing sha256 by downloading the file.
+
+### Added
+
+- **`E402` in `bes-actionscript-validate-prefetch`**: the prefetch downloads the retired `unzip-5.52.exe` from the BigFix redist folder (matched on either scheme); `http://software.bigfix.com/download/redist/unzip-6.0.exe` is the current one.
+  - This is the hook's offline auto-fix, and it is **on by default** (`args: ["--auto-fix", "no"]` turns it off): the line is rewritten in place to the current unzip prefetch, built by `prefetch_from_dictionary()` from `bigfix_prefetch` in whichever spelling the line already used, so a `prefetch ... sha1:...` statement stays a statement and an `add prefetch item ...` stays a block item.
+  - The original download's **name** is kept and only the url, size, sha1, and sha256 are replaced: the rest of the ActionScript refers to the downloaded file by name, so renaming it would break the script.
+  - An `add nohash prefetch item` on the old URL is reported but not rewritten - giving it hashes would change what the line does, not just which file it fetches.
+- **`--auto-fix-network`, off by default**: adds the missing sha256 of an `E401`, which means downloading the file to hash it - there is no other way to learn a sha256. The download is handed to `add_sha256_prefetch()` from `bigfix_prefetch`, which streams the file, checks it against the size and sha1 already on the line, and re-emits the prefetch with sha256 added - in the same spelling, and again keeping the line's own download name (upstream would rename it after the URL's basename).
+  - It is a flag of its own rather than part of `--auto-fix`, and never on by default, because it reaches out to whatever URLs the content names.
+  - Each URL is fetched at most once per run, and each download gives up after 60 seconds (upstream sets no timeout, and a hanging URL should not hang a commit).
+- **`W404`**: `--auto-fix-network` was asked to add a sha256 and could not - the URL would not download, or what came back did not match the size and sha1 already on the line. The line is left exactly as it was and its `E401` stands, so an upstream file that has changed is never quietly re-hashed into looking valid.
+
+### Changed
+
+- An auto-fixed file fails the hook, so the rewrite is reviewed and re-staged - the same behavior as `bes-conventions-check`. Both fixes honor `--disable` and the `prefetch-ok` / `pre-commit-skip` opt-out markers, and preserve the file's CRLF line endings.
+- The `bigfix_prefetch` dependency now has a `>= 1.1.5` floor: that is where `prefetch.add_sha256_prefetch()` arrived.
+- The hook is no longer offline in every mode. Its **checks** still are - none of them downloads a URL or verifies hashes against the real file - but `--auto-fix-network` does, when asked for.
+
 ## v0.6.0
 
 Adds a new hook, `bes-actionscript-validate-prefetch`.
@@ -8,15 +29,12 @@ Adds a new hook, `bes-actionscript-validate-prefetch`.
 
 - **`bes-actionscript-validate-prefetch`**: validates every prefetch line in every `<ActionScript>` body with `validate_prefetch()` from the [bigfix_prefetch](https://pypi.org/project/bigfix-prefetch/) package, which is now an install dependency. Both the `prefetch <name> sha1:<40> size:<n> <url> sha256:<64>` statement and the `add prefetch item name=... sha1=... size=... url=...` block item are covered.
   - `E400`: the line failed validation, with the reason `bigfix_prefetch` reported - a missing size or a size that is not > 0, a hash of the wrong length, a sha1 missing from a prefetch statement, or an unparsable line.
-  - `E401`: the line has no sha256. `bigfix_prefetch` treats sha256 as optional unless asked; this hook treats it as mandatory, which is the 2026 expectation. It is a code of its own rather than part of `E400` so a repo that still wants sha256 optional can pass `args: ["--disable", "E401"]`. `args: ["--auto-fix-network", "yes"]` adds the missing sha256 instead of reporting it - see below.
-  - `E402`: the prefetch downloads the retired `unzip-5.52.exe` from the BigFix redist folder (either scheme); `http://software.bigfix.com/download/redist/unzip-6.0.exe` is the current one. This is the hook's one auto-fix, and it is on by default (`args: ["--auto-fix", "no"]` turns it off): the line is rewritten in place to the current unzip prefetch, built by `prefetch_from_dictionary()` from `bigfix_prefetch` in whichever spelling the line already used, keeping the original download's name so the rest of the ActionScript still refers to the right file. An `add nohash prefetch item` on the old URL is reported but not rewritten - swapping in a hashed prefetch would change what the line does. An auto-fixed file fails the hook so the change is reviewed and re-staged.
+  - `E401`: the line has no sha256. `bigfix_prefetch` treats sha256 as optional unless asked; this hook treats it as mandatory, which is the 2026 expectation. It is a code of its own rather than part of `E400` so a repo that still wants sha256 optional can pass `args: ["--disable", "E401"]`.
   - `W402`: a prefetch block item has no sha1 - technically valid, but unusual.
   - `W403`: an `add nohash prefetch item` line, which is hashless by definition, so it is reported rather than validated.
-  - `W404`: `--auto-fix-network` was asked to add a sha256 and could not - the URL would not download, or what came back did not match the size and sha1 already on the line. The line is left as it is and its `E401` stands.
-  - **`--auto-fix-network`, off by default**: adds the missing sha256 of an `E401`, which means downloading the file to hash it. The download is handed to `add_sha256_prefetch()` from `bigfix_prefetch` (hence the new `>= 1.1.5` floor on that dependency), which streams the file, checks it against the size and sha1 already on the line, and re-emits the prefetch with sha256 added - in the same spelling, keeping the line's own download name. Each URL is fetched at most once per run, each download gives up after 60 seconds, and a download that fails or does not match is `W404`. It is a separate flag from `--auto-fix` and never on by default, because it reaches out to whatever URLs the content names.
   - `W400`: the file is not parseable BES XML and was skipped (`bes-schema-validate` owns validity).
   - A file whose prefetches knowingly do not meet these rules opts out of every check in the hook with `prefetch-ok` anywhere in it - the same marker that opts out of `W206` in `bes-conventions-check`, since it is the same judgement. `<!-- pre-commit-skip: bes-actionscript-validate-prefetch -->` also skips the file.
-  - Scope of the checks is internal validity only: they are offline and never download a URL or verify the hashes against the real file (only `--auto-fix-network` does, and only when asked). Dynamic prefetches (a line holding a `{...}` substitution), `//` comments, and the raw content of a `createfile until` block are skipped. `E402` and (with `--auto-fix-network`) `E401` are the only auto-fixes: `E400` depends on the size and hashes of the real file, and a hook has no way to know which file was meant.
+  - Scope is internal validity only: the hook is offline and never downloads a URL or verifies the hashes against the real file. Dynamic prefetches (a line holding a `{...}` substitution), `//` comments, and the raw content of a `createfile until` block are skipped. There are no auto-fixes.
   - This is a third altitude on the same lines, alongside the existing shape/scheme warnings (`W206`/`W207` in `bes-conventions-check`) and the lexical check (`E300` in `bes-actionscript-lint-schclass`).
 
 ## v0.5.1
