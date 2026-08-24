@@ -504,9 +504,7 @@ def _valid_timestamp(value):
         parsed = datetime.strptime(match.group("rest"), "%d %b %Y %H:%M:%S %z")
     except ValueError:
         return False
-    if dow is not None and WEEKDAY_ABBREVS[parsed.weekday()] != dow:
-        return False
-    return True
+    return not (dow is not None and WEEKDAY_ABBREVS[parsed.weekday()] != dow)
 
 
 def _valid_cpe23(value):
@@ -611,7 +609,9 @@ def check_source_release_date_format(src):
 
 
 def check_modification_time_format(src):
-    """E202: every x-fixlet-modification-time value must be a valid RFC 5322 date-time."""
+    """E202: every x-fixlet-modification-time value must be a valid RFC 5322 date-
+    time.
+    """
     issues = []
     for match in MODTIME_VALUE_RE.finditer(src):
         value = _strip_cdata(match.group(1))
@@ -631,7 +631,9 @@ def check_modification_time_format(src):
 
 
 def check_first_propagation_format(src):
-    """E216: every x-fixlet-first-propagation value must be a valid RFC 5322 date-time."""
+    """E216: every x-fixlet-first-propagation value must be a valid RFC 5322 date-
+    time.
+    """
     issues = []
     for match in FIRST_PROP_VALUE_RE.finditer(src):
         value = _strip_cdata(match.group(1))
