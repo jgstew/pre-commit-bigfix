@@ -173,6 +173,75 @@ def test_e202_bad_modtime(tmp_path, bad):
     assert "E202" in codes(tmp_path, task(modtime=bad))
 
 
+@pytest.mark.parametrize(
+    "good",
+    [
+        "Tue, 14 Jul 2026 18:32:35 +0000",  # with day-of-week
+        "14 Jul 2026 18:32:35 +0000",  # day-of-week is optional
+        "Thu, 06 Aug 2026 12:43:34 +0000",  # 6 Aug 2026 really is a Thursday
+    ],
+)
+def test_e202_accepts_optional_and_correct_dow(tmp_path, good):
+    assert "E202" not in codes(tmp_path, task(modtime=good))
+
+
+def test_e202_wrong_dow_for_date_flagged(tmp_path):
+    # 6 Aug 2026 is a Thursday, not a Friday
+    assert "E202" in codes(tmp_path, task(modtime="Fri, 06 Aug 2026 12:43:34 +0000"))
+
+
+def test_e202_marker_opts_out(tmp_path):
+    assert "E202" not in codes(
+        tmp_path,
+        task(modtime="not a timestamp at all", marker="modification-time-ok"),
+    )
+
+
+# --- E216 x-fixlet-first-propagation format -------------------------------
+
+
+def _with_first_propagation(value, marker=None):
+    return task(
+        modtime=None,
+        marker=marker,
+        extra_mimefields=[("x-fixlet-first-propagation", value)],
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2026-07-14 18:32:35",
+        "Fri, 19 Jan 2018 15:45:57 0800",
+        "Xyz, 14 Jul 2026 18:32:35 +0000",
+        "Tue, 14 Zzz 2026 18:32:35 +0000",
+        # 6 Aug 2026 is a Thursday, not a Friday
+        "Fri, 06 Aug 2026 12:43:34 +0000",
+    ],
+)
+def test_e216_bad_first_propagation(tmp_path, bad):
+    assert "E216" in codes(tmp_path, _with_first_propagation(bad))
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "Tue, 14 Jul 2026 18:32:35 +0000",
+        "14 Jul 2026 18:32:35 +0000",  # day-of-week is optional
+        "Thu, 06 Aug 2026 12:43:34 +0000",
+    ],
+)
+def test_e216_accepts_optional_and_correct_dow(tmp_path, good):
+    assert "E216" not in codes(tmp_path, _with_first_propagation(good))
+
+
+def test_e216_marker_opts_out(tmp_path):
+    content = _with_first_propagation(
+        "not a timestamp at all", marker="first-propagation-ok"
+    )
+    assert "E216" not in codes(tmp_path, content)
+
+
 # --- E203 / W203 DownloadSize --------------------------------------------
 
 
