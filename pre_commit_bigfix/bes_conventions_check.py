@@ -17,8 +17,10 @@ modification time).
 Checks:
     E200  an <ActionScript> MIMEType is missing or not one of the allowed set
     E201  a <SourceReleaseDate> is present but not in YYYY-MM-DD format
-    E202  an x-fixlet-modification-time value is not in the expected format
-          (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`)
+    E202  an x-fixlet-modification-time value is not a valid RFC 5322 date-time
+          (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`, or `14 Jul 2026 18:32:35
+          +0000` without the optional day-of-week) -- see "Timestamp fields"
+          below for exactly what that requires
     E203  a <DownloadSize> is not empty and not 0-or-a-positive-integer (fixable
           -> 0)
     E204  a content object's <Description> still contains the boilerplate
@@ -45,6 +47,9 @@ Checks:
           indented `]]></ActionScript>` -- that whitespace is inside the CDATA
           and becomes a bogus whitespace-only last line of the action (fixable
           -> stripped to `]]></ActionScript>`)
+    E216  an x-fixlet-first-propagation value is not a valid RFC 5322 date-time
+          -- the same rule E202 applies to x-fixlet-modification-time, applied
+          to this separate field (see "Timestamp fields" below)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -65,6 +70,24 @@ Checks:
     W210  a line has trailing whitespace (fixable -> stripped)
     W211  an <ActionScript> uses a dynamic `download` statement (a line whose
           first non-whitespace token is `download`); prefer a static prefetch
+
+Timestamp fields (E202, E216): x-fixlet-modification-time and
+x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
+`Tue, 14 Jul 2026 18:32:35 +0000`:
+  - the leading day-of-week + comma is OPTIONAL (RFC 5322 itself makes it so),
+    but if present it must be the REAL day of week for the date given --
+    `Fri, 06 Aug 2026 12:43:34 +0000` is rejected because 6 Aug 2026 is a
+    Thursday, not a Friday
+  - the day of month is exactly 2 digits (zero-padded: `06`, not `6`)
+  - the month is exactly 3 letters with RFC 5322's exact capitalization
+    (`Aug`, not `aug` or `AUG`)
+  - the year is exactly 4 digits
+  - the time is `HH:MM:SS`, each exactly 2 digits
+  - a `+HHMM`/`-HHMM` UTC offset is required and must be a real one (a bare
+    zone name like `GMT`/`UTC`/`Z` is not accepted, and neither is an
+    out-of-range offset like `+9999` or one at/beyond 24 hours)
+SourceReleaseDate (E201) is unrelated to the two above: it is a plain
+YYYY-MM-DD date (e.g. `2026-07-14`), no time or timezone component at all.
 
 The allowed <ActionScript> MIMETypes are:
     application/x-Fixlet-Windows-Shell     (the DEFAULT BigFix ActionScript type
@@ -115,6 +138,7 @@ file, e.g. in an XML comment):
     mimetype-ok             (E200)
     source-release-date-ok  (E201 and W202)
     modification-time-ok     (E202 and W201)
+    first-propagation-ok    (E216)
     download-size-ok        (E203 and W203)
     description-ok          (E204)
     cpe-ok                  (E205)
@@ -160,6 +184,7 @@ SKIP_MARKER = "pre-commit-skip: bes-conventions-check"
 MIMETYPE_MARKER = "mimetype-ok"  # E200
 SOURCE_RELEASE_DATE_MARKER = "source-release-date-ok"  # E201, W202
 MODIFICATION_TIME_MARKER = "modification-time-ok"  # E202, W201
+FIRST_PROPAGATION_MARKER = "first-propagation-ok"  # E216
 DOWNLOAD_SIZE_MARKER = "download-size-ok"  # E203, W203
 DESCRIPTION_MARKER = "description-ok"  # E204
 CPE_MARKER = "cpe-ok"  # E205
@@ -203,14 +228,23 @@ CONTENT_TAGS = frozenset(
 DATED_CONTENT_TAGS = frozenset(["Task", "Fixlet"])
 
 MODIFICATION_TIME_NAME = "x-fixlet-modification-time"
+FIRST_PROPAGATION_NAME = "x-fixlet-first-propagation"
 DESCRIPTION_PLACEHOLDER = "enter a description of the"
 
-# example modification-time value: "Tue, 14 Jul 2026 18:32:35 +0000"
-MODIFICATION_TIME_RE = re.compile(
-    r"^(?P<dow>[A-Za-z]{3}), \d{2} (?P<mon>[A-Za-z]{3}) \d{4} "
-    r"\d{2}:\d{2}:\d{2} [+-]\d{4}$"
+# An RFC 5322 date-time, e.g. "Tue, 14 Jul 2026 18:32:35 +0000" -- shared by
+# x-fixlet-modification-time (E202) and x-fixlet-first-propagation (E216). The
+# day-of-week + comma is an optional group (RFC 5322 makes it so); `rest` is
+# everything after it, captured separately so _valid_timestamp() can re-parse
+# just that part with strptime without re-deriving the split index.
+TIMESTAMP_RE = re.compile(
+    r"^(?:(?P<dow>[A-Za-z]{3}), )?"
+    r"(?P<rest>\d{2} (?P<mon>[A-Za-z]{3}) \d{4} \d{2}:\d{2}:\d{2} [+-]\d{4})$"
 )
-WEEKDAYS = frozenset(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+# index 0 = Monday, matching datetime.weekday() -- used to cross-check a
+# SUPPLIED day-of-week against the one the date actually falls on, not just
+# that it is spelled like a real weekday.
+WEEKDAY_ABBREVS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAYS = frozenset(WEEKDAY_ABBREVS)
 MONTHS = frozenset(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 )
@@ -298,6 +332,12 @@ MODTIME_VALUE_RE = re.compile(
     + r"\s*</Name>\s*<Value>(.*?)</Value>",
     re.DOTALL,
 )
+FIRST_PROP_VALUE_RE = re.compile(
+    r"<Name>\s*"
+    + re.escape(FIRST_PROPAGATION_NAME)
+    + r"\s*</Name>\s*<Value>(.*?)</Value>",
+    re.DOTALL,
+)
 NAMED_MIMEFIELD_RE = re.compile(
     r"<Name>\s*([^<]*?)\s*</Name>\s*<Value>(.*?)</Value>", re.DOTALL
 )
@@ -353,6 +393,7 @@ KNOWN_CODES = frozenset(
         "E213",  # Relevance is empty / whitespace only
         "E214",  # XML declaration missing or not encoding="UTF-8"
         "E215",  # whitespace around an ActionScript CDATA terminator
+        "E216",  # x-fixlet-first-propagation value not a valid RFC 5322 date-time
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -437,16 +478,33 @@ def _valid_source_release_date(value):
     return True
 
 
-def _valid_modification_time(value):
-    """True if `value` looks like `Tue, 14 Jul 2026 18:32:35 +0000`."""
-    match = MODIFICATION_TIME_RE.match(value)
+def _valid_timestamp(value):
+    """True if `value` is a valid RFC 5322 date-time (E202 / E216).
+
+    `Tue, 14 Jul 2026 18:32:35 +0000` and `14 Jul 2026 18:32:35 +0000` (no
+    day-of-week) are both valid; `Fri, 14 Jul 2026 18:32:35 +0000` is not,
+    because 14 Jul 2026 is actually a Tuesday. See the module docstring's
+    "Timestamp fields" section for the full rule.
+    """
+    match = TIMESTAMP_RE.match(value)
     if not match:
         return False
-    if match.group("dow") not in WEEKDAYS or match.group("mon") not in MONTHS:
+    if match.group("mon") not in MONTHS:
+        return False
+    dow = match.group("dow")
+    if dow is not None and dow not in WEEKDAYS:
         return False
     try:
-        datetime.strptime(value, "%a, %d %b %Y %H:%M:%S %z")
+        # Parsed from `rest` (the day-of-week, if any, already matched and
+        # verified above) so a correctly-spelled but wrong-for-the-date
+        # weekday can't slip past strptime, which does not check that.
+        # %z also rejects a bare zone name (no "GMT"/"UTC"/"Z") and an
+        # out-of-range offset (magnitude >= 24 hours), which is exactly the
+        # "must represent a valid offset" requirement.
+        parsed = datetime.strptime(match.group("rest"), "%d %b %Y %H:%M:%S %z")
     except ValueError:
+        return False
+    if dow is not None and WEEKDAY_ABBREVS[parsed.weekday()] != dow:
         return False
     return True
 
@@ -553,19 +611,39 @@ def check_source_release_date_format(src):
 
 
 def check_modification_time_format(src):
-    """E202: every x-fixlet-modification-time value must match the expected format."""
+    """E202: every x-fixlet-modification-time value must be a valid RFC 5322 date-time."""
     issues = []
     for match in MODTIME_VALUE_RE.finditer(src):
         value = _strip_cdata(match.group(1))
-        if not _valid_modification_time(value):
+        if not _valid_timestamp(value):
             issues.append(
                 (
                     _lineno(src, match.start()),
                     "E202",
                     (
-                        f'x-fixlet-modification-time "{value}" is not in the expected '
-                        "format (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`); add "
+                        f'x-fixlet-modification-time "{value}" is not a valid RFC 5322 '
+                        "date-time (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`); add "
                         f"`{MODIFICATION_TIME_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def check_first_propagation_format(src):
+    """E216: every x-fixlet-first-propagation value must be a valid RFC 5322 date-time."""
+    issues = []
+    for match in FIRST_PROP_VALUE_RE.finditer(src):
+        value = _strip_cdata(match.group(1))
+        if not _valid_timestamp(value):
+            issues.append(
+                (
+                    _lineno(src, match.start()),
+                    "E216",
+                    (
+                        f'x-fixlet-first-propagation "{value}" is not a valid RFC 5322 '
+                        "date-time (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`); add "
+                        f"`{FIRST_PROPAGATION_MARKER}` if intentional"
                     ),
                 )
             )
@@ -1079,6 +1157,7 @@ VALUE_CHECKS = (
     (("E200",), MIMETYPE_MARKER, check_action_mimetypes),
     (("E201",), SOURCE_RELEASE_DATE_MARKER, check_source_release_date_format),
     (("E202",), MODIFICATION_TIME_MARKER, check_modification_time_format),
+    (("E216",), FIRST_PROPAGATION_MARKER, check_first_propagation_format),
     (("E203",), DOWNLOAD_SIZE_MARKER, check_download_size_value),
     (("E205",), CPE_MARKER, check_cpe23),
     (("E206",), ACTION_UI_METADATA_MARKER, check_action_ui_metadata),

@@ -1,5 +1,18 @@
 # Release Notes
 
+## v0.6.2
+
+Adds `x-fixlet-first-propagation` to the timestamp fields `bes-conventions-check` validates, and tightens the existing `x-fixlet-modification-time` check to actually verify a supplied day-of-week against the date.
+
+### Added
+
+- **`E216` in `bes-conventions-check`**: every `x-fixlet-first-propagation` MIMEField value must be a valid RFC 5322 date-time (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`) - the same rule `E202` already applied to `x-fixlet-modification-time`, now applied to this separate field. A file that knowingly carries a nonconforming value opts out with the `first-propagation-ok` marker, the same pattern as every other value check in the hook.
+
+### Changed
+
+- **`E202` in `bes-conventions-check`**: the leading day-of-week is now optional, matching RFC 5322 itself (`14 Jul 2026 18:32:35 +0000` is accepted, with no day-of-week at all) - but when one is supplied, it must be the *actual* day of week for the date given. `Fri, 06 Aug 2026 12:43:34 +0000` is now rejected, because 6 Aug 2026 is a Thursday, not a Friday; previously the day-of-week was mandatory and only checked for being spelled like a real weekday, not for matching the date. The weekday cross-check is timezone-naive relative to the value's own offset (it compares against the date as written, not a UTC-converted one) and does not depend on the host's locale.
+- `SourceReleaseDate` (`E201`) is unaffected by either change above; it remains a plain `YYYY-MM-DD` date with no time or timezone component.
+
 ## v0.6.1
 
 Teaches `bes-actionscript-validate-prefetch` to fix prefetches, not just report them: the retired `unzip-5.52.exe` download is replaced offline, and `--auto-fix-network` fills in a missing sha256 by downloading the file.
