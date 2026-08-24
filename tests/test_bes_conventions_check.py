@@ -530,6 +530,27 @@ def test_e215_autofix_strips(tmp_path):
     assert "E215" not in codes(tmp_path, out, name="after.bes")
 
 
+def test_e215_indented_plain_close_flagged(tmp_path):
+    assert "E215" in codes(tmp_path, task(body="\necho hi\n\t\t\t", cdata=False))
+
+
+def test_e215_flush_plain_close_ok(tmp_path):
+    assert "E215" not in codes(tmp_path, task(body="\necho hi\n", cdata=False))
+
+
+def test_e215_marker_opts_out_plain_close(tmp_path):
+    content = task(body="\necho hi\n\t\t\t", cdata=False, marker="cdata-close-ok")
+    assert "E215" not in codes(tmp_path, content)
+
+
+def test_e215_autofix_strips_plain_close(tmp_path):
+    out, fixed = autofix(tmp_path, task(body="\necho hi\n\t\t\t", cdata=False))
+    assert any(code == "E215" for _, code, _ in fixed)
+    assert "\t</ActionScript>" not in out
+    assert "echo hi\n</ActionScript>" in out
+    assert "E215" not in codes(tmp_path, out, name="after.bes")
+
+
 def test_e215_autofix_after_blank_line_collapse(tmp_path):
     out, fixed = autofix(tmp_path, task(body="\necho hi\n\n\n\t\t\t"))
     got = {code for _, code, _ in fixed}

@@ -43,10 +43,12 @@ Checks:
     E213  a <Relevance> is empty or whitespace only
     E214  the file has no XML declaration, or its declaration does not specify
           encoding="UTF-8" (fixable -> declaration inserted / encoding set)
-    E215  an <ActionScript> has whitespace around its CDATA terminator, e.g. an
-          indented `]]></ActionScript>` -- that whitespace is inside the CDATA
-          and becomes a bogus whitespace-only last line of the action (fixable
-          -> stripped to `]]></ActionScript>`)
+    E215  an <ActionScript> has whitespace before its close tag, e.g. an
+          indented `]]></ActionScript>` (CDATA body) or a bare indented
+          `</ActionScript>` (non-CDATA body) -- that whitespace is inside the
+          ActionScript and becomes a bogus whitespace-only last line of the
+          action (fixable -> stripped to a flush `]]></ActionScript>` or
+          `</ActionScript>`)
     E216  an x-fixlet-first-propagation value is not a valid RFC 5322 date-time
           -- the same rule E202 applies to x-fixlet-modification-time, applied
           to this separate field (see "Timestamp fields" below)
@@ -144,7 +146,7 @@ file, e.g. in an XML comment):
     cpe-ok                  (E205)
     action-ui-metadata-ok   (E206)
     cdata-ok                (W204 and E207)
-    cdata-close-ok          (E215)
+    cdata-close-ok          (E215 -- CDATA terminator or bare ActionScript close)
     action-blank-lines-ok   (W205)
     prefetch-ok             (W206)
     prefetch-https-ok       (W207)
@@ -190,7 +192,7 @@ DESCRIPTION_MARKER = "description-ok"  # E204
 CPE_MARKER = "cpe-ok"  # E205
 ACTION_UI_METADATA_MARKER = "action-ui-metadata-ok"  # E206
 CDATA_MARKER = "cdata-ok"  # W204
-CDATA_CLOSE_MARKER = "cdata-close-ok"  # E215
+CDATA_CLOSE_MARKER = "cdata-close-ok"  # E215 (CDATA terminator or bare close)
 ACTION_BLANK_LINES_MARKER = "action-blank-lines-ok"  # W205
 PREFETCH_MARKER = "prefetch-ok"  # W206
 PREFETCH_HTTPS_MARKER = "prefetch-https-ok"  # W207
@@ -355,12 +357,15 @@ CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 BLANK_BEFORE_CLOSE_RE = re.compile(
     r"(\n)(?:[ \t]*\n){2,}([ \t]*(?:\]\]>)?[ \t]*</ActionScript>)"
 )
-# an ActionScript CDATA terminator with the whitespace that may surround it.
-# Whitespace before `]]>` is INSIDE the CDATA (so it is action content), and
-# whitespace after it is element text that BigFix appends to the same body --
-# either way it is a spurious whitespace-only last line of the action (E215).
-CDATA_CLOSE_RE = re.compile(r"[ \t]*\]\]>[ \t]*</ActionScript>")
+# an ActionScript close tag -- either the CDATA terminator `]]>` or, for a
+# non-CDATA body, the bare close itself -- with the whitespace that may
+# surround it. Whitespace before `]]>` (or before a bare close) is INSIDE the
+# ActionScript (so it is action content), and whitespace after `]]>` is
+# element text that BigFix appends to the same body -- either way it is a
+# spurious whitespace-only last line of the action (E215).
+CDATA_CLOSE_RE = re.compile(r"[ \t]*(?:\]\]>)?[ \t]*</ActionScript>")
 CDATA_CLOSE_CANONICAL = "]]></ActionScript>"
+CDATA_CLOSE_CANONICAL_PLAIN = "</ActionScript>"
 
 # where a new SourceReleaseDate / modification-time MIMEField may be inserted so
 # the result still satisfies the BES.xsd element ordering
@@ -781,17 +786,26 @@ def check_actionscript_blank_lines(src):
 
 
 def check_cdata_close(src):
-    """E215: no whitespace may surround an ActionScript CDATA terminator."""
+    """E215: no whitespace may surround an ActionScript close tag.
+
+    Applies to both the CDATA terminator (`]]></ActionScript>`) and, for a
+    non-CDATA body, the bare close (`</ActionScript>`).
+    """
     issues = []
     for match in CDATA_CLOSE_RE.finditer(src):
-        if match.group(0) == CDATA_CLOSE_CANONICAL:
+        canonical = (
+            CDATA_CLOSE_CANONICAL
+            if "]]>" in match.group(0)
+            else CDATA_CLOSE_CANONICAL_PLAIN
+        )
+        if match.group(0) == canonical:
             continue
         issues.append(
             (
                 _lineno(src, match.start()),
                 "E215",
                 (
-                    "whitespace around the ActionScript CDATA terminator (it becomes "
+                    "whitespace before the ActionScript close tag (it becomes "
                     f"a whitespace-only last action line); add `{CDATA_CLOSE_MARKER}` "
                     "if intentional"
                 ),
@@ -1351,20 +1365,29 @@ def fix_blank_lines(src):
 
 
 def fix_cdata_close(src):
-    """E215: strip the whitespace around an ActionScript CDATA terminator."""
+    """E215: strip the whitespace before an ActionScript close tag.
+
+    Applies to both the CDATA terminator (`]]></ActionScript>`) and, for a
+    non-CDATA body, the bare close (`</ActionScript>`).
+    """
     fixed = []
 
     def repl(match):
-        if match.group(0) == CDATA_CLOSE_CANONICAL:
+        canonical = (
+            CDATA_CLOSE_CANONICAL
+            if "]]>" in match.group(0)
+            else CDATA_CLOSE_CANONICAL_PLAIN
+        )
+        if match.group(0) == canonical:
             return match.group(0)
         fixed.append(
             (
                 _lineno(src, match.start()),
                 "E215",
-                "stripped whitespace around the ActionScript CDATA terminator",
+                "stripped whitespace before the ActionScript close tag",
             )
         )
-        return CDATA_CLOSE_CANONICAL
+        return canonical
 
     return CDATA_CLOSE_RE.sub(repl, src), fixed
 
