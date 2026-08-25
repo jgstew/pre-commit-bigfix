@@ -1,5 +1,39 @@
 # Release Notes
 
+## v0.7.0
+
+Adds a new hook, `bes-actionscript-validate-script`: checks `if`/`endif` and
+`begin prefetch block`/`end prefetch block` pairing in every `<ActionScript>`
+body of a BES file - the sibling hook `bes-actionscript-lint-schclass`'s SCOPE
+note already named for checks that need pairing, ordering, and
+block-interleaving knowledge the lexical grammar does not carry.
+
+### Added
+
+- **`bes-actionscript-validate-script`**, a new hook. Only
+  `application/x-Fixlet-Windows-Shell` (matched case-insensitively) or
+  missing-MIMEType bodies are checked; bodies are extracted with lxml, so
+  entities are decoded, CDATA sections merged, and line numbers map back to
+  the file. This hook has no auto-fixes: a hook has no way to know where a
+  missing `endif` or `end prefetch block` was meant to go, and guessing could
+  silently change what the action does.
+  - **`E500`**: an `if` is never closed by a matching `endif`.
+  - **`E501`**: an `endif` with no open `if`.
+  - **`E502`**: a `begin prefetch block` is never closed by `end prefetch block`.
+  - **`E503`**: an `end prefetch block` with no open `begin prefetch block`.
+  - **`E504`**: a `begin prefetch block` nested inside another one - prefetch blocks do not nest.
+  - **`E505`**: an `else` or `elseif` outside any open `if`.
+  - **`E506`**: an `elseif` after `else`, or a second `else` for the same `if`.
+  - **`E507`**: an `if` opened inside a prefetch block is still open at that block's `end prefetch block` - blocks interleave rather than nest.
+  - **`W500`**: the file is not parseable BES XML; skipped (`bes-schema-validate` owns validity).
+  - Lines inside a `createfile until` block are file content, not
+    ActionScript, and are not scanned - that block's own well-formedness is
+    `bes-actionscript-lint-schclass`'s `E302`, not reported here.
+  - Opt-outs: `<!-- pre-commit-skip: bes-actionscript-validate-script -->` for
+    the whole file, or `actionscript-if-ok` (`E500`, `E501`, `E505`, `E506`),
+    `actionscript-prefetch-block-ok` (`E502`, `E503`, `E504`), and
+    `actionscript-block-nesting-ok` (`E507`) per check family.
+
 ## v0.6.2
 
 Adds `x-fixlet-first-propagation` to the timestamp fields `bes-conventions-check` validates, and tightens the existing `x-fixlet-modification-time` check to actually verify a supplied day-of-week against the date.

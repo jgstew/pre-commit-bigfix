@@ -179,6 +179,17 @@ repos:
         exclude: ^tests/examples/example-test-bad.bes
   - repo: local
     hooks:
+      - id: bes-actionscript-validate-script-local
+        name: bes-actionscript-validate-script-local
+        entry: python pre_commit_bigfix/bes_actionscript_validate_script.py
+        language: python
+        # isolated venv: declare the third-party import used by the validator
+        additional_dependencies: [lxml]
+        pass_filenames: True
+        files: \.bes$
+        exclude: ^tests/examples/example-test-bad.bes
+  - repo: local
+    hooks:
       - id: try-repo
         name: try-repo
         entry: pre-commit try-repo . --files tests/examples/example-test.bes

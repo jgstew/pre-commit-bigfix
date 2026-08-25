@@ -17,6 +17,7 @@ repos:
       - id: bes-conventions-check
       - id: bes-actionscript-lint-schclass
       - id: bes-actionscript-validate-prefetch
+      - id: bes-actionscript-validate-script
 ```
 
 The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
@@ -209,6 +210,50 @@ files are skipped (`bes-schema-validate` owns validity).
 
 See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
+for the full list of check codes, opt-out markers, and options.
+
+### bes-actionscript-validate-script
+
+Checks every `<ActionScript>` body of a BES file for balanced `if`/`endif` and
+`begin prefetch block`/`end prefetch block` pairing - the sibling hook named
+in `bes-actionscript-lint-schclass`'s SCOPE note for checks that need pairing,
+ordering, and block-interleaving knowledge the lexical grammar does not
+carry, and meant to grow more per-script checks over time. An unbalanced
+block is a real defect, not a style nit: the BigFix agent fails the action at
+runtime on a dangling `if`, and a missing `endif` silently changes which
+statements are conditional.
+
+An unclosed `if` is `E500`; a stray `endif` with no open `if` is `E501`. An
+unclosed `begin prefetch block` is `E502`; a stray `end prefetch block` is
+`E503`; a `begin prefetch block` nested inside another one is `E504`, since
+prefetch blocks do not nest. An `else` or `elseif` outside any open `if` is
+`E505`; an `elseif` after `else`, or a second `else` for the same `if`, is
+`E506`. An `if` opened inside a prefetch block that is still open at that
+block's `end prefetch block` is `E507`, since blocks interleave rather than
+nest.
+
+This hook has no auto-fixes: a hook has no way to know where a missing
+`endif` or `end prefetch block` was meant to go, and guessing could silently
+change what the action does.
+
+Only `application/x-Fixlet-Windows-Shell` (matched case-insensitively - it is
+valid BigFix content either way) or missing-MIMEType bodies are checked;
+bodies are extracted with lxml, so entities are decoded, CDATA sections
+merged, and line numbers map back to the file. Lines inside a
+`createfile until` block are file content, not ActionScript, and are not
+scanned; that block's own well-formedness is `bes-actionscript-lint-schclass`'s
+`E302`, not reported here. Unparsable files are `W500` (`bes-schema-validate`
+owns validity).
+
+A file opts out of every check here with
+`<!-- pre-commit-skip: bes-actionscript-validate-script -->` anywhere in it,
+or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
+`E506`), `actionscript-prefetch-block-ok` (`E502`, `E503`, `E504`), or
+`actionscript-block-nesting-ok` (`E507`). E-codes fail the hook; pass
+`--strict` to also fail on warnings.
+
+See the docstring in
+[bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
 
 ## Development

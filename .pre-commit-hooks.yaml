@@ -143,3 +143,39 @@
   entry: bes-actionscript-validate-prefetch
   types: [text]
   files: \.bes$
+- id: bes-actionscript-validate-script
+  name: Validate ActionScript block balance in BES files
+  description: >
+    Checks every <ActionScript> body of a BES file for balanced `if`/`endif`
+    and `begin prefetch block`/`end prefetch block` pairing -- the sibling
+    hook named in bes-actionscript-lint-schclass's SCOPE note for checks that
+    need pairing, ordering, and block-interleaving knowledge the lexical
+    grammar does not carry, and meant to grow more per-script checks over
+    time. An unclosed `if` is E500 and a stray `endif` with no open `if` is
+    E501; an unclosed `begin prefetch block` is E502 and a stray
+    `end prefetch block` is E503; a `begin prefetch block` nested inside
+    another one is E504, since prefetch blocks do not nest; an `else` or
+    `elseif` outside any open `if` is E505; an `elseif` after `else`, or a
+    second `else` for the same `if`, is E506; and an `if` opened inside a
+    prefetch block that is still open at that block's `end prefetch block` is
+    E507, since blocks interleave rather than nest. E-codes fail the hook;
+    this hook has no auto-fixes, since a hook has no way to know where a
+    missing `endif` or `end prefetch block` was meant to go, and guessing
+    could silently change what the action does. Only
+    application/x-Fixlet-Windows-Shell (matched case-insensitively) or
+    missing-MIMEType bodies are checked; bodies are extracted with lxml, so
+    entities are decoded, CDATA sections merged, and line numbers map back to
+    the file. Lines inside a `createfile until` block are file content, not
+    ActionScript, and are not scanned; that block's own well-formedness is
+    bes-actionscript-lint-schclass's E302, not reported here. Unparsable files
+    are W500 (bes-schema-validate owns validity). A file opts out of every
+    check here with `pre-commit-skip: bes-actionscript-validate-script`
+    anywhere in it, or out of one family with `actionscript-if-ok` (E500,
+    E501, E505, E506), `actionscript-prefetch-block-ok` (E502, E503, E504), or
+    `actionscript-block-nesting-ok` (E507). E-codes fail the hook; pass
+    --strict to also fail on warnings.
+  language: python
+  pass_filenames: True
+  entry: bes-actionscript-validate-script
+  types: [text]
+  files: \.bes$
