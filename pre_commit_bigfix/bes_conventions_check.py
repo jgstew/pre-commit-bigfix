@@ -971,8 +971,18 @@ def _actionscript_is_empty(body):
 
 
 def check_empty_actionscript(src):
-    """W208: an ActionScript body must contain more than blank/// lines."""
+    """W208: an ActionScript body must contain more than blank/// lines.
+
+    Skipped when the item's Title contains "warning" or "test"
+    (case-insensitive): warning-only and test content commonly has no
+    actionable ActionScript body.
+    """
     issues = []
+    title_match = TITLE_TAG_RE.search(src)
+    if title_match:
+        title_lower = _strip_cdata(title_match.group(1)).lower()
+        if "warning" in title_lower or "test" in title_lower:
+            return issues
     for match in ACTIONSCRIPT_FULL_RE.finditer(src):
         if _actionscript_is_empty(match.group(2)):
             issues.append(

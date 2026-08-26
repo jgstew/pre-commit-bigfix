@@ -975,6 +975,34 @@ def test_w208_marker_opts_out(tmp_path):
     )
 
 
+def test_w208_warning_title_opts_out(tmp_path):
+    assert "W208" not in codes(
+        tmp_path, task(title="Security Warning: Foo", body="\n// just a note\n")
+    )
+
+
+def test_w208_warning_title_case_insensitive(tmp_path):
+    assert "W208" not in codes(tmp_path, task(title="WARNING - Foo", body="\n   \n"))
+
+
+def test_w208_non_warning_title_still_flagged(tmp_path):
+    assert "W208" in codes(
+        tmp_path, task(title="Install Widget", body="\n// just a note\n")
+    )
+
+
+def test_w208_test_title_opts_out(tmp_path):
+    assert "W208" not in codes(
+        tmp_path, task(title="Test - Foo", body="\n// just a note\n")
+    )
+
+
+def test_w208_test_title_case_insensitive(tmp_path):
+    assert "W208" not in codes(
+        tmp_path, task(title="TESTING connectivity", body="\n   \n")
+    )
+
+
 # --- W211 dynamic download ------------------------------------------------
 
 
