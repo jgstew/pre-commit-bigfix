@@ -52,6 +52,13 @@ Checks:
     E216  an x-fixlet-first-propagation value is not a valid RFC 5322 date-time
           -- the same rule E202 applies to x-fixlet-modification-time, applied
           to this separate field (see "Timestamp fields" below)
+    E217  a <SuccessCriteria Option="CustomRelevance"> body is empty or the
+          literal `false` (can never succeed), or a non-CustomRelevance
+          <SuccessCriteria> has a non-empty body (silently ignored by BigFix)
+    E218  two <Action ID="..."> / <DefaultAction ID="..."> in one content
+          object share the same ID
+    E219  an x-relevance-evaluation-period value is not a valid HH:MM:SS
+          duration (matched case-insensitively; MM and SS must each be 00-59)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -74,6 +81,18 @@ Checks:
     W210  a line has trailing whitespace (fixable -> stripped)
     W211  an <ActionScript> uses a dynamic `download` statement (a line whose
           first non-whitespace token is `download`); prefer a static prefetch
+    W212  a <Relevance> is the literal `false` (case-insensitive) -- it never
+          applies to any endpoint
+    W213  a <Relevance> has leading/trailing whitespace (fixable -> trimmed;
+          a CDATA-wrapped Relevance is left untouched, as with Title/W209)
+    W214  a <Title> contains a TODO or FIXME marker
+    W215  a Task/Fixlet <Description> is empty or missing (distinct from
+          E204's boilerplate-placeholder check)
+    W216  a non-empty <SourceSeverity> is not one of Low/Moderate/Important/
+          Critical/Unspecified (exact case)
+    W217  (only with --check-filename) a file's basename does not match its
+          first content object's <Title>, sanitized for filename-illegal
+          characters (/, backslash, :, *, ?, ", <, >, | -> _)
 
 Timestamp fields (E202, E216): x-fixlet-modification-time and
 x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
@@ -111,7 +130,8 @@ unparsable file is skipped, not failed, here.
 DownloadSize -> 0 (E203); a missing SourceReleaseDate -> today (W202); a missing
 x-fixlet-modification-time -> the moment the linter ran (W201); collapsed blank
 lines before </ActionScript> (W205); a Title trimmed with tabs replaced by
-spaces (W209); trailing whitespace stripped from every line (W210); whitespace
+spaces (W209); a Relevance trimmed of leading/trailing whitespace (W213);
+trailing whitespace stripped from every line (W210); whitespace
 around an ActionScript CDATA terminator stripped (E215); a missing or
 non-UTF-8 XML declaration inserted / normalized (E214); and a
 Description/Relevance/ActionScript that entity-escapes < > & is unescaped and
@@ -127,7 +147,12 @@ auto-fixed file fails the hook so the change is reviewed and re-staged.
 
 Usage:
     bes_conventions_check.py [--strict] [--errors-only] [--auto-fix=yes|no]
-        [--disable E200,W201] [file.bes ...]
+        [--disable E200,W201] [--check-filename] [file.bes ...]
+
+--check-filename is OFF by default: it enables W217 (a file's basename must
+match its first content object's Title, sanitized for filename-illegal
+characters). It is opt-in because many repos deliberately version or
+otherwise diverge a Title from its filename.
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
@@ -153,13 +178,21 @@ file, e.g. in an XML comment):
     prefetch-ok             (W206)
     prefetch-https-ok       (W207)
     actionscript-empty-ok   (W208)
-    title-ok                (E211 and W209)
-    relevance-ok            (E212 and E213)
+    title-ok                (E211, W209, and W214)
+    relevance-ok            (E212, E213, W212, and W213)
     xml-declaration-ok      (E214)
     trailing-whitespace-ok  (W210)
     download-ok             (W211)
     cve-names-ok            (E209)
     mimefield-name-ok       (E210)
+    success-criteria-ok    (E217)
+    action-id-ok            (E218)
+    evaluation-period-ok   (E219)
+    severity-ok             (W216)
+    filename-ok             (W217, only relevant with --check-filename)
+
+description-ok also covers W215 (an empty/missing Task/Fixlet Description) --
+it is the same marker as E204 since both describe a Description problem.
 
 Files that look like mustache templates (containing `{{ ... }}`, e.g. the
 `*.bes.mustache` sources that ContentFromTemplate renders) are skipped silently:
@@ -206,6 +239,11 @@ TRAILING_WS_MARKER = "trailing-whitespace-ok"  # W210
 DOWNLOAD_MARKER = "download-ok"  # W211
 CVE_NAMES_MARKER = "cve-names-ok"  # E209
 MIMEFIELD_DUP_MARKER = "mimefield-name-ok"  # E210
+SUCCESS_CRITERIA_MARKER = "success-criteria-ok"  # E217
+ACTION_ID_MARKER = "action-id-ok"  # E218
+EVALUATION_PERIOD_MARKER = "evaluation-period-ok"  # E219
+SEVERITY_MARKER = "severity-ok"  # W216
+FILENAME_MARKER = "filename-ok"  # W217 (only with --check-filename)
 
 BES_EXTENSIONS = (".bes",)
 
@@ -305,6 +343,33 @@ CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$")
 DEFAULT_TITLES = frozenset(
     ["custom fixlet", "custom task", "custom baseline", "custom analysis"]
 )
+# a TODO/FIXME marker left in a Title, e.g. "... TODO:testing" or "... FIXME"
+TODO_RE = re.compile(r"\bTODO\b|\bFIXME\b", re.IGNORECASE)
+
+# a <SuccessCriteria Option="..."> ... </SuccessCriteria> action element; the
+# body is a RelevanceString, meaningful only when Option="CustomRelevance"
+SUCCESS_CRITERIA_RE = re.compile(
+    r"<SuccessCriteria\b([^>]*)>(.*?)</SuccessCriteria>", re.DOTALL
+)
+SUCCESS_CRITERIA_OPTION_RE = re.compile(r'Option\s*=\s*"([^"]*)"')
+
+# an <Action ID="..."> or <DefaultAction ID="..."> open tag
+ACTION_ID_RE = re.compile(r'<(?:Default)?Action\s+ID\s*=\s*"([^"]*)"')
+
+# an x-relevance-evaluation-period value: an HH:MM:SS duration (the hour
+# component is a plain duration, not a clock hour, so it is not capped at 23)
+EVALUATION_PERIOD_RE = re.compile(r"^\d{2,}:[0-5]\d:[0-5]\d$")
+
+# <SourceSeverity> body
+SOURCE_SEVERITY_RE = re.compile(r"<SourceSeverity>(.*?)</SourceSeverity>", re.DOTALL)
+# the canonical, exact-case severity vocabulary; empty is always allowed
+CANONICAL_SEVERITIES = frozenset(
+    ["Low", "Moderate", "Important", "Critical", "Unspecified"]
+)
+
+# characters not allowed in a filename on common filesystems -- used to derive
+# the expected filename stem from a content object's Title (W217)
+FILENAME_ILLEGAL_RE = re.compile(r'[\\/:*?"<>|]')
 
 # an XML declaration at the very start of the document, and its encoding value
 XML_DECL_RE = re.compile("^\\ufeff?\\s*<\\?xml\\b([^>]*)\\?>")
@@ -405,6 +470,9 @@ KNOWN_CODES = frozenset(
         "E214",  # XML declaration missing or not encoding="UTF-8"
         "E215",  # whitespace around an ActionScript CDATA terminator
         "E216",  # x-fixlet-first-propagation value not a valid RFC 5322 date-time
+        "E217",  # SuccessCriteria body/Option consistency
+        "E218",  # duplicate Action ID within one content object
+        "E219",  # x-relevance-evaluation-period value not a valid HH:MM:SS duration
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -417,6 +485,12 @@ KNOWN_CODES = frozenset(
         "W209",  # Title has leading/trailing whitespace or embedded tabs
         "W210",  # a line has trailing whitespace
         "W211",  # ActionScript uses a dynamic `download` statement
+        "W212",  # Relevance is the literal `false`
+        "W213",  # Relevance has leading/trailing whitespace
+        "W214",  # Title contains a TODO/FIXME marker
+        "W215",  # Task/Fixlet Description is empty or missing
+        "W216",  # SourceSeverity not in the canonical vocabulary
+        "W217",  # (--check-filename only) filename does not match Title
     ]
 )
 
@@ -986,8 +1060,128 @@ def check_duplicate_mimefield_names(src):
     return issues
 
 
+def check_success_criteria(src):
+    """E217: a <SuccessCriteria> body/Option combination must be consistent.
+
+    A CustomRelevance body must be real relevance (not empty, not the literal
+    `false`, which can never succeed); a non-CustomRelevance SuccessCriteria
+    (OriginalRelevance, RunToCompletion, or no Option at all) must have an
+    empty body, since BigFix silently ignores anything else there.
+    """
+    issues = []
+    for match in SUCCESS_CRITERIA_RE.finditer(src):
+        attrs, body = match.group(1), match.group(2)
+        lineno = _lineno(src, match.start())
+        option_match = SUCCESS_CRITERIA_OPTION_RE.search(attrs)
+        option = option_match.group(1) if option_match else None
+        value = _strip_cdata(body).strip()
+        if option == "CustomRelevance":
+            if value == "":
+                issues.append(
+                    (
+                        lineno,
+                        "E217",
+                        (
+                            'SuccessCriteria Option="CustomRelevance" has an empty '
+                            f"relevance body; add `{SUCCESS_CRITERIA_MARKER}` if "
+                            "intentional"
+                        ),
+                    )
+                )
+            elif value.lower() == "false":
+                issues.append(
+                    (
+                        lineno,
+                        "E217",
+                        (
+                            'SuccessCriteria Option="CustomRelevance" body is the '
+                            "literal `false`; it can never succeed; add "
+                            f"`{SUCCESS_CRITERIA_MARKER}` if intentional"
+                        ),
+                    )
+                )
+        elif value != "":
+            issues.append(
+                (
+                    lineno,
+                    "E217",
+                    (
+                        f'SuccessCriteria has a relevance body but Option is "{option}"'
+                        ', not "CustomRelevance"; the body is silently ignored; add '
+                        f"`{SUCCESS_CRITERIA_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def check_duplicate_action_ids(src):
+    """E218: two Action/DefaultAction elements in one object must not share an ID."""
+    issues = []
+    seen = {}
+    for match in ACTION_ID_RE.finditer(src):
+        action_id = match.group(1)
+        if action_id in seen:
+            issues.append(
+                (
+                    _lineno(src, match.start()),
+                    "E218",
+                    (
+                        f'duplicate Action ID "{action_id}" in one content object; '
+                        f"add `{ACTION_ID_MARKER}` if intentional"
+                    ),
+                )
+            )
+        else:
+            seen[action_id] = match.start()
+    return issues
+
+
+def check_evaluation_period(src):
+    """E219: an x-relevance-evaluation-period value must be a valid HH:MM:SS."""
+    issues = []
+    for match in NAMED_MIMEFIELD_RE.finditer(src):
+        if match.group(1).strip().lower() != "x-relevance-evaluation-period":
+            continue
+        value = _strip_cdata(match.group(2))
+        if not EVALUATION_PERIOD_RE.match(value):
+            issues.append(
+                (
+                    _lineno(src, match.start()),
+                    "E219",
+                    (
+                        f'x-relevance-evaluation-period "{value}" is not a valid '
+                        f"HH:MM:SS duration; add `{EVALUATION_PERIOD_MARKER}` if "
+                        "intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def check_source_severity(src):
+    """W216: a non-empty <SourceSeverity> must be in the canonical vocabulary."""
+    issues = []
+    for match in SOURCE_SEVERITY_RE.finditer(src):
+        value = _strip_cdata(match.group(1)).strip()
+        if value == "" or value in CANONICAL_SEVERITIES:
+            continue
+        issues.append(
+            (
+                _lineno(src, match.start()),
+                "W216",
+                (
+                    f'SourceSeverity "{value}" is not one of '
+                    f"{sorted(CANONICAL_SEVERITIES)}; add `{SEVERITY_MARKER}` if "
+                    "intentional"
+                ),
+            )
+        )
+    return issues
+
+
 def check_title(src):
-    """E211/W209: a <Title> must not be a placeholder or have stray whitespace."""
+    """E211/W209/W214: a <Title> placeholder, stray whitespace, or TODO marker."""
     issues = []
     for match in TITLE_TAG_RE.finditer(src):
         inner = match.group(1)
@@ -1015,14 +1209,26 @@ def check_title(src):
                     ),
                 )
             )
+        if TODO_RE.search(value):
+            issues.append(
+                (
+                    lineno,
+                    "W214",
+                    (
+                        f'Title "{value.strip()}" contains a TODO/FIXME marker; add '
+                        f"`{TITLE_MARKER}` if intentional"
+                    ),
+                )
+            )
     return issues
 
 
 def check_relevance(src):
-    """E212/E213: a <Relevance> must not be empty or the literal `true`."""
+    """E212/E213/W212/W213: Relevance empty/`true`/`false`, or stray whitespace."""
     issues = []
     for match in RELEVANCE_TAG_RE.finditer(src):
-        value = _strip_cdata(match.group(1)).strip()
+        inner = match.group(1)
+        value = _strip_cdata(inner).strip()
         lineno = _lineno(src, match.start())
         if value == "":
             issues.append(
@@ -1043,6 +1249,28 @@ def check_relevance(src):
                     (
                         "Relevance is the literal `true`; it targets every endpoint; "
                         f"add `{RELEVANCE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        elif value.lower() == "false":
+            issues.append(
+                (
+                    lineno,
+                    "W212",
+                    (
+                        "Relevance is the literal `false`; it never applies to any "
+                        f"endpoint; add `{RELEVANCE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        if "<![CDATA[" not in inner and inner != inner.strip():
+            issues.append(
+                (
+                    lineno,
+                    "W213",
+                    (
+                        "Relevance has leading/trailing whitespace; add "
+                        f"`{RELEVANCE_MARKER}` if intentional"
                     ),
                 )
             )
@@ -1129,6 +1357,22 @@ def _check_element(tag, element, disabled):
     if tag not in DATED_CONTENT_TAGS:
         return issues
 
+    if "W215" not in disabled:
+        description = element.find("Description")
+        text = (
+            "".join(description.itertext()).strip() if description is not None else ""
+        )
+        if text == "":
+            issues.append(
+                (
+                    1,
+                    "W215",
+                    (
+                        f"{tag}{where} has an empty or missing Description; add "
+                        f"`{DESCRIPTION_MARKER}` if intentional"
+                    ),
+                )
+            )
     if "W201" not in disabled and not _has_modification_time(element):
         issues.append(
             (
@@ -1186,9 +1430,13 @@ VALUE_CHECKS = (
     (("E207",), CDATA_MARKER, check_cdata_required),
     (("E209",), CVE_NAMES_MARKER, check_cve_names),
     (("E210",), MIMEFIELD_DUP_MARKER, check_duplicate_mimefield_names),
-    (("E211", "W209"), TITLE_MARKER, check_title),
-    (("E212", "E213"), RELEVANCE_MARKER, check_relevance),
+    (("E211", "W209", "W214"), TITLE_MARKER, check_title),
+    (("E212", "E213", "W212", "W213"), RELEVANCE_MARKER, check_relevance),
     (("E215",), CDATA_CLOSE_MARKER, check_cdata_close),
+    (("E217",), SUCCESS_CRITERIA_MARKER, check_success_criteria),
+    (("E218",), ACTION_ID_MARKER, check_duplicate_action_ids),
+    (("E219",), EVALUATION_PERIOD_MARKER, check_evaluation_period),
+    (("W216",), SEVERITY_MARKER, check_source_severity),
     (("W204",), CDATA_MARKER, check_actionscript_cdata),
     (("W205",), ACTION_BLANK_LINES_MARKER, check_actionscript_blank_lines),
     (("W206",), PREFETCH_MARKER, check_prefetch_lines),
@@ -1203,6 +1451,7 @@ PRESENCE_MARKERS = (
     ("W202", SOURCE_RELEASE_DATE_MARKER),
     ("W203", DOWNLOAD_SIZE_MARKER),
     ("E204", DESCRIPTION_MARKER),
+    ("W215", DESCRIPTION_MARKER),
 )
 
 
@@ -1250,6 +1499,9 @@ def _fix_block(block, marker_text, disabled, strict, now):
         fixed += got
     if "W209" not in disabled and TITLE_MARKER not in marker_text:
         block, got = fix_title(block)
+        fixed += got
+    if "W213" not in disabled and RELEVANCE_MARKER not in marker_text:
+        block, got = fix_relevance_whitespace(block)
         fixed += got
     if "W205" not in disabled and ACTION_BLANK_LINES_MARKER not in marker_text:
         block, got = fix_blank_lines(block)
@@ -1351,6 +1603,33 @@ def fix_title(src):
         return f"<Title>{new_inner}</Title>"
 
     return TITLE_TAG_RE.sub(repl, src), fixed
+
+
+def fix_relevance_whitespace(src):
+    """W213: trim leading/trailing whitespace from a <Relevance> body.
+
+    A CDATA-wrapped Relevance is left untouched (its content is opaque here),
+    mirroring fix_title's treatment of a CDATA-wrapped Title.
+    """
+    fixed = []
+
+    def repl(match):
+        inner = match.group(1)
+        if "<![CDATA[" in inner:
+            return match.group(0)
+        new_inner = inner.strip()
+        if new_inner == inner:
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "W213",
+                "trimmed Relevance whitespace",
+            )
+        )
+        return f"<Relevance>{new_inner}</Relevance>"
+
+    return RELEVANCE_TAG_RE.sub(repl, src), fixed
 
 
 def fix_blank_lines(src):
@@ -1590,7 +1869,45 @@ def fix_trailing_whitespace(src):
 # --------------------------------------------------------------------------
 
 
-def check_file(path, disabled=frozenset(), strict=False, auto_fix=False, now=None):
+def check_filename_matches_title(path, src):
+    """W217: the file's basename must match its first content object's Title.
+
+    The Title is sanitized for filename-illegal characters the same way an
+    author would when saving the file (/ \\ : * ? " < > | -> _) before it is
+    compared against the basename (extension stripped). Only checked when
+    --check-filename is passed.
+    """
+    match = TITLE_TAG_RE.search(src)
+    if match is None:
+        return []
+    title = _strip_cdata(match.group(1)).strip()
+    if title == "":
+        return []
+    expected = FILENAME_ILLEGAL_RE.sub("_", title)
+    basename = os.path.basename(path)
+    stem, _ext = os.path.splitext(basename)
+    if stem == expected:
+        return []
+    return [
+        (
+            1,
+            "W217",
+            (
+                f'filename "{basename}" does not match Title "{title}" (expected '
+                f'stem "{expected}"); add `{FILENAME_MARKER}` if intentional'
+            ),
+        )
+    ]
+
+
+def check_file(
+    path,
+    disabled=frozenset(),
+    strict=False,
+    auto_fix=False,
+    now=None,
+    check_filename=False,
+):
     """Check one BES file; return (issues, fixed).
 
     Each of `issues` and `fixed` is a list of (lineno, code, message). A file is
@@ -1603,7 +1920,8 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False, now=Non
     is also set, and CRLF normalization (E208) is applied last so the written
     file is entirely CRLF. Read-only, a file that is not all-CRLF is an E208
     error. The file is read as raw bytes and normalized to LF in memory so the
-    checks are line-ending agnostic.
+    checks are line-ending agnostic. `check_filename` enables W217 (off by
+    default, matching --check-filename).
     """
     if not os.path.isfile(path):
         return [(1, "W200", "file not found; skipping")], []
@@ -1665,6 +1983,8 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False, now=Non
         issues += check_xml_declaration(src)
     if "W210" not in disabled and TRAILING_WS_MARKER not in src:
         issues += check_trailing_whitespace(src)
+    if check_filename and "W217" not in disabled and FILENAME_MARKER not in src:
+        issues += check_filename_matches_title(path, src)
     if not auto_fix and check_e208 and not crlf_ok:
         lone_lf = raw.count(b"\n") - raw.count(b"\r\n")
         lone_cr = raw.count(b"\r") - raw.count(b"\r\n")
@@ -1686,7 +2006,9 @@ def is_bes_file(path):
     return path.endswith(BES_EXTENSIONS)
 
 
-def check_files(paths, disabled=frozenset(), strict=False, auto_fix=False):
+def check_files(
+    paths, disabled=frozenset(), strict=False, auto_fix=False, check_filename=False
+):
     """Check several BES files; return a list of (path, issues, fixed) tuples.
 
     Non-BES paths are skipped. Disabled codes are filtered from the results.
@@ -1697,7 +2019,11 @@ def check_files(paths, disabled=frozenset(), strict=False, auto_fix=False):
         if not is_bes_file(path):
             continue
         issues, fixed = check_file(
-            path, disabled=disabled, strict=strict, auto_fix=auto_fix
+            path,
+            disabled=disabled,
+            strict=strict,
+            auto_fix=auto_fix,
+            check_filename=check_filename,
         )
         issues = [item for item in issues if item[1] not in disabled]
         fixed = [item for item in fixed if item[1] not in disabled]
@@ -1761,6 +2087,15 @@ def main(argv=None):
         help="comma-separated check IDs to skip entirely, e.g. --disable W204",
     )
     parser.add_argument(
+        "--check-filename",
+        action="store_true",
+        help=(
+            "enable W217: a file's basename must match its first content "
+            "object's Title, sanitized for filename-illegal characters "
+            "(off by default)"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help=(
@@ -1792,7 +2127,11 @@ def main(argv=None):
     warning_count = 0
     fix_count = 0
     for path, issues, fixed in check_files(
-        paths, disabled=disabled, strict=args.strict, auto_fix=auto_fix
+        paths,
+        disabled=disabled,
+        strict=args.strict,
+        auto_fix=auto_fix,
+        check_filename=args.check_filename,
     ):
         for lineno, check_id, message in fixed:
             fix_count += 1

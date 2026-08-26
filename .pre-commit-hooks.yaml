@@ -27,15 +27,20 @@
     Picky, opinionated content checks + auto-fixes for BigFix BES files that the
     BES.xsd schema (bes-schema-validate) cannot express: ActionScript MIMEType
     is one of the allowed set; SourceReleaseDate/x-fixlet-modification-time/DownloadSize/
-    action-ui-metadata/CPE-2.3/CVENames value formats; prefetch-line shape and
-    https URLs; CDATA usage; blank-line and trailing-whitespace spacing; empty
-    ActionScript; dynamic download statements; a UTF-8 XML declaration; Title
-    placeholders/whitespace; non-trivial non-empty Relevance; unique MIMEField
-    names; description-placeholder; and Task/Fixlet release-date/modification-time
-    presence and download actions. Auto-fixes the fixable ones in place
-    (DownloadSize -> 0, missing dates -> now, blank-line collapse, Title trim,
-    trailing-whitespace strip, XML-declaration insert/normalize; and, under
-    --strict, CDATA wrapping) and exits 1 when anything was fixed. Unparsable
+    action-ui-metadata/CPE-2.3/CVENames/x-relevance-evaluation-period value formats;
+    prefetch-line shape and https URLs; CDATA usage; blank-line and
+    trailing-whitespace spacing; empty ActionScript; dynamic download statements;
+    a UTF-8 XML declaration; Title placeholders/whitespace/TODO markers;
+    non-trivial non-empty Relevance with no stray whitespace; unique MIMEField
+    names; unique Action IDs; SuccessCriteria body/Option consistency;
+    a canonical SourceSeverity vocabulary; description-placeholder and
+    empty-Description; and Task/Fixlet release-date/modification-time presence
+    and download actions. Auto-fixes the fixable ones in place (DownloadSize ->
+    0, missing dates -> now, blank-line collapse, Title trim, Relevance
+    whitespace trim, trailing-whitespace strip, XML-declaration
+    insert/normalize; and, under --strict, CDATA wrapping) and exits 1 when
+    anything was fixed. --check-filename (off by default) additionally checks
+    that a file's basename matches its first content object's Title. Unparsable
     files are skipped (bes-schema-validate owns validity). E-codes fail the
     hook; pass --strict to also fail on warnings.
   language: python

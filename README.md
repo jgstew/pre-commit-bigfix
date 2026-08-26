@@ -42,18 +42,22 @@ behavior difference and no rush to migrate. New configs should use
 Picky, opinionated content checks + auto-fixes for BigFix BES files that the
 BES.xsd schema (`bes-schema-validate`) cannot express: ActionScript MIMEType,
 value formats for SourceReleaseDate / x-fixlet-modification-time / DownloadSize /
-action-ui-metadata / CPE-2.3 / CVENames, prefetch-line shape and https URLs,
-CDATA usage, blank-line and trailing-whitespace spacing, empty ActionScript,
-dynamic download statements, a UTF-8 XML declaration, Title placeholders and
-whitespace, non-trivial non-empty Relevance, unique MIMEField names,
-description placeholders, and Task/Fixlet release-date / modification-time
-presence.
+action-ui-metadata / CPE-2.3 / CVENames / x-relevance-evaluation-period,
+prefetch-line shape and https URLs, CDATA usage, blank-line and
+trailing-whitespace spacing, empty ActionScript, dynamic download statements,
+a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
+non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
+names, unique Action IDs, SuccessCriteria body/Option consistency, a canonical
+SourceSeverity vocabulary, description placeholders / empty descriptions, and
+Task/Fixlet release-date / modification-time presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`
 to also fail on warnings, or `--errors-only` to leave W-codes out of the report
 entirely (the checks and their auto-fixes still run, unlike `--disable`).
-Unparsable files are skipped (`bes-schema-validate` owns validity).
+`--check-filename` (off by default) additionally checks that a file's
+basename matches its first content object's Title. Unparsable files are
+skipped (`bes-schema-validate` owns validity).
 
 Renamed from `check-bes-conventions`, which is kept as a deprecated alias so
 existing configs keep working; both ids run the same entry point. Note that

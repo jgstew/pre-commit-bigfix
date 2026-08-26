@@ -1193,3 +1193,303 @@ def test_w210_marker_opts_out(tmp_path):
         "<Source>test</Source>", "<Source>test</Source>   "
     )
     assert "W210" not in codes(tmp_path, content)
+
+
+# --- W212 / W213 Relevance: literal `false`, stray whitespace -------------
+
+
+def test_w212_literal_false_flagged(tmp_path):
+    got = codes(tmp_path, task(relevance="false"))
+    assert "W212" in got and "E212" not in got and "E213" not in got
+
+
+def test_w212_case_insensitive(tmp_path):
+    assert "W212" in codes(tmp_path, task(relevance="FALSE"))
+
+
+def test_w212_marker_opts_out(tmp_path):
+    assert "W212" not in codes(tmp_path, task(relevance="false", marker="relevance-ok"))
+
+
+def test_w213_leading_trailing_whitespace_flagged(tmp_path):
+    content = task().replace(
+        '<Relevance>exists folder "/tmp"</Relevance>',
+        '<Relevance> exists folder "/tmp" </Relevance>',
+    )
+    assert "W213" in codes(tmp_path, content)
+
+
+def test_w213_clean_relevance_not_flagged(tmp_path):
+    assert "W213" not in codes(tmp_path, task())
+
+
+def test_w213_cdata_wrapped_not_flagged(tmp_path):
+    content = task().replace(
+        '<Relevance>exists folder "/tmp"</Relevance>',
+        '<Relevance><![CDATA[ exists folder "/tmp" ]]></Relevance>',
+    )
+    assert "W213" not in codes(tmp_path, content)
+
+
+def test_w213_autofix_trims(tmp_path):
+    content = task().replace(
+        '<Relevance>exists folder "/tmp"</Relevance>',
+        '<Relevance> exists folder "/tmp" </Relevance>',
+    )
+    out, fixed = autofix(tmp_path, content)
+    assert '<Relevance>exists folder "/tmp"</Relevance>' in out
+    assert any(code == "W213" for _, code, _ in fixed)
+    assert "W213" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w213_marker_opts_out(tmp_path):
+    content = task(marker="relevance-ok").replace(
+        '<Relevance>exists folder "/tmp"</Relevance>',
+        '<Relevance> exists folder "/tmp" </Relevance>',
+    )
+    assert "W213" not in codes(tmp_path, content)
+
+
+# --- W214 Title TODO/FIXME marker ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Install Widget - Windows  TODO:testing", "Install Widget - Windows FIXME"],
+)
+def test_w214_todo_marker_flagged(tmp_path, title):
+    assert "W214" in codes(tmp_path, task(title=title))
+
+
+def test_w214_case_insensitive(tmp_path):
+    assert "W214" in codes(tmp_path, task(title="Install Widget todo: verify"))
+
+
+def test_w214_real_title_clean(tmp_path):
+    assert "W214" not in codes(tmp_path, task(title="Install Widget 1.2"))
+
+
+def test_w214_marker_opts_out(tmp_path):
+    assert "W214" not in codes(
+        tmp_path, task(title="Install Widget TODO", marker="title-ok")
+    )
+
+
+# --- W215 Task/Fixlet empty or missing Description ------------------------
+
+
+def test_w215_empty_description_flagged(tmp_path):
+    content = task().replace(
+        "<Description><![CDATA[A real description of what this does.]]></Description>",
+        "<Description></Description>",
+    )
+    assert "W215" in codes(tmp_path, content)
+
+
+def test_w215_whitespace_only_description_flagged(tmp_path):
+    content = task().replace(
+        "<Description><![CDATA[A real description of what this does.]]></Description>",
+        "<Description><![CDATA[   ]]></Description>",
+    )
+    assert "W215" in codes(tmp_path, content)
+
+
+def test_w215_real_description_clean(tmp_path):
+    assert "W215" not in codes(tmp_path, task())
+
+
+def test_w215_marker_opts_out(tmp_path):
+    content = task(marker="description-ok").replace(
+        "<Description><![CDATA[A real description of what this does.]]></Description>",
+        "<Description></Description>",
+    )
+    assert "W215" not in codes(tmp_path, content)
+
+
+def test_w215_analysis_exempt(tmp_path):
+    # Analysis is not a DATED_CONTENT_TAGS member; W215 does not apply.
+    assert "W215" not in codes(tmp_path, analysis(""))
+
+
+# --- E217 SuccessCriteria body/Option consistency --------------------------
+
+
+def _with_success_criteria(option, body=""):
+    return task().replace(
+        '<SuccessCriteria Option="OriginalRelevance"></SuccessCriteria>',
+        f'<SuccessCriteria Option="{option}">{body}</SuccessCriteria>',
+    )
+
+
+def test_e217_empty_custom_relevance_flagged(tmp_path):
+    content = _with_success_criteria("CustomRelevance", "")
+    assert "E217" in codes(tmp_path, content)
+
+
+def test_e217_literal_false_custom_relevance_flagged(tmp_path):
+    content = _with_success_criteria("CustomRelevance", "false")
+    assert "E217" in codes(tmp_path, content)
+
+
+def test_e217_nonempty_original_relevance_flagged(tmp_path):
+    content = _with_success_criteria("OriginalRelevance", 'computer name = "x"')
+    assert "E217" in codes(tmp_path, content)
+
+
+def test_e217_real_custom_relevance_clean(tmp_path):
+    content = _with_success_criteria("CustomRelevance", 'computer name = "x"')
+    assert "E217" not in codes(tmp_path, content)
+
+
+def test_e217_empty_original_relevance_clean(tmp_path):
+    assert "E217" not in codes(tmp_path, task())
+
+
+def test_e217_marker_opts_out(tmp_path):
+    content = _with_success_criteria("CustomRelevance", "").replace(
+        "<Task>", "<Task>\n\t\t<!-- success-criteria-ok -->"
+    )
+    assert "E217" not in codes(tmp_path, content)
+
+
+# --- E218 duplicate Action ID ----------------------------------------------
+
+
+def test_e218_duplicate_default_action_id_flagged(tmp_path):
+    content = task().replace(
+        "</DefaultAction>\n\t</Task>",
+        (
+            "</DefaultAction>\n"
+            '\t\t<Action ID="Action1">\n'
+            '\t\t\t<ActionScript MIMEType="application/x-Fixlet-Windows-Shell">'
+            "<![CDATA[\necho hi\n]]></ActionScript>\n"
+            "\t\t</Action>\n\t</Task>"
+        ),
+    )
+    assert "E218" in codes(tmp_path, content)
+
+
+def test_e218_distinct_ids_clean(tmp_path):
+    content = task().replace(
+        "</DefaultAction>\n\t</Task>",
+        (
+            "</DefaultAction>\n"
+            '\t\t<Action ID="Action2">\n'
+            '\t\t\t<ActionScript MIMEType="application/x-Fixlet-Windows-Shell">'
+            "<![CDATA[\necho hi\n]]></ActionScript>\n"
+            "\t\t</Action>\n\t</Task>"
+        ),
+    )
+    assert "E218" not in codes(tmp_path, content)
+
+
+def test_e218_marker_opts_out(tmp_path):
+    content = task(marker="action-id-ok").replace(
+        "</DefaultAction>\n\t</Task>",
+        (
+            "</DefaultAction>\n"
+            '\t\t<Action ID="Action1">\n'
+            '\t\t\t<ActionScript MIMEType="application/x-Fixlet-Windows-Shell">'
+            "<![CDATA[\necho hi\n]]></ActionScript>\n"
+            "\t\t</Action>\n\t</Task>"
+        ),
+    )
+    assert "E218" not in codes(tmp_path, content)
+
+
+# --- E219 x-relevance-evaluation-period format ------------------------------
+
+
+@pytest.mark.parametrize("bad", ["6:00:00", "06:60:00", "06:00:60", "not-a-duration"])
+def test_e219_bad_evaluation_period(tmp_path, bad):
+    content = task(extra_mimefields=[("x-relevance-evaluation-period", bad)])
+    assert "E219" in codes(tmp_path, content)
+
+
+@pytest.mark.parametrize("good", ["06:00:00", "01:00:00", "00:00:01"])
+def test_e219_good_evaluation_period(tmp_path, good):
+    content = task(extra_mimefields=[("x-relevance-evaluation-period", good)])
+    assert "E219" not in codes(tmp_path, content)
+
+
+def test_e219_case_insensitive_field_name(tmp_path):
+    content = task(extra_mimefields=[("X-Relevance-Evaluation-Period", "6:00:00")])
+    assert "E219" in codes(tmp_path, content)
+
+
+def test_e219_marker_opts_out(tmp_path):
+    content = task(
+        marker="evaluation-period-ok",
+        extra_mimefields=[("x-relevance-evaluation-period", "6:00:00")],
+    )
+    assert "E219" not in codes(tmp_path, content)
+
+
+# --- W216 SourceSeverity vocabulary -----------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["high", "Recommended", "CRITICAL"])
+def test_w216_bad_severity_flagged(tmp_path, bad):
+    content = task().replace(
+        "<Source>test</Source>",
+        f"<Source>test</Source>\n\t\t<SourceSeverity>{bad}</SourceSeverity>",
+    )
+    assert "W216" in codes(tmp_path, content)
+
+
+@pytest.mark.parametrize(
+    "good", ["", "Low", "Moderate", "Important", "Critical", "Unspecified"]
+)
+def test_w216_good_severity_clean(tmp_path, good):
+    content = task().replace(
+        "<Source>test</Source>",
+        f"<Source>test</Source>\n\t\t<SourceSeverity>{good}</SourceSeverity>",
+    )
+    assert "W216" not in codes(tmp_path, content)
+
+
+def test_w216_marker_opts_out(tmp_path):
+    content = task(marker="severity-ok").replace(
+        "<Source>test</Source>",
+        "<Source>test</Source>\n\t\t<SourceSeverity>high</SourceSeverity>",
+    )
+    assert "W216" not in codes(tmp_path, content)
+
+
+# --- W217 filename vs Title (--check-filename only) -------------------------
+
+
+def _codes_with_filename(tmp_path, content, name="x.bes"):
+    path = write(tmp_path, name, content)
+    issues, _ = checker.check_file(path, check_filename=True)
+    return sorted({item[1] for item in issues})
+
+
+def test_w217_off_by_default(tmp_path):
+    assert "W217" not in codes(tmp_path, task(title="Something Else"), name="x.bes")
+
+
+def test_w217_mismatch_flagged_when_enabled(tmp_path):
+    got = _codes_with_filename(tmp_path, task(title="Something Else"), name="x.bes")
+    assert "W217" in got
+
+
+def test_w217_matching_title_clean(tmp_path):
+    got = _codes_with_filename(tmp_path, task(title="x"), name="x.bes")
+    assert "W217" not in got
+
+
+def test_w217_illegal_chars_sanitized(tmp_path):
+    # the "/" in the Title is not legal in a filename, so the expected stem
+    # replaces it with "_"; a filename that already does that is clean.
+    content = task(title="Add Docker key - Debian/Ubuntu")
+    got = _codes_with_filename(
+        tmp_path, content, name="Add Docker key - Debian_Ubuntu.bes"
+    )
+    assert "W217" not in got
+
+
+def test_w217_marker_opts_out(tmp_path):
+    content = task(title="Something Else", marker="filename-ok")
+    got = _codes_with_filename(tmp_path, content, name="x.bes")
+    assert "W217" not in got

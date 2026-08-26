@@ -1,5 +1,51 @@
 # Release Notes
 
+## Unreleased
+
+### Added
+
+New `bes-conventions-check` checks, found by surveying the non-ActionScript
+content of the same 1,043 `.bes` files in `bigfix-content/fixlet` used for the
+v0.9.0 `bes-actionscript-validate-script` survey, this time for defect
+patterns outside ActionScript bodies:
+
+- **`E217`**: a `<SuccessCriteria Option="CustomRelevance">` body that is
+  empty or the literal `false` (can never succeed), or a non-CustomRelevance
+  `<SuccessCriteria>` with a non-empty body (silently ignored by BigFix). Found
+  one real hit in `bigfix-content`: a CustomRelevance success criterion whose
+  body is literally `false`.
+- **`E218`**: two `<Action ID="...">` / `<DefaultAction ID="...">` elements in
+  one content object sharing the same ID - the BES.xsd types `ID` as
+  `xs:normalizedString`, not `xs:ID`, so a duplicate passes schema validation.
+- **`E219`**: an `x-relevance-evaluation-period` value that is not a valid
+  `HH:MM:SS` duration (matched case-insensitively, since the corpus has both
+  `x-relevance-evaluation-period` and `X-Relevance-Evaluation-Period`).
+- **`W212`**: a `<Relevance>` that is the literal `false` (case-insensitive) -
+  it never applies to any endpoint. Advisory rather than an error like `E212`
+  (literal `true`), since the corpus's hits are almost all intentional
+  never-deployable "library" content.
+- **`W213`**: a `<Relevance>` with leading/trailing whitespace (fixable ->
+  trimmed; a CDATA-wrapped Relevance is left untouched, as with `Title`/`W209`).
+- **`W214`**: a `<Title>` containing a `TODO`/`FIXME` marker - several
+  `bigfix-content` fixlets ship a title like `... - Windows  TODO:testing`.
+- **`W215`**: a Task/Fixlet `<Description>` that is empty or missing, distinct
+  from `E204`'s boilerplate-placeholder check.
+- **`W216`**: a non-empty `<SourceSeverity>` that is not one of
+  Low/Moderate/Important/Critical/Unspecified (exact case) - the corpus has
+  `high`, `High`, and `Recommended`, none of which BigFix treats specially.
+- **`W217`** (only under the new `--check-filename` flag, off by default): a
+  file's basename does not match its first content object's `<Title>`,
+  sanitized for filename-illegal characters. Opt-in because several
+  `bigfix-content` files deliberately diverge (versioned titles, generated
+  content).
+
+`W213` and `W215` are fixable/scoped via the existing `relevance-ok` and
+`description-ok` markers respectively; the rest get their own new markers
+(`success-criteria-ok`, `action-id-ok`, `evaluation-period-ok`, `severity-ok`,
+`filename-ok`). See the module docstring in
+[bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py) for the
+full list.
+
 ## v0.9.0
 
 ### Added
