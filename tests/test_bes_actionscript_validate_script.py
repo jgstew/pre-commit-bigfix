@@ -63,10 +63,14 @@ def write(tmp_path, name, content):
 
 
 def issues_for(tmp_path, content, name="x.bes", disabled=frozenset(), **kwargs):
-    """Return the issue list for `content` written to a file."""
+    """Return the issue list for `content` written to a file.
+
+    `auto_fix` defaults to False in `check_file`, so nothing is rewritten
+    here unless a test opts in via `**kwargs`.
+    """
     path = write(tmp_path, name, content)
     issues, fixed = validator.check_file(path, disabled=disabled, **kwargs)
-    assert fixed == []  # this hook has no auto-fixes at all
+    assert fixed == []
     return issues
 
 
@@ -260,6 +264,23 @@ def test_stray_close_brace_is_e509():
     assert codes(issues) == ["E509"]
     assert issues[0][0] == 1
     assert validator.SUBSTITUTION_MARKER in issues[0][2]
+
+
+def test_appendfile_literal_close_brace_is_not_e509():
+    """`appendfile }` appends a literal `}` to the file -- it is one line of
+    raw file content, not a stray relevance-substitution close.
+    """
+    body = (
+        "appendfile \t\t/bin/rm -fr $TMPDIR\n"
+        "appendfile }\n"
+        'appendfile CLIENTDIRS="/var/opt/BESClient"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_appendfile_literal_open_brace_is_not_e508():
+    body = "appendfile {\nappendfile }"
+    assert validator.check_actionscript(body) == []
 
 
 def test_double_open_brace_is_an_escape_not_a_substitution():
@@ -534,6 +555,28 @@ def test_substituted_consumer_name_is_not_judged():
     assert validator.check_actionscript(body) == []
 
 
+def test_glob_wildcard_consumer_name_is_not_judged():
+    """`mysql*rpm` matches a versioned filename by shell glob at runtime,
+    not by a literal producer name -- no `prefetch`/`download` needed.
+    """
+    body = "waithidden rpm -Uvh __Download\\mysql*rpm __Download\\mysql*deb"
+    assert validator.check_actionscript(body) == []
+
+
+def test_glob_wildcard_consumer_does_not_disable_other_e513_checks():
+    """The wildcard skip is per-reference, not a whole-body knowability
+    escape hatch: an unrelated real typo two lines later still fires.
+    """
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "wait __Download\\mysql*rpm\n"
+        "wait __Download\\b.exe"
+    )
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E513"]
+    assert "b.exe" in issues[0][2]
+
+
 # --- E513: copy/move and shell-redirection producers ---------------------------
 
 
@@ -783,7 +826,7 @@ def test_parameter_never_assigned_in_script_is_not_flagged():
 
 
 def test_continue_if_without_substitution_is_e518():
-    body = "continue if true"
+    body = "continue if somejunk"
     issues = validator.check_actionscript(body)
     assert codes(issues) == ["E518"]
     assert validator.IF_MARKER in issues[0][2]
@@ -794,8 +837,28 @@ def test_continue_if_with_substitution_is_fine():
     assert validator.check_actionscript(body) == []
 
 
+def test_continue_if_literal_false_is_fine():
+    # a documented idiom for forcing a branch to fail unconditionally, e.g.
+    # in the `else` of an `if`/`else`/`endif`
+    body = "continue if false"
+    assert validator.check_actionscript(body) == []
+
+
+def test_continue_if_literal_false_any_case_is_fine():
+    body = "continue if FALSE"
+    assert validator.check_actionscript(body) == []
+
+
+def test_continue_if_literal_true_is_still_e518():
+    # unlike `false`, `true` always continues -- the check does nothing, so
+    # it is not the documented idiom and is still flagged
+    body = "continue if true"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E518"]
+
+
 def test_pause_while_without_substitution_is_e518():
-    body = "pause while true"
+    body = "pause while somejunk"
     issues = validator.check_actionscript(body)
     assert codes(issues) == ["E518"]
 
@@ -803,6 +866,22 @@ def test_pause_while_without_substitution_is_e518():
 def test_pause_while_with_substitution_is_fine():
     body = 'pause while {exists process "x"}'
     assert validator.check_actionscript(body) == []
+
+
+def test_pause_while_literal_true_is_e518():
+    # `pause while true` never becomes false -- it hangs forever, so unlike
+    # `continue if false` it is not treated as an intentional idiom
+    body = "pause while true"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E518"]
+
+
+def test_pause_while_literal_false_is_e518():
+    # `pause while false` is already false, so the pause never happens --
+    # also not treated as an intentional idiom
+    body = "pause while false"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E518"]
 
 
 # --- E519: __createfile / __appendfile referenced with no producer --------------
@@ -865,6 +944,123 @@ def test_correct_case_scratch_references_are_fine():
     assert validator.check_actionscript(body) == []
 
 
+# --- W503 auto-fix: rewrite wrong-case scratch references -----------------------
+
+
+def test_fix_scratch_case_rewrites_wrong_case_reference():
+    src = "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __download\\a.exe"
+    new_src, fixed = validator.fix_scratch_case(src, [(2, "__download", "__Download")])
+    assert (
+        new_src == "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __Download\\a.exe"
+    )
+    assert [(lineno, code) for lineno, code, _msg in fixed] == [(2, "W503")]
+
+
+def test_fix_scratch_case_skips_a_target_no_longer_on_its_line():
+    """A stale/incorrect target is left alone rather than guessed at."""
+    src = "wait cmd /c echo a"
+    new_src, fixed = validator.fix_scratch_case(src, [(1, "__download", "__Download")])
+    assert new_src == src
+    assert fixed == []
+
+
+def test_check_file_auto_fix_rewrites_raw_actionscript_file(tmp_path):
+    path = write(
+        tmp_path,
+        "script.txt",
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __download\\a.exe",
+    )
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert issues == []  # the reference is canonical after the fix
+    assert codes(fixed) == ["W503"]
+
+    with open(path, "rb") as handle:
+        rewritten = handle.read().decode("utf-8")
+    assert "__Download\\a.exe" in rewritten
+    assert "__download\\a.exe" not in rewritten
+
+
+def test_check_file_auto_fix_rewrites_bes_cdata_in_place(tmp_path):
+    content = bes("prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __download\\a.exe")
+    path = write(tmp_path, "x.bes", content)
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert issues == []
+    assert codes(fixed) == ["W503"]
+
+    with open(path, "rb") as handle:
+        rewritten = handle.read().decode("utf-8")
+    assert "__Download\\a.exe" in rewritten
+    assert "__download\\a.exe" not in rewritten
+    # everything outside the ActionScript body is untouched
+    assert "<Title>Example</Title>" in rewritten
+
+
+def test_check_file_auto_fix_preserves_crlf(tmp_path):
+    """`write()` always saves with CRLF endings; the fix must round-trip them."""
+    path = write(
+        tmp_path,
+        "script.txt",
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __download\\a.exe",
+    )
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W503"]
+    with open(path, "rb") as handle:
+        rewritten = handle.read()
+    assert (
+        rewritten
+        == b"prefetch a.exe sha1:x size:1 http://x/a.exe\r\nwait __Download\\a.exe"
+    )
+
+
+def test_check_file_auto_fix_off_by_default(tmp_path):
+    path = write(tmp_path, "script.txt", "delete __download\\a.exe")
+    issues, fixed = validator.check_file(path)
+    assert fixed == []
+    assert "W503" in codes(issues)
+
+
+def test_check_file_auto_fix_respects_disabled(tmp_path):
+    path = write(tmp_path, "script.txt", "delete __download\\a.exe")
+    issues, fixed = validator.check_file(path, auto_fix=True, disabled={"W503"})
+    assert fixed == []
+    assert codes(issues) == []  # disabled, not fixed
+
+
+def test_check_file_auto_fix_respects_scratch_marker(tmp_path):
+    content = "// actionscript-scratch-ok\ndelete __download\\a.exe"
+    path = write(tmp_path, "script.txt", content)
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == []
+    assert codes(issues) == []  # opted out, not fixed
+
+
+def test_main_auto_fixes_by_default_when_files_are_given(tmp_path, capsys):
+    path = write(tmp_path, "script.txt", "delete __download\\a.exe")
+    assert validator.main([path]) == 1  # an auto-fix still fails the hook
+    out = capsys.readouterr().out
+    assert "[W503] auto-fixed" in out
+    assert "auto-fixed 1 issue(s)" in out
+    with open(path, "rb") as handle:
+        assert b"__Download\\a.exe" in handle.read()
+
+
+def test_main_auto_fix_no_leaves_the_file_alone(tmp_path, capsys):
+    path = write(tmp_path, "script.txt", "delete __download\\a.exe")
+    assert validator.main(["--auto-fix", "no", path]) == 0  # W503 is advisory
+    out = capsys.readouterr().out
+    assert "[W503] warning" in out
+    with open(path, "rb") as handle:
+        assert b"__download\\a.exe" in handle.read()
+
+
+def test_main_does_not_auto_fix_when_discovering(tmp_path, monkeypatch):
+    write(tmp_path, "script.bes", bes("delete __download\\a.exe"))
+    monkeypatch.chdir(tmp_path)
+    assert validator.main([]) == 0  # W503 is advisory and nothing was fixed
+    with open(tmp_path / "script.bes", "rb") as handle:
+        assert b"__download\\a.exe" in handle.read()
+
+
 # --- E520: malformed setting line -------------------------------------------------
 
 
@@ -878,6 +1074,20 @@ def test_setting_missing_on_clause_is_e520():
 def test_well_formed_setting_line_is_fine():
     body = 'setting "x"="1" on "{parameter "action issue date" of action}" for client'
     assert validator.check_actionscript(body) == []
+
+
+def test_well_formed_setting_delete_line_is_fine():
+    body = (
+        'setting delete "_WebUIAppEnv_CACHE_TTL" on '
+        '"{parameter "action issue date"}" for client'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_setting_delete_missing_on_clause_is_e520():
+    body = 'setting delete "_WebUIAppEnv_CACHE_TTL"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E520"]
 
 
 # --- E521: regset/regdelete key not bracketed -------------------------------------
@@ -931,6 +1141,31 @@ def test_override_wait_terminated_by_wait_is_fine():
 
 def test_override_run_terminated_by_run_is_fine():
     body = "override run\nhidden=true\nrun cmd /c echo a"
+    assert validator.check_actionscript(body) == []
+
+
+def test_override_substitution_option_line_is_fine():
+    """A `{...}` relevance substitution can itself evaluate to a
+    keyword=value option (e.g. picking `hidden=true` vs `completion=none`.
+
+    by OS); it keeps the block open like a literal option line does.
+    """
+    body = (
+        "override run\n"
+        '{if (windows of operating system) then "hidden=true" '
+        'else "completion=none" }\n'
+        'run echo "test"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_override_substitution_option_line_with_leading_whitespace_is_fine():
+    body = (
+        "override wait\n"
+        '  {if (windows of operating system) then "hidden=true" '
+        'else "completion=none" }\n'
+        "wait cmd /c echo a"
+    )
     assert validator.check_actionscript(body) == []
 
 

@@ -199,7 +199,8 @@
     reapplied, with the same `delete`/`folder delete` cleanup exemption);
     any `__Download`, `__createfile`, or `__appendfile` reference whose case
     does not match exactly warns W503, since Windows tolerates the mismatch
-    but a case-sensitive Linux/macOS filesystem does not. A `setting` line
+    but a case-sensitive Linux/macOS filesystem does not -- this hook's one
+    auto-fix (see below). A `setting` line
     that is not the documented
     `setting "name"="value" on "{...}" for client|user|action` shape is
     E520; a `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a
@@ -212,9 +213,13 @@
     pairing check that hook's state machine cannot express. A command after
     an unconditional exit/restart/shutdown is unreachable and warns W501; an
     `action parameter query` after execution began warns W502. E-codes
-    fail the hook; this hook has no auto-fixes, since a hook has no way to know where a
-    missing `endif` or `end prefetch block` was meant to go, and guessing
-    could silently change what the action does. Only
+    fail the hook. --auto-fix (W503), on by default when files are given (as
+    pre-commit does) and off when auto-discovering, rewrites every
+    wrong-case scratch reference to its canonical spelling in place; an
+    auto-fixed file fails the hook so the change is reviewed and re-staged.
+    No other check here has an auto-fix, since a hook has no way to know
+    where a missing `endif` or `end prefetch block` was meant to go, and
+    guessing could silently change what the action does. Only
     application/x-Fixlet-Windows-Shell (matched case-insensitively) or
     missing-MIMEType bodies are checked; bodies are extracted with lxml, so
     entities are decoded, CDATA sections merged, and line numbers map back to

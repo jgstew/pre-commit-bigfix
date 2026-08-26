@@ -286,7 +286,7 @@ matching `createfile until` / `appendfile` line anywhere is `E519` - the
 `delete`/`folder delete` cleanup exemption. Any `__Download`, `__createfile`,
 or `__appendfile` reference whose case does not match exactly warns `W503`:
 Windows tolerates the mismatch, a case-sensitive Linux/macOS filesystem does
-not.
+not. This is the hook's one auto-fix (see below).
 
 A `setting` line that is not the documented
 `setting "name"="value" on "{...}" for client|user|action` shape is `E520` -
@@ -307,9 +307,13 @@ any `if`) can never run and warns `W501` (first unreachable line only); an
 `action parameter query` after the first execution command warns `W502` -
 these are console-time prompts and belong at the top.
 
-This hook has no auto-fixes: a hook has no way to know where a missing
-`endif` or `end prefetch block` was meant to go, and guessing could silently
-change what the action does.
+`--auto-fix` (`W503`), on by default when files are given (as pre-commit
+does) and off when auto-discovering, rewrites every wrong-case
+`__download`/`__createfile`/`__appendfile` reference to its canonical
+spelling in place; an auto-fixed file fails the hook so the change is
+reviewed and re-staged. No other check here has an auto-fix: a hook has no
+way to know where a missing `endif` or `end prefetch block` was meant to go,
+and guessing could silently change what the action does.
 
 Only `application/x-Fixlet-Windows-Shell` (matched case-insensitively - it is
 valid BigFix content either way) or missing-MIMEType bodies are checked;

@@ -28,7 +28,11 @@ Checks:
     E508  a `{` relevance substitution has no closing `}` before the end of
           its line (a substitution cannot span lines); `}}` inside the
           substitution is a literal `}` and does not close it
-    E509  a `}` with no `{` relevance substitution open on that line
+    E509  a `}` with no `{` relevance substitution open on that line.
+          `appendfile <content>` lines are exempt from both E508 and E509 --
+          everything after the verb is one line of raw file content written
+          out verbatim (`appendfile }` appends a literal `}`), not
+          ActionScript
     E510  an `add prefetch item` / `add nohash prefetch item` outside an open
           `begin prefetch block` (the agent rejects these outside a block)
     E511  a `collect prefetch items` outside an open prefetch block
@@ -44,7 +48,10 @@ Checks:
     E513  a command references `__Download\\<name>` but nothing prefetches or
           downloads a file of that name (a typo catcher; skipped entirely
           when any producer's names are unknowable -- see below. `delete` and
-          `folder delete` lines are cleanup, not consumption, and never count)
+          `folder delete` lines are cleanup, not consumption, and never
+          count. A reference containing a glob wildcard, e.g.
+          `__Download\\mysql*rpm`, is never flagged -- the shell matches it
+          at runtime, not this checker)
     E514  an `if` or `elseif` whose condition is not a `{...}` relevance
           substitution (`if true`, bare `if`; the agent requires one)
     E515  a `begin prefetch block` that is not at the top of the script --
@@ -62,22 +69,31 @@ Checks:
           the script (which this hook cannot see and does not flag)
     E518  a `continue if` or `pause while` condition is not a `{...}`
           relevance substitution -- the same E514 rule extended to these two
-          other condition-bearing verbs
+          other condition-bearing verbs. One exception: a literal
+          `continue if false` (any case) is accepted as a documented idiom
+          for forcing a branch to fail unconditionally. `continue if true`
+          is still flagged (it always continues, so it does nothing), and
+          `pause while` has no literal exception at all (`true` hangs
+          forever, `false` never pauses)
     E519  a command references `__createfile` or `__appendfile` but the body
           never has a matching `createfile until` / `appendfile` line
           earlier; `delete`/`folder delete` lines are cleanup, not
           consumption, and never count (E513's rule, reapplied)
     E520  a `setting` line is not the documented
-          `setting "name"="value" on "{...}" for client|user|action` shape
+          `setting "name"="value" on "{...}" for client|user|action` or
+          `setting delete "name" on "{...}" for client|user|action` shape
           -- a missing effective-date clause fails at runtime
     E521  a `regset`/`regset64`/`regdelete`/`regdelete64` key is not a
           quoted, bracketed `"[HKEY_...]..."` keyname
     E522  an `override wait` / `override run` block is not terminated by its
           matching verb -- it hits end of body, is terminated by the *other*
           override verb's command, or is immediately reopened by another
-          `override` before any command runs. `bes-actionscript-lint-schclass`
-          validates the option lines inside a block (E303); this is the
-          pairing check that block's state machine cannot express
+          `override` before any command runs. A `{...}` relevance
+          substitution line counts as an open option line, not a closing
+          command, since it can itself evaluate to one. `bes-actionscript-
+          lint-schclass` validates the option lines inside a block (E303);
+          this is the pairing check that block's state machine cannot
+          express
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -87,7 +103,8 @@ Checks:
           these are console-time prompts and belong at the top
     W503  a `__Download`, `__createfile`, or `__appendfile` reference is not
           exactly that case (e.g. `__download\\x.exe`) -- Windows tolerates
-          this, but a Linux/macOS agent's case-sensitive filesystem does not
+          this, but a Linux/macOS agent's case-sensitive filesystem does not.
+          Auto-fixable: see AUTO-FIXES below
     W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
 
 E513 is conservative: it is skipped for a whole body whenever any producer's
@@ -102,9 +119,21 @@ from the action's Description page (secure parameters, REST credentials) that
 this hook cannot see, and flagging every such reference would be pure noise.
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
-fail the hook unless --strict is given. This hook has no auto-fixes: a hook
-has no way to know where a missing `endif` or `end prefetch block` was
-supposed to go, and guessing could silently change what the action does.
+fail the hook unless --strict is given.
+
+AUTO-FIXES. There is exactly one, and it is the only check here that is safe
+to auto-fix: every other issue is a missing/misplaced piece of block
+structure (an `endif`, an `end prefetch block`, ...) a hook has no way to
+know the right place for, and guessing could silently change what the action
+does.
+
+--auto-fix (W503), on by default (yes when files are given, as pre-commit
+does; no when auto-discovering). Every wrong-case `__download`,
+`__createfile`, or `__appendfile` reference is rewritten in place to its
+canonical spelling -- this is purely a case correction of a reference this
+hook already resolved to a known scratch-file token, so there is nothing to
+guess. An auto-fixed file fails the hook so the change is reviewed and
+re-staged.
 
 Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (matched case-insensitively; a mixed-case MIMEType is still valid BigFix
@@ -120,7 +149,8 @@ reach its marker) is bes-actionscript-lint-schclass's E302, not this hook's;
 it is not re-reported here.
 
 Usage:
-    bes_actionscript_validate_script.py [--strict] [--disable E501] [file ...]
+    bes_actionscript_validate_script.py [--strict] [--disable E501]
+                                        [--auto-fix=yes|no] [file ...]
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. Non-.bes/.ojo paths given explicitly are checked as raw ActionScript
@@ -149,8 +179,10 @@ Files that look like mustache templates (containing `{{ ... }}`) are skipped
 silently: they are not real content until rendered.
 
 Exit codes:
-    0  no E-code issues (and, without --strict, regardless of warnings)
-    1  an E-code issue was found, or a warning was found while --strict is set
+    0  no E-code issues and nothing auto-fixed (and, without --strict,
+       regardless of warnings)
+    1  an E-code issue was found, a file was auto-fixed, or a warning was
+       found while --strict is set
 """
 
 import argparse
@@ -289,6 +321,12 @@ _NAME_KV_RE = re.compile(r"\bname\s*=\s*(\S+)", re.IGNORECASE)
 # `__Download\<name>` (or forward slash) on a command line; the name stops at
 # whitespace, a quote, or another path separator
 _DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
+# a shell glob wildcard (`*` or `?`) in a __Download\ consumer reference --
+# e.g. `__Download\mysql*rpm` to match a versioned filename the script
+# author cannot spell out literally. The shell expands it at runtime, not
+# this checker, so such a name can never be matched against a producer's
+# literal name and is left unchecked, the same as a `{...}` substitution.
+_GLOB_WILDCARD_RE = re.compile(r"[*?]")
 # producers whose output names cannot be known statically; their presence
 # turns E513 off for the whole body
 _UNKNOWABLE_PRODUCER_RE = re.compile(
@@ -320,6 +358,13 @@ _PARAMETER_ASSIGN_RE = re.compile(r'^parameter\s+"([^"]+)"\s*=', re.IGNORECASE)
 _PARAMETER_REF_RE = re.compile(r'\bparameter\s+"([^"]+)"', re.IGNORECASE)
 _CONTINUE_IF_RE = re.compile(r"^continue\s+if\b(.*)$", re.IGNORECASE)
 _PAUSE_WHILE_RE = re.compile(r"^pause\s+while\b(.*)$", re.IGNORECASE)
+# `continue if false` (any case) is a documented idiom -- an unconditional
+# literal used to force a failure on a branch (e.g. the `else` of an
+# `if`/`else`/`endif`), not a mistyped relevance substitution. `continue if
+# true` is NOT included: it always continues, so the check does nothing.
+# `pause while` gets no such exception: `pause while true` hangs forever and
+# `pause while false` never pauses, so neither is a sane literal there.
+_LITERAL_FALSE_RE = re.compile(r"^false\s*$", re.IGNORECASE)
 _CREATEFILE_UNTIL_RE = re.compile(r"^createfile\s+until\b", re.IGNORECASE)
 _APPENDFILE_VERB_RE = re.compile(r"^appendfile\b", re.IGNORECASE)
 # `__createfile`/`__appendfile` references, any case; callers compare the
@@ -336,7 +381,8 @@ _SCRATCH_CANONICAL = {
 }
 _SETTING_RE = re.compile(r"^setting\s+(.*)$", re.IGNORECASE | re.DOTALL)
 _SETTING_SHAPE_RE = re.compile(
-    r'^setting\s+".+"\s*=\s*".*"\s+on\s+"\{.*\}"\s+for\s+(client\b|user\b|action\b)',
+    r'^setting\s+(?:delete\s+".+"|".+"\s*=\s*".*")'
+    r'\s+on\s+"\{.*\}"\s+for\s+(client\b|user\b|action\b)',
     re.IGNORECASE | re.DOTALL,
 )
 _REGSET_RE = re.compile(
@@ -482,7 +528,18 @@ def _check_download_names(lines):
     `download` with no `as <name>` and no literal URL basename, or a
     name/URL containing a `{` substitution), the whole consumer check is
     skipped -- a missed typo is better than a false alarm. E512 still runs on
-    the literal names that were collected.
+    the literal names that were collected. A single consumer reference
+    containing a shell glob wildcard (`*` or `?`, e.g.
+    `__Download\\mysql*rpm` for a versioned filename the script author
+    cannot spell out literally) is skipped on its own, without disabling
+    the check for the rest of the body -- the shell expands it at runtime,
+    not this checker, so it can never be matched against a producer's
+    literal name.
+
+    `copy`/`move` and shell-redirection (`>`, `>>`) lines can themselves
+    create a file under `__Download`, not just consume one -- see
+    `_MOVE_COPY_RE`/`_REDIRECT_TARGET_RE` below -- so they are also treated
+    as producers where the destination name is determinable.
 
     `copy`/`move` and shell-redirection (`>`, `>>`) lines can themselves
     create a file under `__Download`, not just consume one -- see
@@ -615,6 +672,11 @@ def _check_download_names(lines):
                 continue
             for name in _DOWNLOAD_REF_RE.findall(stripped):
                 if "{" in name:  # a substituted name is unknowable; skip it
+                    continue
+                if _GLOB_WILDCARD_RE.search(name):
+                    # a wildcard reference (e.g. `__Download\mysql*rpm` for
+                    # a versioned filename) matches by shell glob at
+                    # runtime, not by literal name; skip it
                     continue
                 if name.lower() not in producers:
                     issues.append(
@@ -816,11 +878,80 @@ def _check_scratch_references(lines):
     return issues
 
 
+def _scratch_case_targets(raw, src, is_bes):
+    """Yield (file_lineno, wrong_text, canonical) for every W503 fix target.
+
+    Mirrors what `_check_scratch_references` itself flags: `body.split("\n")`
+    is run through `_mask_heredocs` first, so a wrong-case reference sitting
+    inside `createfile until` block content (raw file text, not ActionScript)
+    is not a target here either. `file_lineno` is 1-based into the whole
+    file, matching `_validate_bes_xml`'s sourceline offset for a .bes file.
+    """
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return  # already reported as W500; nothing safe to rewrite
+    else:
+        bodies = [(1, src)]
+
+    for sourceline, body in bodies:
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        for index, masked_line in enumerate(masked_lines):
+            stripped = masked_line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            for match in _SCRATCH_REF_RE.finditer(masked_line):
+                matched_text = match.group(0)
+                canonical = _SCRATCH_CANONICAL[match.group(1).lower()]
+                if matched_text != canonical:
+                    yield sourceline + index, matched_text, canonical
+
+
+def _replace_on_line(lines, lineno, text, replacement):
+    """Substitute one `text` on 1-based `lineno` of `lines`; say whether it landed.
+
+    The reference is replaced inside the file line rather than the line being
+    rebuilt, so indentation and anything else sharing the line survive. A
+    target whose text is no longer found on its line (already fixed by an
+    earlier, overlapping match, say) is left alone rather than guessed at.
+    """
+    if not 1 <= lineno <= len(lines):
+        return False
+    raw_line = lines[lineno - 1]
+    if text not in raw_line:
+        return False
+    lines[lineno - 1] = raw_line.replace(text, replacement, 1)
+    return True
+
+
+def fix_scratch_case(src, targets):
+    """Rewrite each wrong-case scratch reference to its canonical spelling.
+
+    `targets` is `_scratch_case_targets`'s (file_lineno, wrong_text,
+    canonical) triples. Returns (new_src, fixed), `fixed` a list of
+    (lineno, "W503", message).
+    """
+    lines = src.split("\n")
+    fixed = []
+    for lineno, text, canonical in targets:
+        if _replace_on_line(lines, lineno, text, canonical):
+            fixed.append(
+                (
+                    lineno,
+                    "W503",
+                    f'"{text}" replaced with "{canonical}"',
+                )
+            )
+    return "\n".join(lines), fixed
+
+
 def _check_command_shapes(lines):
     """Check per-line command shapes independent of block structure.
 
     Returns E520 for a `setting` line that is not the documented
-    `setting "name"="value" on "{...}" for client|user|action` shape (a
+    `setting "name"="value" on "{...}" for client|user|action` or
+    `setting delete "name" on "{...}" for client|user|action` shape (a
     missing effective-date `on` clause fails at runtime); E521 for a
     `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
     bracketed `"[HKEY_...]..."` keyname; and W504 for the deprecated `dos`
@@ -883,7 +1014,14 @@ def _check_condition_shapes(lines):
 
     Returns E518 for a `continue if` or `pause while` whose condition is not
     a `{...}` relevance substitution -- the same rule E514 applies to `if`/
-    `elseif`, extended to these two other condition-bearing verbs.
+    `elseif`, extended to these two other condition-bearing verbs. The one
+    exception: a literal `continue if false` (any case) is accepted as a
+    documented idiom for forcing a branch to fail unconditionally, e.g. in
+    the `else` of an `if`/`else`/`endif`. `continue if true` is still
+    flagged -- it always continues, so the check does nothing -- and
+    `pause while` gets no literal exception at all: `pause while true`
+    hangs forever and `pause while false` never pauses, so neither literal
+    is ever the right thing to write.
     """
     issues = []
     for index, raw_line in enumerate(lines):
@@ -892,23 +1030,29 @@ def _check_condition_shapes(lines):
         if not stripped or stripped.startswith("//"):
             continue
 
-        for regex, verb in (
-            (_CONTINUE_IF_RE, "continue if"),
-            (_PAUSE_WHILE_RE, "pause while"),
+        for regex, verb, allow_literal_false in (
+            (_CONTINUE_IF_RE, "continue if", True),
+            (_PAUSE_WHILE_RE, "pause while", False),
         ):
             match = regex.match(stripped)
-            if match and not match.group(1).lstrip().startswith("{"):
-                issues.append(
+            if not match:
+                continue
+            condition = match.group(1).lstrip()
+            if condition.startswith("{"):
+                continue
+            if allow_literal_false and _LITERAL_FALSE_RE.match(condition):
+                continue
+            issues.append(
+                (
+                    lineno,
+                    "E518",
                     (
-                        lineno,
-                        "E518",
-                        (
-                            f"`{verb}` condition is not a `{{...}}` "
-                            "relevance substitution; the agent requires "
-                            f"one; add `{IF_MARKER}` if intentional"
-                        ),
-                    )
+                        f"`{verb}` condition is not a `{{...}}` "
+                        "relevance substitution; the agent requires "
+                        f"one; add `{IF_MARKER}` if intentional"
+                    ),
                 )
+            )
     return issues
 
 
@@ -922,6 +1066,12 @@ def _check_override_blocks(lines):
     verb's command (an `override wait` block whose next real command is
     `run ...` instead of `wait ...`, or vice versa). This is that pairing
     check.
+
+    A line that starts with `{` (after stripping leading whitespace) is
+    also treated as an open option line, not a closing command: a `{...}`
+    relevance substitution can itself evaluate to a keyword=value option
+    (e.g. choosing `hidden=true` vs `completion=none` by OS), so it keeps
+    the block open exactly like a literal option line would.
     """
     issues = []
     open_verb = None
@@ -953,8 +1103,12 @@ def _check_override_blocks(lines):
 
         if open_verb is None:
             continue
-        if _OVERRIDE_OPTION_LINE_RE.match(stripped):
-            continue  # a keyword=value option line; the block is still open
+        if _OVERRIDE_OPTION_LINE_RE.match(stripped) or stripped.startswith("{"):
+            # a keyword=value option line, or a `{...}` relevance
+            # substitution that evaluates to one at runtime (e.g. picking
+            # `hidden=true` vs `completion=none` by OS) -- the block is
+            # still open either way
+            continue
 
         # the first non-option line closes the block -- its own verb must
         # match the one `override` opened
@@ -1023,8 +1177,13 @@ def check_actionscript(body):
         # brace balance is per line and independent of the block walk below,
         # so it runs before any of the `continue`s that dispatch on the verb.
         # The raw line is passed, not `stripped`, so reported columns line up
-        # with the file.
-        issues.extend(_check_substitution_braces(lineno, raw_line))
+        # with the file. An `appendfile <content>` line is skipped entirely:
+        # everything after the verb is one line of raw file content written
+        # out verbatim, the same as `createfile until` heredoc content, not
+        # ActionScript -- `appendfile }` is a literal `}` appended to the
+        # file, not a stray relevance-substitution close.
+        if not _APPENDFILE_VERB_RE.match(stripped):
+            issues.extend(_check_substitution_braces(lineno, raw_line))
 
         # unreachable code (W501): anything after an unconditional
         # exit/restart/shutdown never runs; report the first such line only
@@ -1326,21 +1485,30 @@ def is_bes_file(path):
     return path.endswith(BES_EXTENSIONS)
 
 
-def check_file(path, disabled=frozenset()):
+def _encode(src, was_crlf):
+    """Turn checked text back into file bytes, restoring CRLF if that is the file."""
+    return (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
+
+
+def check_file(path, disabled=frozenset(), auto_fix=False):
     """Check a single file; return (issues, fixed).
 
-    `fixed` is always [].
-
-    This hook has no auto-fixes, so the second element of the tuple exists
-    only to keep the (issues, fixed) contract the other hooks share.
+    With `auto_fix`, every wrong-case `__download`/`__createfile`/
+    `__appendfile` reference (W503) is rewritten in place to its canonical
+    spelling, unless "W503" is in `disabled` or the file opts out with the
+    `actionscript-scratch-ok` marker. The file's line endings are preserved
+    (CRLF in, CRLF out). No other check here has an auto-fix.
     """
     if not os.path.isfile(path):
         return [(1, "W500", "file not found; skipping")], []
 
     with open(path, "rb") as handle:
-        raw = handle.read()
+        original = handle.read()
+    was_crlf = b"\r\n" in original
     src = (
-        raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        original.decode("utf-8", errors="replace")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
     )
 
     if SKIP_MARKER in src:
@@ -1348,7 +1516,17 @@ def check_file(path, disabled=frozenset()):
     if MUSTACHE_RE.search(src):
         return [], []
 
-    if is_bes_file(path):
+    is_bes = is_bes_file(path)
+    raw = original
+    fixed = []
+    if auto_fix and "W503" not in disabled and SCRATCH_MARKER not in src:
+        src, fixed = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
+        raw = _encode(src, was_crlf)
+        if raw != original:
+            with open(path, "wb") as handle:
+                handle.write(raw)
+
+    if is_bes:
         issues = _validate_bes_xml(raw)
     else:
         issues = check_actionscript(src)
@@ -1359,17 +1537,17 @@ def check_file(path, disabled=frozenset()):
         for lineno, code, message in issues
         if code not in disabled and CHECK_MARKERS.get(code) not in opt_outs
     ]
-    return sorted(issues), []
+    return sorted(issues), fixed
 
 
-def check_files(paths, disabled=frozenset()):
+def check_files(paths, disabled=frozenset(), auto_fix=False):
     """Check several files; return a list of (path, issues, fixed) tuples.
 
     This is the programmatic entry point: it does no printing.
     """
     results = []
     for path in paths:
-        issues, fixed = check_file(path, disabled=disabled)
+        issues, fixed = check_file(path, disabled=disabled, auto_fix=auto_fix)
         results.append((path, issues, fixed))
     return results
 
@@ -1390,10 +1568,14 @@ def discover_bes_files(root="."):
 
 
 def _report(results):
-    """Print every issue in `results`; return (issue_count, warning_count)."""
+    """Print every fix and issue in `results`; return (issues, warnings, fixes)."""
     issue_count = 0
     warning_count = 0
-    for path, issues, _fixed in results:
+    fix_count = 0
+    for path, issues, fixed in results:
+        for lineno, check_id, message in fixed:
+            fix_count += 1
+            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
         for lineno, check_id, message in issues:
             if check_id.startswith("W"):
                 warning_count += 1
@@ -1401,7 +1583,7 @@ def _report(results):
             else:
                 issue_count += 1
                 print(f"{path}:{lineno}: [{check_id}] {message}")
-    return issue_count, warning_count
+    return issue_count, warning_count, fix_count
 
 
 def main(argv=None):
@@ -1424,6 +1606,16 @@ def main(argv=None):
         help="comma-separated check IDs to skip entirely, e.g. --disable E501",
     )
     parser.add_argument(
+        "--auto-fix",
+        choices=["yes", "no"],
+        default=None,
+        help=(
+            "rewrite wrong-case __download/__createfile/__appendfile "
+            "references (W503) in place to their canonical spelling "
+            "(default: yes when files are given, no when auto-discovering)"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help=(
@@ -1443,14 +1635,27 @@ def main(argv=None):
             f"warning: ignoring unknown --disable code(s): {', '.join(sorted(unknown))}"
         )
 
+    # auto-fix defaults to yes for explicit files, no when auto-discovering; an
+    # explicit --auto-fix always wins. This is the sibling hooks' rule, and
+    # pre-commit always passes files, so under pre-commit the default is yes.
+    if args.auto_fix is not None:
+        auto_fix = args.auto_fix == "yes"
+    else:
+        auto_fix = bool(args.files)
     paths = args.files if args.files else discover_bes_files(".")
-    issue_count, warning_count = _report(check_files(paths, disabled=disabled))
 
+    issue_count, warning_count, fix_count = _report(
+        check_files(paths, disabled=disabled, auto_fix=auto_fix)
+    )
+
+    if fix_count:
+        print(f"\nauto-fixed {fix_count} issue(s); review and re-stage the changes.")
     if warning_count:
         print(f"{warning_count} warning(s).")
     if issue_count:
         print(f"{issue_count} issue(s).")
-    return 1 if (issue_count or (warning_count and args.strict)) else 0
+    # E-codes and any fix always fail; warnings fail only under --strict
+    return 1 if (issue_count or fix_count or (warning_count and args.strict)) else 0
 
 
 if __name__ == "__main__":

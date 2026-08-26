@@ -49,6 +49,43 @@ patterns outside ActionScript bodies:
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py) for the
 full list.
 
+`bes-actionscript-validate-script` gets its first auto-fix:
+
+- **`--auto-fix` (`W503`)**: rewrites every wrong-case `__download`,
+  `__createfile`, or `__appendfile` reference in place to its canonical
+  spelling. On by default when files are given (as pre-commit does), off
+  when auto-discovering, matching the sibling hooks' `--auto-fix` convention.
+  No other check in this hook is auto-fixable.
+
+### Fixed
+
+More `bes-actionscript-validate-script` false positives, found the same way
+v0.8.1's were:
+
+- **`E520`**: the documented `setting delete "name" on "{...}" for
+  client|user|action` deletion shape is now recognized alongside the
+  `setting "name"="value" on ...` assignment shape it already accepted.
+- **`E518`**: a literal `continue if false` (any case) is no longer flagged -
+  a documented idiom for forcing a branch to fail unconditionally, e.g. in
+  the `else` of an `if`/`else`/`endif`. `continue if true` is still flagged
+  (it always continues, so the check does nothing), and `pause while` gets no
+  such exception at all (`true` hangs forever, `false` never pauses).
+- **`E513`**: a `__Download\<name>` consumer reference containing a shell
+  glob wildcard (`*` or `?`, e.g. `__Download\mysql*rpm` for a versioned
+  filename) is no longer flagged - the shell matches it at runtime, not this
+  checker. The skip is per-reference, not a whole-body knowability escape
+  hatch.
+- **`E522`**: a line starting with `{` inside an open `override wait`/
+  `override run` block now counts as an option line, not the closing
+  command - a `{...}` relevance substitution can itself evaluate to a
+  `keyword=value` option (e.g. picking `hidden=true` vs `completion=none` by
+  OS).
+- **`E508`/`E509`**: an `appendfile <content>` line is now exempt from both -
+  everything after the verb is one line of raw file content written out
+  verbatim, the same as `createfile until` heredoc content, so
+  `appendfile }` (appending a literal `}`) no longer misreports as an
+  unbalanced brace.
+
 ## v0.9.0
 
 ### Added
