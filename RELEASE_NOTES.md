@@ -1,5 +1,33 @@
 # Release Notes
 
+## v0.8.1
+
+Fixes false positives found by running v0.8.0's new checks against real
+BigFix content in `bigfix-content`.
+
+### Fixed
+
+- **`E512`**: now compares two same-named declarations only when they were
+  reached through the *same conditional context* (both unconditional, or
+  both via an identical sequence of `if`/`elseif`/`else` branch choices).
+  Cross-platform prefetch blocks routinely declare one `name=jre.tar.gz` per
+  OS in a *separate* `if` per platform rather than one `if`/`elseif` chain,
+  and the hook cannot prove those conditions are mutually exclusive, so it
+  no longer guesses across different `if`s.
+- **`E513`**: a `delete` or `folder delete` of a `__Download\<name>` is
+  cleanup, not consumption, and no longer counts as a reference. A script
+  can also *create* a file under `__Download` itself, so `copy`/`move`
+  destinations (including from `__createfile`/`__appendfile`, and the
+  `{download path "X"}` idiom) and shell redirection targets
+  (`... > __Download\<name>`, `>>` too) now register as producers.
+- **E513 gating**: a bare `download {...}` whose URL matches neither
+  recognized download shape (e.g. `download now {parameter "u"}`) now marks
+  its target unknowable, instead of being silently missed by both shapes.
+- **`E508`/`E509`**: `}}` is now recognized as an escaped literal `}` inside
+  an open substitution too, not just outside one - e.g.
+  `{ ... "@{'k'='v'}}" ... }`, a quoted PowerShell hashtable literal nested
+  inside a substitution, no longer misreports as an unbalanced `}`.
+
 ## v0.8.0
 
 Adds eight semantic checks to `bes-actionscript-validate-script`: prefetch

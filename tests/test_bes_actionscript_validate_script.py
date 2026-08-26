@@ -273,6 +273,28 @@ def test_escape_then_real_substitution_still_balances():
     assert validator.check_actionscript(body) == []
 
 
+def test_double_close_brace_inside_a_substitution_is_an_escape():
+    """A PowerShell hashtable literal quoted inside a substitution: the
+    `}}` closing it is a literal `}`, not the substitution's real close.
+    """
+    body = (
+        'parameter "ArgHeader" = "{ if (windows of operating system) then '
+        '"@{\'k\'=\'v\'}}" else "Metadata:true" }"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_double_close_brace_inside_a_substitution_still_leaves_it_open():
+    """The escape absorbs one `}}`; a still-missing real close is E508."""
+    issues = validator.check_actionscript("wait echo {a}}b")
+    assert codes(issues) == ["E508"]
+
+
+def test_real_close_follows_an_escaped_close_inside_a_substitution():
+    issues = validator.check_actionscript("wait echo {a}}b}")
+    assert issues == []
+
+
 def test_substitution_column_is_reported_from_the_raw_line():
     issues = validator.check_actionscript("    wait cmd /c echo {x")
     assert "column 22" in issues[0][2]
@@ -382,6 +404,57 @@ def test_duplicate_names_compare_case_insensitively():
     assert codes(validator.check_actionscript(body)) == ["E512"]
 
 
+def test_same_name_in_separate_sibling_ifs_is_not_e512():
+    """Real content guards each platform with its own `if`, not elseif."""
+    body = (
+        "if {windows of operating system}\n"
+        "prefetch a.tar.gz sha1:x size:1 http://x/win.tar.gz\n"
+        "endif\n"
+        "if {mac of operating system}\n"
+        "prefetch a.tar.gz sha1:y size:1 http://x/mac.tar.gz\n"
+        "endif\n"
+        "wait __Download\\a.tar.gz"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_same_name_in_elseif_siblings_of_one_if_is_not_e512():
+    body = (
+        "if {windows of operating system}\n"
+        "prefetch a.tar.gz sha1:x size:1 http://x/win.tar.gz\n"
+        "elseif {mac of operating system}\n"
+        "prefetch a.tar.gz sha1:y size:1 http://x/mac.tar.gz\n"
+        "endif\n"
+        "wait __Download\\a.tar.gz"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_same_name_twice_in_the_same_branch_is_still_e512():
+    """Same exact conditional path -- both run together -- a real bug."""
+    body = (
+        "if {true}\n"
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "prefetch a.exe sha1:y size:1 http://x/b.exe\n"
+        "endif"
+    )
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E512"]
+
+
+def test_unconditional_duplicate_inside_and_outside_an_if_is_not_e512():
+    """Conservative: a top-level dup masked by conditional nesting is missed
+    on purpose -- unproven co-execution is preferred over a false alarm.
+    """
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "if {true}\n"
+        "prefetch a.exe sha1:y size:1 http://x/b.exe\n"
+        "endif"
+    )
+    assert validator.check_actionscript(body) == []
+
+
 # --- E513: __Download reference with no producer -------------------------------
 
 
@@ -426,12 +499,93 @@ def test_substituted_producer_name_suppresses_e513():
     assert validator.check_actionscript(body) == []
 
 
+def test_delete_of_a_download_is_cleanup_not_consumption():
+    """`delete __Download\\x` before downloading x is normal hygiene."""
+    body = (
+        "delete __Download\\document\n"
+        "folder delete __Download\\stage\n"
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_unshaped_download_line_suppresses_e513():
+    """A substituted URL contains a space, matching neither download shape."""
+    body = (
+        'parameter "u" = "http://169.254.169.254/latest/document"\n'
+        'download now {parameter "u"}\n'
+        "copy __Download/document /tmp/out.json"
+    )
+    assert validator.check_actionscript(body) == []
+
+
 def test_substituted_consumer_name_is_not_judged():
     body = (
         "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
         'wait __Download\\{parameter "n"}\n'
         "wait __Download\\a.exe"
     )
+    assert validator.check_actionscript(body) == []
+
+
+# --- E513: copy/move and shell-redirection producers ---------------------------
+
+
+def test_copy_from_createfile_registers_the_destination():
+    body = (
+        "copy __createfile __Download\\ResponseFile.txt\n"
+        "wait __Download\\ResponseFile.txt"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_from_createfile_registers_the_destination():
+    body = (
+        "move __createfile __Download\\WUA_Search.vbs\n"
+        "wait __Download\\WUA_Search.vbs"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_from_createfile_with_substituted_destination_suppresses_e513():
+    """`{download path "X"}` -- no literal __Download ref to read back."""
+    body = (
+        'move __createfile "{ download path "WUA_Search.vbs" }"\n'
+        "wait __Download\\anything.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_renaming_one_download_to_another_registers_the_new_name():
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "move __Download\\a.exe __Download\\b.exe\n"
+        "wait __Download\\b.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_of_an_undeclared_download_with_no_createfile_is_still_e513():
+    """A single __Download ref with no __createfile source is a plain typo."""
+    body = "move __Download\\typo.exe elsewhere"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E513"]
+
+
+def test_redirection_into_download_registers_the_target():
+    body = (
+        "move __createfile __Download\\WUA_Search.vbs\n"
+        "waithidden cmd /c cscript __Download\\WUA_Search.vbs "
+        "> __Download\\results_WindowsUpdates.ini\n"
+        "move __Download\\results_WindowsUpdates.ini "
+        '"C:\\out.ini"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_double_redirect_append_into_download_registers_the_target():
+    body = "wait cmd /c echo hi >> __Download\\log.txt\n" "wait __Download\\log.txt"
     assert validator.check_actionscript(body) == []
 
 

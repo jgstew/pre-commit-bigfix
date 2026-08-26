@@ -26,16 +26,25 @@ Checks:
           block's `end prefetch block` is reached -- blocks interleave, they
           do not nest, so this cannot close cleanly
     E508  a `{` relevance substitution has no closing `}` before the end of
-          its line (a substitution cannot span lines)
+          its line (a substitution cannot span lines); `}}` inside the
+          substitution is a literal `}` and does not close it
     E509  a `}` with no `{` relevance substitution open on that line
     E510  an `add prefetch item` / `add nohash prefetch item` outside an open
           `begin prefetch block` (the agent rejects these outside a block)
     E511  a `collect prefetch items` outside an open prefetch block
-    E512  two prefetch/download producers declare the same download name --
-          the second silently overwrites the first
+    E512  two prefetch/download producers declare the same download name in
+          the exact same conditional context (both unconditional, or both
+          reached through identical if/elseif/else branch choices) -- the
+          second silently overwrites the first. Declarations reached via
+          different `if`s (even ones that look platform-exclusive, like a
+          separate `if` per OS) are NOT compared: this checker cannot verify
+          their conditions are mutually exclusive, and BigFix content
+          routinely relies on exactly that pattern for cross-platform
+          prefetch blocks
     E513  a command references `__Download\\<name>` but nothing prefetches or
           downloads a file of that name (a typo catcher; skipped entirely
-          when any producer's names are unknowable -- see below)
+          when any producer's names are unknowable -- see below. `delete` and
+          `folder delete` lines are cleanup, not consumption, and never count)
     E514  an `if` or `elseif` whose condition is not a `{...}` relevance
           substitution (`if true`, bare `if`; the agent requires one)
     E515  a `begin prefetch block` that is not at the top of the script --
@@ -220,6 +229,22 @@ _DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
 _UNKNOWABLE_PRODUCER_RE = re.compile(
     r"^(?:extract|unarchive|archive\s+now|utility)\b", re.IGNORECASE
 )
+# a bare `download` verb, any shape -- the fallback when neither download
+# shape above matched (e.g. a URL with a space inside a substitution)
+_DOWNLOAD_VERB_RE = re.compile(r"^download\b", re.IGNORECASE)
+# `delete` / `folder delete` lines clean up the working directory; a
+# `__Download\<name>` they mention is not a consumption of that file
+_DELETE_RE = re.compile(r"^(?:folder\s+)?delete\b", re.IGNORECASE)
+# `copy`/`move` lines can themselves populate `__Download`, either from a
+# literal `__createfile`/`__appendfile` source (the sole __Download ref is
+# the destination) or by renaming one download to another (>= 2 refs; the
+# last is the destination, earlier ones are ordinary consumer references)
+_MOVE_COPY_RE = re.compile(r"^(?:copy|move)\b", re.IGNORECASE)
+_CREATEFILE_SOURCE_RE = re.compile(r"__(?:create|append)file\b", re.IGNORECASE)
+# shell redirection into `__Download\<name>` creates that file
+_REDIRECT_TARGET_RE = re.compile(
+    r'>>?\s*"?__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE
+)
 _TERMINATOR_RE = re.compile(r"^(?:exit|restart|shutdown)\b", re.IGNORECASE)
 _ACTION_PARAMETER_QUERY_RE = re.compile(r"^action\s+parameter\s+query\b", re.IGNORECASE)
 _PARAMETER_RE = re.compile(r"^parameter\b", re.IGNORECASE)
@@ -252,9 +277,14 @@ def _check_substitution_braces(lineno, line):
     `{{` is an escape, not an opener: it passes a literal `{` through to the
     command, so it neither opens a substitution nor makes the `}` that
     follows a substitution close -- that `}` pairs with the escape instead.
-    `}}` is likewise a literal `}`. Escapes are counted so an escaped brace
-    absorbs a later lone `}` rather than being reported as stray, which keeps
-    this quiet on the escaping styles seen in real content.
+    `}}` is likewise a literal `}`, and the same escape holds *inside* an
+    open substitution too: `{ ... "@{'k'='v'}}" ... }` (a PowerShell hashtable
+    literal quoted inside the substitution) does not close on the first `}`
+    of that `}}` -- the pair is a literal `}` in the string, and the
+    substitution stays open for its real closing `}`. Escapes outside a
+    substitution are counted so an escaped brace absorbs a later lone `}`
+    rather than being reported as stray, which keeps this quiet on the
+    escaping styles seen in real content.
     """
     issues = []
     open_col = None  # column of the `{` that opened the current substitution
@@ -286,6 +316,9 @@ def _check_substitution_braces(lineno, line):
                         )
                     )
         elif char == "}":
+            if line.startswith("}}", index):
+                index += 2  # escaped literal }; the substitution stays open
+                continue
             open_col = None
         index += 1
 
@@ -317,21 +350,55 @@ def _url_basename(url):
     return base
 
 
+def _co_executable(path_a, path_b):
+    """Return True only when two declarations are known to run together.
+
+    Each path is a `{if_id: branch_index}` snapshot of which `if`/`elseif`/
+    `else` branch was open, for every still-open `if`, at the moment a name
+    was declared. Real BigFix content routinely guards platform-specific
+    prefetch items with a *separate* `if` per platform (Windows, then a
+    second unrelated `if` for mac, then another for Linux) rather than one
+    `if`/`elseif` chain -- and this checker has no way to know those
+    conditions are mutually exclusive. So this only calls two declarations
+    co-executable -- a real E512 duplicate -- when their paths are exactly
+    equal: both unconditional (empty path), or both reached through the
+    identical sequence of branch choices. Anything reached via a different
+    `if` (even one that looks platform-exclusive) is treated as potentially
+    mutually exclusive and left unflagged, on the same false-alarm-is-worse
+    principle E513's gating uses.
+    """
+    return path_a == path_b
+
+
 def _check_download_names(lines):
     """Check prefetch/download producer names against `__Download\\` consumers.
 
-    Returns E512 issues for duplicate producer names (the second declaration
-    silently overwrites the first) and E513 issues for a `__Download\\<name>`
-    consumer no producer creates. E513 is conservative: the moment any
-    producer's names are unknowable (an extract/unarchive/archive now/utility
-    command, a `download` with no `as <name>` and no literal URL basename, or
-    a name/URL containing a `{` substitution), the whole consumer check is
+    Returns E512 issues for a duplicate producer name that can co-execute
+    with an earlier declaration of the same name (the second declaration
+    would silently overwrite the first at runtime) -- declarations of the
+    same name in mutually exclusive `if`/`elseif`/`else` branches (see
+    `_co_executable`) are not flagged, since only one of them ever runs.
+    Also returns E513 issues for a `__Download\\<name>` consumer no producer
+    creates. E513 is conservative: the moment any producer's names are
+    unknowable (an extract/unarchive/archive now/utility command, a
+    `download` with no `as <name>` and no literal URL basename, or a
+    name/URL containing a `{` substitution), the whole consumer check is
     skipped -- a missed typo is better than a false alarm. E512 still runs on
     the literal names that were collected.
+
+    `copy`/`move` and shell-redirection (`>`, `>>`) lines can themselves
+    create a file under `__Download`, not just consume one -- see
+    `_MOVE_COPY_RE`/`_REDIRECT_TARGET_RE` below -- so they are also treated
+    as producers where the destination name is determinable.
     """
     issues = []
-    producers = {}  # lowercased name -> first lineno
+    producers = {}  # lowercased name -> [(lineno, if-branch path), ...]
     knowable = True
+    if_stack = []  # each entry: [if_id, branch_index]
+    next_if_id = 0
+
+    def current_path():
+        return {if_id: branch for if_id, branch in if_stack}
 
     def produce(lineno, name):
         nonlocal knowable
@@ -342,27 +409,48 @@ def _check_download_names(lines):
         if not name:
             knowable = False
             return
-        if name in producers:
-            issues.append(
-                (
-                    lineno,
-                    "E512",
+        path = current_path()
+        declarations = producers.setdefault(name, [])
+        for existing_lineno, existing_path in declarations:
+            if _co_executable(path, existing_path):
+                issues.append(
                     (
-                        f'duplicate download name "{name}" (first declared on '
-                        f"line {producers[name]}); the second declaration "
-                        "silently overwrites the first; add "
-                        f"`{DOWNLOAD_MARKER}` if intentional"
-                    ),
+                        lineno,
+                        "E512",
+                        (
+                            f'duplicate download name "{name}" (first '
+                            f"declared on line {existing_lineno}, and both "
+                            "can run in the same execution); the second "
+                            "declaration silently overwrites the first; add "
+                            f"`{DOWNLOAD_MARKER}` if intentional"
+                        ),
+                    )
                 )
-            )
-        else:
-            producers[name] = lineno
+                break
+        declarations.append((lineno, path))
 
     for index, raw_line in enumerate(lines):
         lineno = index + 1
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("//"):
             continue
+
+        # if/elseif/else/endif bookkeeping only -- pairing itself is E500/
+        # E501/E505/E506's job elsewhere; an unbalanced endif here is
+        # ignored rather than double-reported
+        if _IF_RE.match(stripped):
+            next_if_id += 1
+            if_stack.append([next_if_id, 0])
+            continue
+        if _ELSEIF_RE.match(stripped) or _ELSE_RE.match(stripped):
+            if if_stack:
+                if_stack[-1][1] += 1
+            continue
+        if _ENDIF_RE.match(stripped):
+            if if_stack:
+                if_stack.pop()
+            continue
+
         lowered = stripped.lower()
         if _UNKNOWABLE_PRODUCER_RE.match(stripped):
             knowable = False
@@ -383,12 +471,49 @@ def _check_download_names(lines):
         if match:
             produce(lineno, _url_basename(match.group(1)))
             continue
+        if _DOWNLOAD_VERB_RE.match(stripped):
+            # a download of some other shape (a URL with a space inside a
+            # `{...}` substitution does not match either regex above); its
+            # target name is unknowable
+            knowable = False
+            continue
+
+        if _MOVE_COPY_RE.match(stripped):
+            refs = _DOWNLOAD_REF_RE.findall(stripped)
+            has_createfile_source = bool(_CREATEFILE_SOURCE_RE.search(stripped))
+            if has_createfile_source and refs:
+                # source is __createfile/__appendfile, not a __Download ref;
+                # the one __Download ref on the line is the destination
+                produce(lineno, refs[-1])
+            elif has_createfile_source and "{" in stripped:
+                # `move __createfile "{download path "X"}"` -- a substituted
+                # destination with no literal __Download ref to read back
+                knowable = False
+            elif not has_createfile_source and len(refs) >= 2:
+                # renaming one download to another; the last ref is the new
+                # name, earlier refs are ordinary consumer references
+                produce(lineno, refs[-1])
+            # a single __Download ref with no __createfile source is left
+            # alone here -- it is an ordinary consumer reference (e.g.
+            # `move __Download\typo.exe elsewhere`), checked as one below
+            continue
+
+        match = _REDIRECT_TARGET_RE.search(stripped)
+        if match:
+            produce(lineno, match.group(1))
+            # fall through: the line may still hold other __Download refs
+            # (a command being redirected, say) to check as consumers below
 
     if knowable:
         for index, raw_line in enumerate(lines):
             lineno = index + 1
             stripped = raw_line.strip()
             if not stripped or stripped.startswith("//"):
+                continue
+            if _DELETE_RE.match(stripped):
+                # deleting `__Download\<name>` is cleanup, not consumption --
+                # ensuring the working directory is clean before proceeding
+                # is normal even when nothing downloads that name
                 continue
             for name in _DOWNLOAD_REF_RE.findall(stripped):
                 if "{" in name:  # a substituted name is unknowable; skip it

@@ -162,12 +162,17 @@
     `{...}` relevance substitution left unclosed at end of line is E508 and a
     `}` with no substitution open is E509 -- a substitution cannot span lines;
     `{{` (and `}}`) passes a literal brace through rather than opening or
-    closing a substitution, and a lone `}` pairs with such an escape. An
+    closing a substitution (the `}}` escape holds inside an open substitution
+    too), and a lone `}` pairs with such an escape. An
     `add prefetch item` or `collect prefetch items` outside an open prefetch
     block is E510/E511; two producers declaring the same download name is
-    E512; a `__Download\<name>` reference nothing prefetches or downloads is
-    E513 (skipped whenever any producer's names are unknowable -- extract,
-    a `download` with no `as`, or a `{...}` in a name); an `if`/`elseif`
+    E512 (only within the same conditional context -- declarations in different
+    if/elseif/else branches are not compared, since cross-platform content
+    declares one name per OS in separate `if`s); a `__Download\<name>`
+    reference nothing prefetches or downloads is E513 (skipped whenever any
+    producer's names are unknowable -- extract, a `download` with no `as`, or
+    a `{...}` in a name; `delete`/`folder delete` are cleanup, and
+    `copy`/`move` destinations and `>` redirection targets are producers); an `if`/`elseif`
     whose condition is not a `{...}` substitution is E514; and a
     `begin prefetch block` not at the top of the script (only comments,
     blank lines, `action parameter query`, and `parameter` assignments may

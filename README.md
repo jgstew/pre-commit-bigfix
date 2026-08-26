@@ -237,16 +237,27 @@ before end of line is `E508`, and a `}` reached with no substitution open is
 `E509`: a substitution is evaluated per line and cannot span lines. `{{` (and
 `}}`) is an escape that passes a literal brace through to the command, so it
 neither opens nor closes a substitution, and a later lone `}` pairs with that
-escape instead of being reported as stray.
+escape instead of being reported as stray. The `}}` escape holds *inside* an
+open substitution too - a quoted literal like `{ ... "@{'k'='v'}}" ... }`
+(a PowerShell hashtable nested inside a substitution) does not close on the
+first `}` of that `}}`.
 
 An `add prefetch item` or `collect prefetch items` outside an open prefetch
 block is `E510`/`E511` - the agent rejects them there. Two prefetch/download
-producers declaring the same download name is `E512` (the second silently
-overwrites the first), and a `__Download\<name>` reference that nothing
+producers declaring the same download name in the same conditional context is
+`E512` (the second silently overwrites the first); declarations reached
+through different `if`/`elseif`/`else` branch choices are not compared, since
+cross-platform content routinely declares the same `name=` once per OS in a
+separate `if` per platform, and a `__Download\<name>` reference that nothing
 prefetches or downloads is `E513` - a typo catcher that is skipped entirely
 whenever any producer's names are unknowable (an `extract`/`unarchive`/
 `archive now`/`utility` command, a `download` with no `as <name>` and no
-literal URL basename, or a `{...}` substitution in a name or URL). An
+literal URL basename, or a `{...}` substitution in a name or URL); a
+`delete` or `folder delete` of a `__Download\<name>` is cleanup, not
+consumption, and never counts as a reference. A script can create files under
+`__Download` too, so `copy`/`move` destinations (including from
+`__createfile`) and shell redirection targets (`... > __Download\<name>`)
+count as producers. An
 `if`/`elseif` whose condition is not a `{...}` relevance substitution is
 `E514`. A `begin prefetch block` that is not at the top of the script is
 `E515`: only blank lines, `//` comments, `action parameter query` lines, and
