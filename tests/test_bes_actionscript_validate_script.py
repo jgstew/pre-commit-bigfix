@@ -2,7 +2,10 @@
 """Tests for pre_commit_bigfix/bes_actionscript_validate_script.py.
 
 These exercise the if/endif and begin/end prefetch block balance walk
-(E500-E507), the lxml-based extraction of every <ActionScript> from BES XML
+(E500-E507), the per-line {...} relevance-substitution brace balance
+(E508, E509), prefetch placement (E510, E511, E515), download-name
+consistency (E512, E513), if-condition shape (E514), unreachable code
+(W501), action-parameter-query placement (W502), the lxml-based extraction of every <ActionScript> from BES XML
 (sourceline-accurate linenos, case-insensitive MIMEType gating), raw non-.bes
 file checking, createfile-heredoc masking, the skip/opt-out markers,
 --disable, W500 on unparsable XML, the mustache-template skip, and main()'s
@@ -222,6 +225,359 @@ def test_if_open_at_end_prefetch_block_is_e507():
     issues = validator.check_actionscript(body)
     assert codes(issues) == ["E507"]
     assert issues[0][0] == 4
+
+
+# --- E508 / E509: {...} relevance substitution brace balance ------------------
+
+
+def test_balanced_substitution_reports_nothing():
+    body = "wait cmd /c echo {name of operating system} {now}"
+    assert validator.check_actionscript(body) == []
+
+
+def test_unclosed_substitution_is_e508():
+    body = "wait cmd /c echo ok\nwait cmd /c echo {name of operating system"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E508"]
+    assert issues[0][0] == 2
+    assert validator.SUBSTITUTION_MARKER in issues[0][2]
+
+
+def test_substitution_may_not_span_lines():
+    """The closing } on the next line does not close the previous line's {."""
+    body = "wait cmd /c echo {name of\noperating system}"
+    assert codes(validator.check_actionscript(body)) == ["E508", "E509"]
+
+
+def test_stray_close_brace_is_e509():
+    body = "wait cmd /c echo }"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E509"]
+    assert issues[0][0] == 1
+    assert validator.SUBSTITUTION_MARKER in issues[0][2]
+
+
+def test_double_open_brace_is_an_escape_not_a_substitution():
+    """`{{` passes a literal { through, so it opens nothing."""
+    assert validator.check_actionscript("wait cmd /c echo {{") == []
+
+
+def test_close_brace_after_an_escape_pairs_with_it():
+    """The } after a {{ closes out the escaped literal, not a substitution."""
+    assert validator.check_actionscript("wait cmd /c echo {{literal}") == []
+    assert validator.check_actionscript("wait cmd /c echo {{literal}}") == []
+
+
+def test_escape_then_real_substitution_still_balances():
+    body = "wait cmd /c echo {{ {name of operating system} }}"
+    assert validator.check_actionscript(body) == []
+
+
+def test_substitution_column_is_reported_from_the_raw_line():
+    issues = validator.check_actionscript("    wait cmd /c echo {x")
+    assert "column 22" in issues[0][2]
+
+
+def test_braces_in_a_comment_line_are_ignored():
+    assert validator.check_actionscript("// see {name of operating system") == []
+
+
+def test_braces_inside_createfile_block_are_ignored():
+    body = (
+        "createfile until END_OF_FILE\n"
+        "some } file { content\n"
+        "END_OF_FILE\n"
+        "wait cmd /c echo a"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_substitution_opt_out_marker_silences_e508(tmp_path):
+    content = bes("wait cmd /c echo {x", marker=validator.SUBSTITUTION_MARKER)
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_e509_silences_it(tmp_path):
+    issues = issues_for(tmp_path, bes("wait cmd /c echo }"), disabled={"E509"})
+    assert issues == []
+
+
+# --- prefetch line-shape constants stay in lockstep with the prefetch hook ----
+
+
+def test_prefetch_prefix_constants_match_the_prefetch_hook():
+    """Duplicated (not imported) to avoid the bigfix_prefetch dependency."""
+    from pre_commit_bigfix import bes_actionscript_validate_prefetch as prefetch
+
+    assert validator.NOHASH_PREFETCH == prefetch.NOHASH_PREFETCH
+    assert validator.BLOCK_PREFETCH == prefetch.BLOCK_PREFETCH
+    assert validator.STATEMENT_PREFETCH == prefetch.STATEMENT_PREFETCH
+
+
+# --- E510 / E511: prefetch-block-only commands outside a block ----------------
+
+
+def test_add_prefetch_item_outside_block_is_e510():
+    body = "add prefetch item name=x sha1=1 size=1 url=http://x/y"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E510"]
+    assert validator.PREFETCH_PLACEMENT_MARKER in issues[0][2]
+
+
+def test_add_nohash_prefetch_item_outside_block_is_e510():
+    body = "add nohash prefetch item name=x url=http://x/y"
+    assert codes(validator.check_actionscript(body)) == ["E510"]
+
+
+def test_collect_prefetch_items_outside_block_is_e511():
+    issues = validator.check_actionscript("collect prefetch items")
+    assert codes(issues) == ["E511"]
+    assert validator.PREFETCH_PLACEMENT_MARKER in issues[0][2]
+
+
+def test_block_commands_inside_a_block_report_nothing():
+    body = (
+        "begin prefetch block\n"
+        "add prefetch item name=a.exe sha1=1 size=1 url=http://x/a.exe\n"
+        "collect prefetch items\n"
+        "end prefetch block\n"
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+# --- E512: duplicate download names --------------------------------------------
+
+
+def test_duplicate_prefetch_name_is_e512():
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "prefetch a.exe sha1:y size:1 http://x/b.exe\n"
+        "wait __Download\\a.exe"
+    )
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E512"]
+    assert issues[0][0] == 2
+    assert validator.DOWNLOAD_MARKER in issues[0][2]
+
+
+def test_duplicate_name_across_producer_kinds_is_e512():
+    """A block item and a `download as` with the same name still collide."""
+    body = (
+        "begin prefetch block\n"
+        "add prefetch item name=a.exe sha1=1 size=1 url=http://x/a.exe\n"
+        "end prefetch block\n"
+        "download now as a.exe http://x/other.exe\n"
+        "wait __Download\\a.exe"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E512"]
+
+
+def test_duplicate_names_compare_case_insensitively():
+    body = (
+        "prefetch A.EXE sha1:x size:1 http://x/a.exe\n"
+        "prefetch a.exe sha1:y size:1 http://x/b.exe\n"
+        "wait __Download\\a.exe"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E512"]
+
+
+# --- E513: __Download reference with no producer -------------------------------
+
+
+def test_download_reference_with_no_producer_is_e513():
+    body = "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __Download\\b.exe"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E513"]
+    assert issues[0][0] == 2
+    assert validator.DOWNLOAD_MARKER in issues[0][2]
+
+
+def test_download_reference_matches_case_insensitively():
+    body = "prefetch A.exe sha1:x size:1 http://x/a.exe\nwait __download/a.EXE"
+    assert validator.check_actionscript(body) == []
+
+
+def test_literal_download_url_basename_counts_as_a_producer():
+    body = "download http://x/y.exe\nwait __Download\\y.exe"
+    assert validator.check_actionscript(body) == []
+
+
+def test_download_as_counts_as_a_producer():
+    body = "download now as z.exe http://x/y.exe\nwait __Download\\z.exe"
+    assert validator.check_actionscript(body) == []
+
+
+def test_extract_present_suppresses_e513():
+    """An archive's contents are unknowable, so no consumer can be judged."""
+    body = (
+        "prefetch a.zip sha1:x size:1 http://x/a.zip\n"
+        "extract a.zip\n"
+        "wait __Download\\inside.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_substituted_producer_name_suppresses_e513():
+    body = (
+        'prefetch {parameter "n"} sha1:x size:1 http://x/a.exe\n'
+        "wait __Download\\b.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_substituted_consumer_name_is_not_judged():
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        'wait __Download\\{parameter "n"}\n'
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+# --- E514: if/elseif condition must be a substitution ---------------------------
+
+
+def test_if_without_substitution_condition_is_e514():
+    issues = validator.check_actionscript("if true\nendif")
+    assert codes(issues) == ["E514"]
+    assert issues[0][0] == 1
+    assert validator.IF_MARKER in issues[0][2]
+
+
+def test_bare_if_is_e514():
+    assert codes(validator.check_actionscript("if\nendif")) == ["E514"]
+
+
+def test_elseif_without_substitution_condition_is_e514():
+    body = "if {true}\nelseif true\nendif"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E514"]
+    assert issues[0][0] == 2
+
+
+def test_if_with_substitution_and_no_space_is_fine():
+    assert validator.check_actionscript("if{true}\nendif") == []
+
+
+# --- E515: prefetch block must be at the top ------------------------------------
+
+
+def test_prefetch_block_after_a_command_is_e515():
+    body = "wait cmd /c echo a\nbegin prefetch block\nend prefetch block"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E515"]
+    assert issues[0][0] == 2
+    assert validator.PREFETCH_PLACEMENT_MARKER in issues[0][2]
+
+
+def test_preamble_lines_before_prefetch_block_are_fine():
+    body = (
+        "// header comment\n"
+        "\n"
+        'action parameter query "q" with description "d"\n'
+        'parameter "a" = "b"\n'
+        "begin prefetch block\n"
+        "add prefetch item name=a.exe sha1=1 size=1 url=http://x/a.exe\n"
+        "end prefetch block\n"
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_second_prefetch_block_is_e515_not_e504():
+    """Sequential (not nested) second block: not at the top, so E515."""
+    body = (
+        "begin prefetch block\n"
+        "end prefetch block\n"
+        "begin prefetch block\n"
+        "end prefetch block"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E515"]
+
+
+def test_nested_prefetch_block_is_e504_only():
+    body = "begin prefetch block\nbegin prefetch block\nend prefetch block"
+    assert codes(validator.check_actionscript(body)) == ["E502", "E504"]
+
+
+# --- W501: unreachable code after exit/restart/shutdown -------------------------
+
+
+def test_command_after_unconditional_exit_is_w501():
+    issues = validator.check_actionscript("exit 0\nwait a\nwait b")
+    assert codes(issues) == ["W501"]  # first dead line only
+    assert issues[0][0] == 2
+    assert validator.UNREACHABLE_MARKER in issues[0][2]
+
+
+def test_command_after_restart_is_w501():
+    assert codes(validator.check_actionscript("restart 60\nwait a")) == ["W501"]
+
+
+def test_exit_inside_an_if_is_conditional_and_fine():
+    body = "if {true}\nexit 0\nendif\nwait a"
+    assert validator.check_actionscript(body) == []
+
+
+def test_comment_after_exit_is_fine():
+    assert validator.check_actionscript("exit 0\n// done") == []
+
+
+# --- W502: action parameter query after execution began -------------------------
+
+
+def test_parameter_query_after_a_command_is_w502():
+    body = 'wait cmd /c echo a\naction parameter query "q" with description "d"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["W502"]
+    assert issues[0][0] == 2
+    assert validator.PARAMETER_QUERY_MARKER in issues[0][2]
+
+
+def test_parameter_query_at_the_top_is_fine():
+    body = 'action parameter query "q" with description "d"\nwait cmd /c echo a'
+    assert validator.check_actionscript(body) == []
+
+
+def test_parameter_query_after_only_declarations_is_fine():
+    """Prefetch/parameter/if lines do not count as execution having begun."""
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        'parameter "a" = "b"\n'
+        'action parameter query "q" with description "d"\n'
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+# --- new-check opt-outs and --disable -------------------------------------------
+
+
+def test_prefetch_placement_marker_silences_e510(tmp_path):
+    content = bes(
+        "add prefetch item name=x sha1=1 size=1 url=http://x/y",
+        marker=validator.PREFETCH_PLACEMENT_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_download_marker_silences_e513(tmp_path):
+    content = bes(
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __Download\\b.exe",
+        marker=validator.DOWNLOAD_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_if_marker_silences_e514(tmp_path):
+    content = bes("if true\nendif", marker=validator.IF_MARKER)
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_w501_silences_it(tmp_path):
+    issues = issues_for(tmp_path, bes("exit 0\nwait a"), disabled={"W501"})
+    assert issues == []
 
 
 # --- createfile heredocs are masked, not scanned ------------------------------

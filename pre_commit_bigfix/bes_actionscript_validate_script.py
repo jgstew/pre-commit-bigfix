@@ -25,8 +25,35 @@ Checks:
     E507  an `if` opened inside a prefetch block is still open when that
           block's `end prefetch block` is reached -- blocks interleave, they
           do not nest, so this cannot close cleanly
+    E508  a `{` relevance substitution has no closing `}` before the end of
+          its line (a substitution cannot span lines)
+    E509  a `}` with no `{` relevance substitution open on that line
+    E510  an `add prefetch item` / `add nohash prefetch item` outside an open
+          `begin prefetch block` (the agent rejects these outside a block)
+    E511  a `collect prefetch items` outside an open prefetch block
+    E512  two prefetch/download producers declare the same download name --
+          the second silently overwrites the first
+    E513  a command references `__Download\\<name>` but nothing prefetches or
+          downloads a file of that name (a typo catcher; skipped entirely
+          when any producer's names are unknowable -- see below)
+    E514  an `if` or `elseif` whose condition is not a `{...}` relevance
+          substitution (`if true`, bare `if`; the agent requires one)
+    E515  a `begin prefetch block` that is not at the top of the script --
+          only blank lines, `//` comments, `action parameter query` lines,
+          and `parameter` assignments may precede it. Plain `prefetch`
+          statements are NOT placement-checked; they are legal anywhere
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
+    W501  unreachable command: a line after an unconditional `exit`,
+          `restart`, or `shutdown` (one outside any `if`) can never run;
+          only the first unreachable line is reported
+    W502  an `action parameter query` after the first execution command --
+          these are console-time prompts and belong at the top
+
+E513 is conservative: it is skipped for a whole body whenever any producer's
+names cannot be known statically -- an `extract`/`unarchive`/`archive now`/
+`utility` command, a `download` with no `as <name>` whose URL is not a literal
+with a basename, or any producer name/URL containing a `{` substitution.
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given. This hook has no auto-fixes: a hook
@@ -59,6 +86,14 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-if-ok             (E500, E501, E505, E506)
     actionscript-prefetch-block-ok (E502, E503, E504)
     actionscript-block-nesting-ok  (E507)
+    actionscript-substitution-ok   (E508, E509)
+    actionscript-prefetch-placement-ok (E510, E511, E515)
+    actionscript-download-ok       (E512, E513)
+    actionscript-unreachable-ok    (W501)
+    actionscript-parameter-query-ok (W502)
+
+(E514 belongs to the `actionscript-if-ok` family above: it is an if-shape
+check.)
 
 Files that look like mustache templates (containing `{{ ... }}`) are skipped
 silently: they are not real content until rendered.
@@ -83,12 +118,29 @@ if __package__ in (None, ""):  # run directly as a script, not as a module
 # content rather than commands, and one implementation of that rule is enough.
 from pre_commit_bigfix.bes_actionscript_lint_schclass import _mask_heredocs
 
+# prefetch line-shape prefixes (matched against lowercased lines). These
+# mirror the same-named constants in bes_actionscript_validate_prefetch.py --
+# NOT imported from there, because that module imports the bigfix_prefetch
+# package, which this hook's isolated pre-commit environment does not carry.
+# tests/test_bes_actionscript_validate_script.py asserts they stay in lockstep.
+NOHASH_PREFETCH = "add nohash prefetch item"
+BLOCK_PREFETCH = "add prefetch item"
+STATEMENT_PREFETCH = "prefetch "
+
 SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-script"
 
 # per-check-family opt-out markers (matched anywhere in the file text)
 IF_MARKER = "actionscript-if-ok"  # E500, E501, E505, E506
 PREFETCH_BLOCK_MARKER = "actionscript-prefetch-block-ok"  # E502, E503, E504
 BLOCK_NESTING_MARKER = "actionscript-block-nesting-ok"  # E507
+# shared with the sibling schclass hook's E301 on purpose: one marker turns
+# off substitution complaints in both hooks, which is what a file that really
+# does contain odd braces wants.
+SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E508, E509
+PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, E515
+DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, E513
+UNREACHABLE_MARKER = "actionscript-unreachable-ok"  # W501
+PARAMETER_QUERY_MARKER = "actionscript-parameter-query-ok"  # W502
 
 CHECK_MARKERS = {
     "E500": IF_MARKER,
@@ -99,10 +151,40 @@ CHECK_MARKERS = {
     "E503": PREFETCH_BLOCK_MARKER,
     "E504": PREFETCH_BLOCK_MARKER,
     "E507": BLOCK_NESTING_MARKER,
+    "E508": SUBSTITUTION_MARKER,
+    "E509": SUBSTITUTION_MARKER,
+    "E510": PREFETCH_PLACEMENT_MARKER,
+    "E511": PREFETCH_PLACEMENT_MARKER,
+    "E512": DOWNLOAD_MARKER,
+    "E513": DOWNLOAD_MARKER,
+    "E514": IF_MARKER,
+    "E515": PREFETCH_PLACEMENT_MARKER,
+    "W501": UNREACHABLE_MARKER,
+    "W502": PARAMETER_QUERY_MARKER,
 }
 
 KNOWN_CODES = frozenset(
-    ["E500", "E501", "E502", "E503", "E504", "E505", "E506", "E507", "W500"]
+    [
+        "E500",
+        "E501",
+        "E502",
+        "E503",
+        "E504",
+        "E505",
+        "E506",
+        "E507",
+        "E508",
+        "E509",
+        "E510",
+        "E511",
+        "E512",
+        "E513",
+        "E514",
+        "E515",
+        "W500",
+        "W501",
+        "W502",
+    ]
 )
 
 BES_EXTENSIONS = (".bes", ".ojo")
@@ -120,10 +202,217 @@ _ELSE_RE = re.compile(r"^else\s*$", re.IGNORECASE)
 _ENDIF_RE = re.compile(r"^endif\s*$", re.IGNORECASE)
 _BEGIN_PREFETCH_BLOCK_RE = re.compile(r"^begin\s+prefetch\s+block\s*$", re.IGNORECASE)
 _END_PREFETCH_BLOCK_RE = re.compile(r"^end\s+prefetch\s+block\s*$", re.IGNORECASE)
+_ADD_PREFETCH_ITEM_RE = re.compile(
+    r"^add\s+(?:nohash\s+)?prefetch\s+item\b", re.IGNORECASE
+)
+_COLLECT_PREFETCH_ITEMS_RE = re.compile(
+    r"^collect\s+prefetch\s+items\s*$", re.IGNORECASE
+)
+_PREFETCH_STATEMENT_RE = re.compile(r"^prefetch\s+(\S+)", re.IGNORECASE)
+_DOWNLOAD_AS_RE = re.compile(r"^download(?:\s+now)?\s+as\s+(\S+)", re.IGNORECASE)
+_DOWNLOAD_RE = re.compile(r"^download(?:\s+now)?\s+(\S+)\s*$", re.IGNORECASE)
+_NAME_KV_RE = re.compile(r"\bname\s*=\s*(\S+)", re.IGNORECASE)
+# `__Download\<name>` (or forward slash) on a command line; the name stops at
+# whitespace, a quote, or another path separator
+_DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
+# producers whose output names cannot be known statically; their presence
+# turns E513 off for the whole body
+_UNKNOWABLE_PRODUCER_RE = re.compile(
+    r"^(?:extract|unarchive|archive\s+now|utility)\b", re.IGNORECASE
+)
+_TERMINATOR_RE = re.compile(r"^(?:exit|restart|shutdown)\b", re.IGNORECASE)
+_ACTION_PARAMETER_QUERY_RE = re.compile(r"^action\s+parameter\s+query\b", re.IGNORECASE)
+_PARAMETER_RE = re.compile(r"^parameter\b", re.IGNORECASE)
+
+# lines that do not count as "execution has started" for W502: declarations,
+# prompts, structure, and prefetching
+_NON_EXECUTION_RES = (
+    _BEGIN_PREFETCH_BLOCK_RE,
+    _END_PREFETCH_BLOCK_RE,
+    _ADD_PREFETCH_ITEM_RE,
+    _COLLECT_PREFETCH_ITEMS_RE,
+    _PREFETCH_STATEMENT_RE,
+    _PARAMETER_RE,
+    _ACTION_PARAMETER_QUERY_RE,
+    _IF_RE,
+    _ELSEIF_RE,
+    _ELSE_RE,
+    _ENDIF_RE,
+)
+
+
+def _check_substitution_braces(lineno, line):
+    """Check one line's `{...}` relevance substitutions for balance.
+
+    A substitution must open and close on the same line: the agent evaluates
+    it per line, so a `{` left open at end of line is not a substitution that
+    continues, it is a broken one (E508). A `}` reached with none open is the
+    mirror image (E509).
+
+    `{{` is an escape, not an opener: it passes a literal `{` through to the
+    command, so it neither opens a substitution nor makes the `}` that
+    follows a substitution close -- that `}` pairs with the escape instead.
+    `}}` is likewise a literal `}`. Escapes are counted so an escaped brace
+    absorbs a later lone `}` rather than being reported as stray, which keeps
+    this quiet on the escaping styles seen in real content.
+    """
+    issues = []
+    open_col = None  # column of the `{` that opened the current substitution
+    pending_escapes = 0  # `{{`/`}}` literals a lone `}` may pair with
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if open_col is None:
+            if line.startswith("{{", index) or line.startswith("}}", index):
+                pending_escapes += 1
+                index += 2
+                continue
+            if char == "{":
+                open_col = index + 1
+            elif char == "}":
+                if pending_escapes:
+                    pending_escapes -= 1
+                else:
+                    issues.append(
+                        (
+                            lineno,
+                            "E509",
+                            (
+                                f"unbalanced }} at column {index + 1} -- no `{{` "
+                                "relevance substitution is open on this line "
+                                f"(`{{{{` passes a literal brace through); add "
+                                f"`{SUBSTITUTION_MARKER}` if intentional"
+                            ),
+                        )
+                    )
+        elif char == "}":
+            open_col = None
+        index += 1
+
+    if open_col is not None:
+        issues.append(
+            (
+                lineno,
+                "E508",
+                (
+                    f"unbalanced {{ at column {open_col} -- the relevance "
+                    "substitution has no closing } before the end of the "
+                    "line, and a substitution cannot span lines (`{{` passes "
+                    f"a literal brace through); add `{SUBSTITUTION_MARKER}` "
+                    "if intentional"
+                ),
+            )
+        )
+    return issues
+
+
+def _url_basename(url):
+    """Return the last path segment of a literal URL, or None if unknowable."""
+    if "{" in url:
+        return None
+    base = url.rstrip("/").rsplit("/", 1)[-1]
+    if not base or "://" in base or base == url.rstrip("/"):
+        # no path at all (bare host), or nothing after the last slash
+        return None
+    return base
+
+
+def _check_download_names(lines):
+    """Check prefetch/download producer names against `__Download\\` consumers.
+
+    Returns E512 issues for duplicate producer names (the second declaration
+    silently overwrites the first) and E513 issues for a `__Download\\<name>`
+    consumer no producer creates. E513 is conservative: the moment any
+    producer's names are unknowable (an extract/unarchive/archive now/utility
+    command, a `download` with no `as <name>` and no literal URL basename, or
+    a name/URL containing a `{` substitution), the whole consumer check is
+    skipped -- a missed typo is better than a false alarm. E512 still runs on
+    the literal names that were collected.
+    """
+    issues = []
+    producers = {}  # lowercased name -> first lineno
+    knowable = True
+
+    def produce(lineno, name):
+        nonlocal knowable
+        if name is None or "{" in name:
+            knowable = False
+            return
+        name = name.strip("\"'").lower()
+        if not name:
+            knowable = False
+            return
+        if name in producers:
+            issues.append(
+                (
+                    lineno,
+                    "E512",
+                    (
+                        f'duplicate download name "{name}" (first declared on '
+                        f"line {producers[name]}); the second declaration "
+                        "silently overwrites the first; add "
+                        f"`{DOWNLOAD_MARKER}` if intentional"
+                    ),
+                )
+            )
+        else:
+            producers[name] = lineno
+
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        lowered = stripped.lower()
+        if _UNKNOWABLE_PRODUCER_RE.match(stripped):
+            knowable = False
+            continue
+        if lowered.startswith((BLOCK_PREFETCH, NOHASH_PREFETCH)):
+            match = _NAME_KV_RE.search(stripped)
+            produce(lineno, match.group(1) if match else None)
+            continue
+        if lowered.startswith(STATEMENT_PREFETCH):
+            match = _PREFETCH_STATEMENT_RE.match(stripped)
+            produce(lineno, match.group(1) if match else None)
+            continue
+        match = _DOWNLOAD_AS_RE.match(stripped)
+        if match:
+            produce(lineno, match.group(1))
+            continue
+        match = _DOWNLOAD_RE.match(stripped)
+        if match:
+            produce(lineno, _url_basename(match.group(1)))
+            continue
+
+    if knowable:
+        for index, raw_line in enumerate(lines):
+            lineno = index + 1
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            for name in _DOWNLOAD_REF_RE.findall(stripped):
+                if "{" in name:  # a substituted name is unknowable; skip it
+                    continue
+                if name.lower() not in producers:
+                    issues.append(
+                        (
+                            lineno,
+                            "E513",
+                            (
+                                f"`__Download\\{name}` is referenced but nothing "
+                                "prefetches or downloads a file of that name; "
+                                f"add `{DOWNLOAD_MARKER}` if intentional"
+                            ),
+                        )
+                    )
+    return issues
 
 
 def check_actionscript(body):
-    """Check a single ActionScript body for balanced if/prefetch-block pairing.
+    """Check a single ActionScript body for balanced blocks and substitutions.
+
+    Walks `if`/`endif` and `begin`/`end prefetch block` pairing across lines,
+    and `{...}` relevance-substitution braces within each line.
 
     Returns a sorted list of (lineno, code, message), lineno 1-based into
     `body`. `_mask_heredocs` blanks out `createfile until` block content
@@ -131,9 +420,13 @@ def check_actionscript(body):
     own E302 belongs to the sibling schclass hook, not here).
     """
     lines, _createfile_issues = _mask_heredocs(body.split("\n"))
-    issues = []
+    issues = _check_download_names(lines)  # E512 / E513
     if_stack = []  # each entry: [lineno, seen_else]
     prefetch_stack = []  # each entry: [lineno, if_depth_at_open]
+    preamble_over = False  # True once anything a prefetch block may not follow
+    first_execution_lineno = None  # first line that starts real execution
+    terminated_lineno = None  # unconditional exit/restart/shutdown, if any
+    unreachable_reported = False  # W501 fires once, on the first dead line
 
     for index, raw_line in enumerate(lines):
         lineno = index + 1
@@ -141,7 +434,78 @@ def check_actionscript(body):
         if not stripped or stripped.startswith("//"):
             continue
 
+        # brace balance is per line and independent of the block walk below,
+        # so it runs before any of the `continue`s that dispatch on the verb.
+        # The raw line is passed, not `stripped`, so reported columns line up
+        # with the file.
+        issues.extend(_check_substitution_braces(lineno, raw_line))
+
+        # unreachable code (W501): anything after an unconditional
+        # exit/restart/shutdown never runs; report the first such line only
+        if terminated_lineno is not None and not unreachable_reported:
+            unreachable_reported = True
+            issues.append(
+                (
+                    lineno,
+                    "W501",
+                    (
+                        "unreachable: the unconditional "
+                        f"exit/restart/shutdown on line {terminated_lineno} "
+                        "means this line can never run; add "
+                        f"`{UNREACHABLE_MARKER}` if intentional"
+                    ),
+                )
+            )
+
+        if _ACTION_PARAMETER_QUERY_RE.match(stripped):
+            if first_execution_lineno is not None:
+                issues.append(
+                    (
+                        lineno,
+                        "W502",
+                        (
+                            "`action parameter query` after execution began "
+                            f"on line {first_execution_lineno}; these are "
+                            "console-time prompts and belong at the top; add "
+                            f"`{PARAMETER_QUERY_MARKER}` if intentional"
+                        ),
+                    )
+                )
+            continue  # a prompt is preamble: opens/closes/starts nothing below
+
+        # placement bookkeeping for E515 and W502. `parameter` assignments
+        # and `action parameter query` (handled above) are preamble; anything
+        # else -- a prefetch block included -- ends the preamble.
+        is_preamble_line = bool(_PARAMETER_RE.match(stripped))
+        if _TERMINATOR_RE.match(stripped) and not if_stack:
+            terminated_lineno = lineno
+        if first_execution_lineno is None and not any(
+            regex.match(stripped) for regex in _NON_EXECUTION_RES
+        ):
+            first_execution_lineno = lineno
+        # any non-preamble line ends the preamble -- except the
+        # `begin prefetch block` line itself, whose own branch below must see
+        # the preamble state as it was BEFORE the block (and then ends it)
+        if not is_preamble_line and not _BEGIN_PREFETCH_BLOCK_RE.match(stripped):
+            preamble_over = True
+
         if _BEGIN_PREFETCH_BLOCK_RE.match(stripped):
+            # a nested block is E504 below; E515 on top of it would be noise
+            if preamble_over and not prefetch_stack:
+                issues.append(
+                    (
+                        lineno,
+                        "E515",
+                        (
+                            "`begin prefetch block` is not at the top of the "
+                            "script -- only blank lines, // comments, `action "
+                            "parameter query`, and `parameter` assignments "
+                            "may precede it; add "
+                            f"`{PREFETCH_PLACEMENT_MARKER}` if intentional"
+                        ),
+                    )
+                )
+            preamble_over = True
             if prefetch_stack:
                 issues.append(
                     (
@@ -190,11 +554,67 @@ def check_actionscript(body):
                     )
             continue
 
+        if _ADD_PREFETCH_ITEM_RE.match(stripped):
+            if not prefetch_stack:
+                issues.append(
+                    (
+                        lineno,
+                        "E510",
+                        (
+                            "`add prefetch item` outside an open `begin "
+                            "prefetch block`; the agent rejects it there; add "
+                            f"`{PREFETCH_PLACEMENT_MARKER}` if intentional"
+                        ),
+                    )
+                )
+            continue
+
+        if _COLLECT_PREFETCH_ITEMS_RE.match(stripped):
+            if not prefetch_stack:
+                issues.append(
+                    (
+                        lineno,
+                        "E511",
+                        (
+                            "`collect prefetch items` outside an open `begin "
+                            "prefetch block`; the agent rejects it there; add "
+                            f"`{PREFETCH_PLACEMENT_MARKER}` if intentional"
+                        ),
+                    )
+                )
+            continue
+
         if _IF_RE.match(stripped):
+            condition = stripped[_IF_RE.match(stripped).end() :].lstrip()
+            if not condition.startswith("{"):
+                issues.append(
+                    (
+                        lineno,
+                        "E514",
+                        (
+                            "`if` condition is not a `{...}` relevance "
+                            "substitution; the agent requires one; add "
+                            f"`{IF_MARKER}` if intentional"
+                        ),
+                    )
+                )
             if_stack.append([lineno, False])
             continue
 
         if _ELSEIF_RE.match(stripped):
+            condition = stripped[_ELSEIF_RE.match(stripped).end() :].lstrip()
+            if not condition.startswith("{"):
+                issues.append(
+                    (
+                        lineno,
+                        "E514",
+                        (
+                            "`elseif` condition is not a `{...}` relevance "
+                            "substitution; the agent requires one; add "
+                            f"`{IF_MARKER}` if intentional"
+                        ),
+                    )
+                )
             if not if_stack:
                 issues.append(
                     (

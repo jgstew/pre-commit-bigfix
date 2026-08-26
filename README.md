@@ -232,6 +232,32 @@ prefetch blocks do not nest. An `else` or `elseif` outside any open `if` is
 block's `end prefetch block` is `E507`, since blocks interleave rather than
 nest.
 
+Within a single line, a `{...}` relevance substitution that is never closed
+before end of line is `E508`, and a `}` reached with no substitution open is
+`E509`: a substitution is evaluated per line and cannot span lines. `{{` (and
+`}}`) is an escape that passes a literal brace through to the command, so it
+neither opens nor closes a substitution, and a later lone `}` pairs with that
+escape instead of being reported as stray.
+
+An `add prefetch item` or `collect prefetch items` outside an open prefetch
+block is `E510`/`E511` - the agent rejects them there. Two prefetch/download
+producers declaring the same download name is `E512` (the second silently
+overwrites the first), and a `__Download\<name>` reference that nothing
+prefetches or downloads is `E513` - a typo catcher that is skipped entirely
+whenever any producer's names are unknowable (an `extract`/`unarchive`/
+`archive now`/`utility` command, a `download` with no `as <name>` and no
+literal URL basename, or a `{...}` substitution in a name or URL). An
+`if`/`elseif` whose condition is not a `{...}` relevance substitution is
+`E514`. A `begin prefetch block` that is not at the top of the script is
+`E515`: only blank lines, `//` comments, `action parameter query` lines, and
+`parameter` assignments may precede it - plain `prefetch` statements are legal
+anywhere in a script and are not placement-checked.
+
+A command after an unconditional `exit`, `restart`, or `shutdown` (one outside
+any `if`) can never run and warns `W501` (first unreachable line only); an
+`action parameter query` after the first execution command warns `W502` -
+these are console-time prompts and belong at the top.
+
 This hook has no auto-fixes: a hook has no way to know where a missing
 `endif` or `end prefetch block` was meant to go, and guessing could silently
 change what the action does.
@@ -248,8 +274,14 @@ owns validity).
 A file opts out of every check here with
 `<!-- pre-commit-skip: bes-actionscript-validate-script -->` anywhere in it,
 or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
-`E506`), `actionscript-prefetch-block-ok` (`E502`, `E503`, `E504`), or
-`actionscript-block-nesting-ok` (`E507`). E-codes fail the hook; pass
+`E506`, `E514`), `actionscript-prefetch-block-ok` (`E502`, `E503`, `E504`),
+`actionscript-block-nesting-ok` (`E507`), `actionscript-substitution-ok`
+(`E508`, `E509` - the same marker `bes-actionscript-lint-schclass` uses for
+its `E301`, so one marker covers both hooks),
+`actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
+`actionscript-download-ok` (`E512`, `E513`), `actionscript-unreachable-ok`
+(`W501`), or `actionscript-parameter-query-ok` (`W502`). E-codes fail the
+hook; pass
 `--strict` to also fail on warnings.
 
 See the docstring in

@@ -158,8 +158,24 @@
     `elseif` outside any open `if` is E505; an `elseif` after `else`, or a
     second `else` for the same `if`, is E506; and an `if` opened inside a
     prefetch block that is still open at that block's `end prefetch block` is
-    E507, since blocks interleave rather than nest. E-codes fail the hook;
-    this hook has no auto-fixes, since a hook has no way to know where a
+    E507, since blocks interleave rather than nest. Within a single line, a
+    `{...}` relevance substitution left unclosed at end of line is E508 and a
+    `}` with no substitution open is E509 -- a substitution cannot span lines;
+    `{{` (and `}}`) passes a literal brace through rather than opening or
+    closing a substitution, and a lone `}` pairs with such an escape. An
+    `add prefetch item` or `collect prefetch items` outside an open prefetch
+    block is E510/E511; two producers declaring the same download name is
+    E512; a `__Download\<name>` reference nothing prefetches or downloads is
+    E513 (skipped whenever any producer's names are unknowable -- extract,
+    a `download` with no `as`, or a `{...}` in a name); an `if`/`elseif`
+    whose condition is not a `{...}` substitution is E514; and a
+    `begin prefetch block` not at the top of the script (only comments,
+    blank lines, `action parameter query`, and `parameter` assignments may
+    precede it) is E515 -- plain `prefetch` statements are legal anywhere
+    and are not placement-checked. A command after an unconditional
+    exit/restart/shutdown is unreachable and warns W501; an
+    `action parameter query` after execution began warns W502. E-codes
+    fail the hook; this hook has no auto-fixes, since a hook has no way to know where a
     missing `endif` or `end prefetch block` was meant to go, and guessing
     could silently change what the action does. Only
     application/x-Fixlet-Windows-Shell (matched case-insensitively) or
@@ -171,8 +187,14 @@
     are W500 (bes-schema-validate owns validity). A file opts out of every
     check here with `pre-commit-skip: bes-actionscript-validate-script`
     anywhere in it, or out of one family with `actionscript-if-ok` (E500,
-    E501, E505, E506), `actionscript-prefetch-block-ok` (E502, E503, E504), or
-    `actionscript-block-nesting-ok` (E507). E-codes fail the hook; pass
+    E501, E505, E506, E514), `actionscript-prefetch-block-ok` (E502, E503,
+    E504), `actionscript-block-nesting-ok` (E507),
+    `actionscript-substitution-ok` (E508, E509 -- the marker
+    bes-actionscript-lint-schclass also uses for its E301),
+    `actionscript-prefetch-placement-ok` (E510, E511, E515),
+    `actionscript-download-ok` (E512, E513), `actionscript-unreachable-ok`
+    (W501), or `actionscript-parameter-query-ok` (W502). E-codes fail the
+    hook; pass
     --strict to also fail on warnings.
   language: python
   pass_filenames: True

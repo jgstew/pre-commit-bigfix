@@ -1,5 +1,66 @@
 # Release Notes
 
+## v0.8.0
+
+Adds eight semantic checks to `bes-actionscript-validate-script`: prefetch
+placement, download-name consistency, if-condition shape, unreachable code,
+and `action parameter query` placement.
+
+### Added
+
+- **`E510` / `E511`**: an `add prefetch item` / `add nohash prefetch item`
+  (`E510`) or `collect prefetch items` (`E511`) outside an open
+  `begin prefetch block` - the agent rejects these outside a block.
+- **`E512`**: two prefetch/download producers (statement `prefetch <name>`,
+  block `add prefetch item name=<name>`, or `download [now] as <name>`, plus
+  a literal `download <url>` basename) declare the same download name,
+  compared case-insensitively - the second silently overwrites the first.
+- **`E513`**: a command references `__Download\<name>` but nothing prefetches
+  or downloads a file of that name - a typo catcher. Conservatively gated:
+  skipped for the whole body whenever any producer's names are unknowable
+  (an `extract`/`unarchive`/`archive now`/`utility` command, a `download`
+  with no `as <name>` and no literal URL basename, or a `{...}` substitution
+  in a name or URL), and a substituted consumer name is never judged.
+- **`E514`**: an `if` or `elseif` whose condition is not a `{...}` relevance
+  substitution (`if true`, bare `if`) - the agent requires one. Joins the
+  `actionscript-if-ok` opt-out family.
+- **`E515`**: a `begin prefetch block` that is not at the top of the script -
+  only blank lines, `//` comments, `action parameter query` lines, and
+  `parameter` assignments may precede it. Plain `prefetch` statements are
+  legal anywhere in a script and are deliberately not placement-checked.
+- **`W501`**: unreachable command - a line after an unconditional `exit`,
+  `restart`, or `shutdown` (one outside any `if`) can never run; only the
+  first unreachable line is reported.
+- **`W502`**: an `action parameter query` after the first execution command -
+  these are console-time prompts and belong at the top.
+- New opt-out markers, following the per-family pattern:
+  `actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
+  `actionscript-download-ok` (`E512`, `E513`), `actionscript-unreachable-ok`
+  (`W501`), and `actionscript-parameter-query-ok` (`W502`).
+
+No auto-fixes, same rationale as `E500`-`E509`: the hook cannot know intent.
+
+## v0.7.1
+
+Adds per-line `{...}` relevance-substitution brace balance to
+`bes-actionscript-validate-script`.
+
+### Added
+
+- **`E508` in `bes-actionscript-validate-script`**: a `{` relevance
+  substitution that is never closed by a `}` before the end of its line. A
+  substitution is evaluated per line and cannot span lines, so a `{` left open
+  at end of line is a broken substitution, not a continued one.
+- **`E509` in `bes-actionscript-validate-script`**: a `}` reached with no `{`
+  substitution open on that line.
+- `{{` (and `}}`) is treated as an escape that passes a literal brace through
+  to the command rather than opening or closing a substitution, and a later
+  lone `}` pairs with that escape instead of being reported as stray - so
+  escaped braces stay quiet.
+- Both codes opt out with `actionscript-substitution-ok`, the same marker
+  `bes-actionscript-lint-schclass` uses for its `E301`, so one marker covers
+  both hooks.
+
 ## v0.7.0
 
 Adds a new hook, `bes-actionscript-validate-script`: checks `if`/`endif` and
