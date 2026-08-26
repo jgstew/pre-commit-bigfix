@@ -33,6 +33,9 @@ patterns outside ActionScript bodies:
 - **`W216`**: a non-empty `<SourceSeverity>` that is not one of
   Low/Moderate/Important/Critical/Unspecified (exact case) - the corpus has
   `high`, `High`, and `Recommended`, none of which BigFix treats specially.
+  The default vocabulary can be replaced with a new `--severity-values`
+  flag (a comma-separated, exact-case list), for repos that use a different
+  severity scheme.
 - **`W217`** (only under the new `--check-filename` flag, off by default): a
   file's basename does not match its first content object's `<Title>`,
   sanitized for filename-illegal characters. Opt-in because several

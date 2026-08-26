@@ -47,9 +47,10 @@ prefetch-line shape and https URLs, CDATA usage, blank-line and
 trailing-whitespace spacing, empty ActionScript, dynamic download statements,
 a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
 non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
-names, unique Action IDs, SuccessCriteria body/Option consistency, a canonical
-SourceSeverity vocabulary, description placeholders / empty descriptions, and
-Task/Fixlet release-date / modification-time presence.
+names, unique Action IDs, SuccessCriteria body/Option consistency, a
+SourceSeverity vocabulary (default Low/Moderate/Important/Critical/Unspecified,
+overridable with `--severity-values`), description placeholders / empty
+descriptions, and Task/Fixlet release-date / modification-time presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`

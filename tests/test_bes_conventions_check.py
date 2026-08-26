@@ -1456,6 +1456,77 @@ def test_w216_marker_opts_out(tmp_path):
     assert "W216" not in codes(tmp_path, content)
 
 
+# --- --severity-values overrides the W216 vocabulary ------------------------
+
+
+def _severity_content(value):
+    return task().replace(
+        "<Source>test</Source>",
+        f"<Source>test</Source>\n\t\t<SourceSeverity>{value}</SourceSeverity>",
+    )
+
+
+def _codes_with_severities(tmp_path, content, severities, name="x.bes"):
+    path = write(tmp_path, name, content)
+    issues, _ = checker.check_file(path, severities=severities)
+    return sorted({item[1] for item in issues})
+
+
+def test_severity_values_allows_custom_vocabulary(tmp_path):
+    got = _codes_with_severities(
+        tmp_path, _severity_content("high"), frozenset({"low", "high", "critical"})
+    )
+    assert "W216" not in got
+
+
+def test_severity_values_still_flags_outside_custom_vocabulary(tmp_path):
+    got = _codes_with_severities(
+        tmp_path, _severity_content("Critical"), frozenset({"low", "high", "critical"})
+    )
+    # exact-case match: the canonical "Critical" is not in the lowercase set
+    assert "W216" in got
+
+
+def test_severity_values_replaces_rather_than_extends_default(tmp_path):
+    # Low is in the canonical default but not in this custom vocabulary
+    got = _codes_with_severities(
+        tmp_path, _severity_content("Low"), frozenset({"high"})
+    )
+    assert "W216" in got
+
+
+def test_severity_values_none_keeps_canonical_default(tmp_path):
+    assert "W216" not in codes(tmp_path, _severity_content("Critical"))
+
+
+def test_severity_values_empty_string_always_allowed(tmp_path):
+    got = _codes_with_severities(tmp_path, _severity_content(""), frozenset({"high"}))
+    assert "W216" not in got
+
+
+def test_main_severity_values_cli_flag(tmp_path, capsys):
+    path = write(tmp_path, "x.bes", _severity_content("high"))
+    rc = checker.main(["--severity-values", "low,high,critical", path])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "W216" not in out
+
+
+def test_main_severity_values_cli_flag_still_flags(tmp_path, capsys):
+    path = write(tmp_path, "x.bes", _severity_content("Recommended"))
+    rc = checker.main(["--strict", "--severity-values", "low,high,critical", path])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "W216" in out
+
+
+def test_main_without_severity_values_uses_canonical_default(tmp_path, capsys):
+    path = write(tmp_path, "x.bes", _severity_content("high"))
+    checker.main([path])
+    out = capsys.readouterr().out
+    assert "W216" in out
+
+
 # --- W217 filename vs Title (--check-filename only) -------------------------
 
 

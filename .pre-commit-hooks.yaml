@@ -33,11 +33,12 @@
     a UTF-8 XML declaration; Title placeholders/whitespace/TODO markers;
     non-trivial non-empty Relevance with no stray whitespace; unique MIMEField
     names; unique Action IDs; SuccessCriteria body/Option consistency;
-    a canonical SourceSeverity vocabulary; description-placeholder and
-    empty-Description; and Task/Fixlet release-date/modification-time presence
-    and download actions. Auto-fixes the fixable ones in place (DownloadSize ->
-    0, missing dates -> now, blank-line collapse, Title trim, Relevance
-    whitespace trim, trailing-whitespace strip, XML-declaration
+    a SourceSeverity vocabulary (default Low/Moderate/Important/Critical/
+    Unspecified, overridable with --severity-values); description-placeholder
+    and empty-Description; and Task/Fixlet release-date/modification-time
+    presence and download actions. Auto-fixes the fixable ones in place
+    (DownloadSize -> 0, missing dates -> now, blank-line collapse, Title trim,
+    Relevance whitespace trim, trailing-whitespace strip, XML-declaration
     insert/normalize; and, under --strict, CDATA wrapping) and exits 1 when
     anything was fixed. --check-filename (off by default) additionally checks
     that a file's basename matches its first content object's Title. Unparsable

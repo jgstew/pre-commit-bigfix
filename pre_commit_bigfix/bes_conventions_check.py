@@ -89,7 +89,7 @@ Checks:
     W215  a Task/Fixlet <Description> is empty or missing (distinct from
           E204's boilerplate-placeholder check)
     W216  a non-empty <SourceSeverity> is not one of Low/Moderate/Important/
-          Critical/Unspecified (exact case)
+          Critical/Unspecified (exact case) -- override with --severity-values
     W217  (only with --check-filename) a file's basename does not match its
           first content object's <Title>, sanitized for filename-illegal
           characters (/, backslash, :, *, ?, ", <, >, | -> _)
@@ -147,12 +147,21 @@ auto-fixed file fails the hook so the change is reviewed and re-staged.
 
 Usage:
     bes_conventions_check.py [--strict] [--errors-only] [--auto-fix=yes|no]
-        [--disable E200,W201] [--check-filename] [file.bes ...]
+        [--disable E200,W201] [--check-filename]
+        [--severity-values Low,Moderate,Important,Critical,Unspecified]
+        [file.bes ...]
 
 --check-filename is OFF by default: it enables W217 (a file's basename must
 match its first content object's Title, sanitized for filename-illegal
 characters). It is opt-in because many repos deliberately version or
 otherwise diverge a Title from its filename.
+
+--severity-values overrides the vocabulary W216 accepts for a non-empty
+<SourceSeverity> (default: Low, Moderate, Important, Critical, Unspecified,
+matched exact-case). Pass a comma-separated list of the values this repo
+considers valid, e.g. --severity-values "low,medium,high,critical"; an empty
+value in the list is ignored, and an empty <SourceSeverity> is always allowed
+regardless of this setting.
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
@@ -208,6 +217,7 @@ Exit codes:
 """
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -1159,12 +1169,16 @@ def check_evaluation_period(src):
     return issues
 
 
-def check_source_severity(src):
-    """W216: a non-empty <SourceSeverity> must be in the canonical vocabulary."""
+def check_source_severity(src, allowed=CANONICAL_SEVERITIES):
+    """W216: a non-empty <SourceSeverity> must be in the allowed vocabulary.
+
+    `allowed` defaults to CANONICAL_SEVERITIES but can be overridden (see
+    --severity-values) to whatever exact-case values a repo wants to permit.
+    """
     issues = []
     for match in SOURCE_SEVERITY_RE.finditer(src):
         value = _strip_cdata(match.group(1)).strip()
-        if value == "" or value in CANONICAL_SEVERITIES:
+        if value == "" or value in allowed:
             continue
         issues.append(
             (
@@ -1172,8 +1186,7 @@ def check_source_severity(src):
                 "W216",
                 (
                     f'SourceSeverity "{value}" is not one of '
-                    f"{sorted(CANONICAL_SEVERITIES)}; add `{SEVERITY_MARKER}` if "
-                    "intentional"
+                    f"{sorted(allowed)}; add `{SEVERITY_MARKER}` if intentional"
                 ),
             )
         )
@@ -1455,21 +1468,42 @@ PRESENCE_MARKERS = (
 )
 
 
-def _run_checks(src, root, disabled):
+def _value_checks(severities=None):
+    """Return VALUE_CHECKS, with check_source_severity bound to `severities`.
+
+    `severities` is None (the default -- use CANONICAL_SEVERITIES) unless
+    --severity-values overrides it; only check_source_severity takes this
+    parameter, so every other entry is passed through unchanged.
+    """
+    if severities is None:
+        return VALUE_CHECKS
+    return tuple(
+        (
+            (codes, marker, functools.partial(check, allowed=severities))
+            if check is check_source_severity
+            else (codes, marker, check)
+        )
+        for codes, marker, check in VALUE_CHECKS
+    )
+
+
+def _run_checks(src, root, disabled, severities=None):
     """Run every check on each content object independently; return sorted issues.
 
     Each block's checks see only that block's text, and a marker governs a block
     only if it sits inside it or outside all objects (file-level). Local line
     numbers from the per-block scans are offset back to the file's line numbers.
+    `severities` overrides the W216 vocabulary (see --severity-values).
     """
     blocks = _content_object_blocks(root, src)
     outside = _outside_text(src, blocks)
+    value_checks = _value_checks(severities)
     issues = []
     for start, _end, element in blocks:
         block = src[start:_end]
         start_line = _lineno(src, start)
         marker_text = block + outside
-        for codes, marker, check in VALUE_CHECKS:
+        for codes, marker, check in value_checks:
             if marker in marker_text or all(code in disabled for code in codes):
                 continue
             for lineno, found_code, message in check(block):
@@ -1907,6 +1941,7 @@ def check_file(
     auto_fix=False,
     now=None,
     check_filename=False,
+    severities=None,
 ):
     """Check one BES file; return (issues, fixed).
 
@@ -1921,7 +1956,8 @@ def check_file(
     file is entirely CRLF. Read-only, a file that is not all-CRLF is an E208
     error. The file is read as raw bytes and normalized to LF in memory so the
     checks are line-ending agnostic. `check_filename` enables W217 (off by
-    default, matching --check-filename).
+    default, matching --check-filename). `severities`, if given, overrides
+    W216's allowed SourceSeverity vocabulary (see --severity-values).
     """
     if not os.path.isfile(path):
         return [(1, "W200", "file not found; skipping")], []
@@ -1976,7 +2012,7 @@ def check_file(
         except ElementTree.ParseError as err:
             return [(1, "W200", f"not parseable BES XML after fixes ({err})")], fixed
 
-    issues = _run_checks(src, root, disabled)
+    issues = _run_checks(src, root, disabled, severities=severities)
     # file-level checks on the final src (after any fixes); in auto-fix mode
     # these come back clean unless the specific fix was disabled.
     if "E214" not in disabled and XML_DECL_MARKER not in src:
@@ -2007,7 +2043,12 @@ def is_bes_file(path):
 
 
 def check_files(
-    paths, disabled=frozenset(), strict=False, auto_fix=False, check_filename=False
+    paths,
+    disabled=frozenset(),
+    strict=False,
+    auto_fix=False,
+    check_filename=False,
+    severities=None,
 ):
     """Check several BES files; return a list of (path, issues, fixed) tuples.
 
@@ -2024,6 +2065,7 @@ def check_files(
             strict=strict,
             auto_fix=auto_fix,
             check_filename=check_filename,
+            severities=severities,
         )
         issues = [item for item in issues if item[1] not in disabled]
         fixed = [item for item in fixed if item[1] not in disabled]
@@ -2096,6 +2138,16 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--severity-values",
+        default=None,
+        metavar="VALUES",
+        help=(
+            "comma-separated SourceSeverity values W216 accepts (exact case), "
+            "overriding the default vocabulary: "
+            f"{','.join(sorted(CANONICAL_SEVERITIES))}"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help=(
@@ -2112,6 +2164,12 @@ def main(argv=None):
     if unknown:
         print(
             f"warning: ignoring unknown --disable code(s): {', '.join(sorted(unknown))}"
+        )
+
+    severities = None
+    if args.severity_values is not None:
+        severities = frozenset(
+            value.strip() for value in args.severity_values.split(",") if value.strip()
         )
 
     # auto-fix defaults to yes for explicit files, no when auto-discovering; an
@@ -2132,6 +2190,7 @@ def main(argv=None):
         strict=args.strict,
         auto_fix=auto_fix,
         check_filename=args.check_filename,
+        severities=severities,
     ):
         for lineno, check_id, message in fixed:
             fix_count += 1
