@@ -594,6 +594,12 @@ def test_w206_valid_add_prefetch_item(tmp_path):
     assert "W206" not in codes(tmp_path, task(download_size="10", body=body))
 
 
+def test_w206_valid_sha1_less_prefetch_statement(tmp_path):
+    """Current BigFix clients accept a statement with sha256 alone."""
+    body = "\nprefetch x.pkg size:10 https://e/x sha256:{}\n".format("b" * 64)
+    assert "W206" not in codes(tmp_path, task(download_size="10", body=body))
+
+
 def test_w206_malformed_prefetch(tmp_path):
     # missing the sha256 field
     body = "\nprefetch x.pkg sha1:%s size:10 https://e/x\n" % ("a" * 40)

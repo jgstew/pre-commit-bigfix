@@ -162,7 +162,7 @@ def test_valid_prefetches_report_nothing():
             GOOD_STATEMENT.replace(f"sha256:{SHA256}", "sha256:8d9b5190"),
             "sha256 not the",
         ),
-        ("prefetch garbage-with-no-fields", "size is missing"),
+        (f"prefetch garbage-with-no-fields sha1:{SHA1}", "size is missing"),
     ],
 )
 def test_invalid_prefetch_is_e400_with_the_reason(body, fragment):
@@ -190,10 +190,32 @@ def test_block_item_without_sha1_warns():
     assert codes(validator.validate_actionscript(body)) == ["W402"]
 
 
-def test_statement_without_sha1_is_an_error():
-    """Sha1 is mandatory in a prefetch statement, unlike in a block item."""
+def test_statement_without_sha1_warns():
+    """Current BigFix clients accept a statement with sha256 alone.
+
+    Upstream can't even parse a sha1-less statement (its `sha1:` regex has no
+    `try`), so this hook splices in a placeholder to check everything else and
+    reports the missing sha1 itself, as an advisory W405 rather than E400.
+    """
     body = GOOD_STATEMENT.replace(f"sha1:{SHA1} ", "")
-    assert codes(validator.validate_actionscript(body)) == ["E400"]
+    assert codes(validator.validate_actionscript(body)) == ["W405"]
+
+
+def test_statement_without_either_hash_reports_both():
+    """A sha1-less, sha256-less statement gets both codes, block-item style."""
+    body = GOOD_STATEMENT.replace(f"sha1:{SHA1} ", "").replace(f" sha256:{SHA256}", "")
+    assert sorted(codes(validator.validate_actionscript(body))) == ["E401", "W405"]
+
+
+def test_statement_without_sha1_and_bad_size_still_reports_e400():
+    """The placeholder sha1 splice must not swallow a real defect like size:0."""
+    body = GOOD_STATEMENT.replace(f"sha1:{SHA1} ", "").replace("size:167936", "size:0")
+    assert sorted(codes(validator.validate_actionscript(body))) == ["E400", "W405"]
+
+
+def test_disable_w405(tmp_path):
+    body = GOOD_STATEMENT.replace(f"sha1:{SHA1} ", "")
+    assert issues_for(tmp_path, bes(body), disabled={"W405"}) == []
 
 
 def test_missing_hash_is_reported_once():
@@ -231,7 +253,10 @@ def test_line_numbers_are_local_to_the_body():
 
 
 def test_linenos_map_back_to_the_file(tmp_path):
-    issues = issues_for(tmp_path, bes("prefetch bad size:0 http://example.com/x"))
+    issues = issues_for(
+        tmp_path,
+        bes(f"prefetch bad sha1:{SHA1} size:0 http://example.com/x sha256:{SHA256}"),
+    )
     assert codes(issues) == ["E400"]
     assert issues[0][0] == 7  # the <ActionScript> line of the generated document
 
@@ -243,7 +268,14 @@ def test_non_actionscript_mimetypes_are_skipped(tmp_path):
 
 
 def test_missing_mimetype_is_actionscript(tmp_path):
-    content = bes([("prefetch bad size:0 http://example.com/x", None)])
+    content = bes(
+        [
+            (
+                f"prefetch bad sha1:{SHA1} size:0 http://example.com/x sha256:{SHA256}",
+                None,
+            )
+        ]
+    )
     assert codes(issues_for(tmp_path, content)) == ["E400"]
 
 
@@ -269,7 +301,9 @@ def test_missing_file_is_w400(tmp_path):
 
 def test_raw_actionscript_file_is_checked(tmp_path):
     issues = issues_for(
-        tmp_path, "prefetch bad size:0 http://example.com/x\n", name="x.txt"
+        tmp_path,
+        f"prefetch bad sha1:{SHA1} size:0 http://example.com/x sha256:{SHA256}" + "\n",
+        name="x.txt",
     )
     assert codes(issues) == ["E400"]
 
@@ -514,6 +548,23 @@ def test_network_fix_respects_disable_and_the_opt_out_marker(tmp_path, downloade
     assert downloaded == []
 
 
+def test_network_fix_on_a_sha1_less_statement_is_w404_and_changes_nothing(tmp_path):
+    """A sha1-less statement can't be verified against anything, so it stays.
+
+    No download stub here: upstream's own `parse_prefetch()` raises before any
+    network call is made (its `sha1:` regex has no `try`), so this exercises
+    the real `sha256_added_prefetch()` and confirms the failure surfaces as
+    W404 rather than crashing the run, and the line is left as it is.
+    """
+    body = GOOD_STATEMENT.replace(f"sha1:{SHA1} ", "").replace(f" sha256:{SHA256}", "")
+    path = write(tmp_path, "x.bes", bes(body))
+    before = open(path, "rb").read()
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert fixed == []
+    assert sorted(codes(issues)) == ["E401", "W404", "W405"]
+    assert open(path, "rb").read() == before
+
+
 def test_sha256_added_prefetch_keeps_the_original_name(monkeypatch):
     """Upstream names the file after the URL basename; the line's name wins."""
     line = (
@@ -595,7 +646,9 @@ def test_the_prefetch_ok_marker_opts_out_of_every_check(tmp_path, body):
 
 
 def test_disable_skips_a_code(tmp_path):
-    content = bes("prefetch bad size:0 http://example.com/x")
+    content = bes(
+        f"prefetch bad sha1:{SHA1} size:0 http://example.com/x sha256:{SHA256}"
+    )
     assert issues_for(tmp_path, content, disabled={"E400"}) == []
 
 
@@ -624,6 +677,19 @@ def test_main_warning_only_fails_under_strict(tmp_path, capsys):
     path = write(tmp_path, "warn.bes", bes(body))
     assert validator.main([path]) == 0
     assert "[W402]" in capsys.readouterr().out
+    assert validator.main(["--strict", path]) == 1
+
+
+def test_main_on_a_sha1_less_statement_warns_but_passes(tmp_path, capsys):
+    """The shape that prompted W405: a real-world sha256-only statement."""
+    body = (
+        "prefetch win-x64-tcping.exe size:2075136 "
+        "https://github.com/Tcp-Ping/Tcping/releases/download/v0.1.1/"
+        f"win-x64-tcping.exe sha256:{SHA256}"
+    )
+    path = write(tmp_path, "warn.bes", bes(body))
+    assert validator.main([path]) == 0
+    assert "[W405]" in capsys.readouterr().out
     assert validator.main(["--strict", path]) == 1
 
 

@@ -98,8 +98,8 @@
     the `add prefetch item name=... sha1=... size=... url=... sha256=...`
     block item. A line that fails validation is E400, carrying the reason
     bigfix_prefetch reported (size missing or not > 0, a hash of the wrong
-    length, a sha1 missing from a prefetch statement, an unparsable line).
-    A missing sha256 is E401: upstream treats sha256 as optional, this hook
+    length, an unparsable line). A missing sha256 is E401: upstream treats
+    sha256 as optional, this hook
     treats it as mandatory, and it is its own code so a repo that still wants
     it optional can pass --disable E401, and --auto-fix-network adds the
     missing sha256 instead of reporting it (see below). A prefetch downloading
@@ -110,7 +110,9 @@
     bigfix_prefetch in whichever spelling the line already used and keeping
     the original download's name; an auto-fixed file fails the hook so the
     change is reviewed and re-staged. A prefetch block item with no sha1
-    warns (W402), and an `add nohash prefetch item` line is reported rather
+    warns (W402); a prefetch statement with no sha1 warns (W405) instead of
+    failing the line, since current BigFix clients accept a statement with
+    sha256 alone. An `add nohash prefetch item` line is reported rather
     than validated (W403) since it is hashless by definition -- on the old
     URL it is reported but not rewritten, since a hashed prefetch would
     change what the line does. --auto-fix-network, OFF by default, adds the

@@ -125,8 +125,7 @@ add prefetch item name=<name> sha1=<40> size=<n> url=<url> sha256=<64>
 
 A line that fails validation is `E400`, carrying the reason `bigfix_prefetch`
 reported: a missing size or a size that is not > 0, a hash of the wrong
-length, a sha1 missing from a prefetch statement (where it is mandatory), or a
-line that could not be parsed at all.
+length, or a line that could not be parsed at all.
 
 A missing sha256 is `E401`. `bigfix_prefetch` calls sha256 optional unless
 asked, but in 2026 it is treated as mandatory here. It gets its own code
@@ -138,7 +137,9 @@ optional can turn just that off:
         args: ["--disable", "E401"]
 ```
 
-A prefetch block item with no sha1 warns (`W402`), and an
+A prefetch block item with no sha1 warns (`W402`); a prefetch *statement* with
+no sha1 warns (`W405`) instead of failing the line - current BigFix clients
+accept a statement with sha256 alone, so this is unusual but valid. An
 `add nohash prefetch item` line is reported rather than validated (`W403`),
 since it is hashless by definition and its download cannot be verified.
 

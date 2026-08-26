@@ -1,5 +1,20 @@
 # Release Notes
 
+## v0.8.2
+
+### Changed
+
+- **`bes-actionscript-validate-prefetch`**: a prefetch *statement* with no
+  sha1 no longer fails as `E400`. Current BigFix clients accept a statement
+  with sha256 alone, and the old `E400` message ("could not be parsed") was
+  actually upstream `bigfix_prefetch` choking on the missing sha1, not a real
+  parse failure. It is now its own advisory code, `W405`, on the same footing
+  as `W402`'s block-item case - still reported, but does not fail the hook
+  unless `--strict` is given.
+- **`bes-conventions-check`**: `W206`'s prefetch-shape regex no longer
+  requires `sha1:<40>` in the statement form when a `sha256:<64>` is present,
+  matching the `W405` judgement above.
+
 ## v0.8.1
 
 Fixes false positives found by running v0.8.0's new checks against real

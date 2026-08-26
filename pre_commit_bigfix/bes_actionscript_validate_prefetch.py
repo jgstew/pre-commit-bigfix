@@ -12,17 +12,18 @@ covered:
     add prefetch item name=<name> sha1=<40> size=<n> url=<url> sha256=<64>
 
 SCOPE: this hook only answers "is this prefetch line internally valid" --
-size present and > 0, hash lengths right, sha1 mandatory in a prefetch
-statement, sha256 present. It is deliberately offline: nothing here downloads
-the URL or checks that the hashes match the real file. The line's overall
-shape and its http-vs-https scheme are W206/W207 in bes-conventions-check, and
-its lexical validity is E300 in bes-actionscript-lint-schclass -- three
-altitudes on the same line, all intentional.
+size present and > 0, hash lengths right, sha256 present, sha1 present when the
+line is a prefetch statement without a sha256. It is deliberately offline:
+nothing here downloads the URL or checks that the hashes match the real file.
+The line's overall shape and its http-vs-https scheme are W206/W207 in
+bes-conventions-check, and its lexical validity is E300 in
+bes-actionscript-lint-schclass -- three altitudes on the same line, all
+intentional.
 
 Checks:
     E400  a prefetch line is invalid; the reason is the message
-          `validate_prefetch()` reported (bad size, wrong hash length, a
-          missing mandatory sha1, an unparsable line, ...)
+          `validate_prefetch()` reported (bad size, wrong hash length, an
+          unparsable line, ...)
     E401  a prefetch line has no sha256. Upstream treats sha256 as optional
           unless asked; this hook treats it as mandatory, because in 2026 it
           is what enhanced security requires. It is its own code so a repo
@@ -38,6 +39,12 @@ Checks:
           would not download, or what came back did not match the size and
           sha1 already on the line. The E401 stands; this says why the fix did
           not land.
+    W405  a prefetch statement has no sha1. Current BigFix clients accept a
+          statement with sha256 alone, so this is valid but unusual --
+          previously this hook (following upstream) treated it as mandatory
+          and failed the line as E400 with a misleading "could not be parsed"
+          message; it is now its own advisory code, same footing as W402's
+          block-item case.
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given.
@@ -147,7 +154,9 @@ SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-prefetch"
 # marker is what was asked for.
 PREFETCH_MARKER = "prefetch-ok"
 
-KNOWN_CODES = frozenset(["E400", "E401", "E402", "W400", "W402", "W403", "W404"])
+KNOWN_CODES = frozenset(
+    ["E400", "E401", "E402", "W400", "W402", "W403", "W404", "W405"]
+)
 
 # Seconds any one --auto-fix-network download may stall for. bigfix_prefetch
 # calls urlopen() without a timeout, which can hang a commit indefinitely, so
@@ -250,6 +259,39 @@ def has_sha256(line):
     return "sha256" in line.lower()
 
 
+# Fed to validate_prefetch() only, to check the rest of a sha1-less statement
+# through the reference implementation; never parsed for its value and never
+# written to a file. See statement_missing_sha1()/_with_placeholder_sha1().
+PLACEHOLDER_SHA1 = "0" * 40
+
+
+def statement_missing_sha1(line):
+    """Say whether `line` is a prefetch *statement* with no sha1.
+
+    A prefetch block item with no sha1 is W402's business (upstream parses it
+    fine, sha1 just being optional there); a statement is different -- upstream
+    `parse_prefetch()` has no `try` around its `sha1:` regex for a statement,
+    so a sha1-less one raises `AttributeError` instead of reporting anything
+    useful. This is the pre-check that catches that case before it reaches
+    `validate_prefetch()`.
+    """
+    lowered = line.strip().lower()
+    return lowered.startswith(STATEMENT_PREFETCH) and " sha1:" not in lowered
+
+
+def _with_placeholder_sha1(line):
+    """Return `line` with a placeholder sha1 spliced in after the size field.
+
+    Lets a sha1-less statement be checked for every *other* defect (bad size,
+    wrong sha256 length, ...) through the real `validate_prefetch()` rather
+    than re-implementing its statement regexes here. The placeholder is never
+    parsed for its value, never reported in a message (messages are trimmed
+    to their first line by `_first_line()`, which drops the raw prefetch
+    upstream appends), and never written back to the file.
+    """
+    return re.sub(r" size:", f" sha1:{PLACEHOLDER_SHA1} size:", line, count=1)
+
+
 def sha256_added_prefetch(line):
     """Download the prefetch's file and return the same line with sha256 added.
 
@@ -307,11 +349,19 @@ def validate_prefetch_line(line):
     verdict into its own E401 -- upstream treats it as optional-unless-asked,
     this hook treats it as mandatory, and giving it a code of its own is what
     lets `--disable E401` put it back to optional for a repo that wants that.
+
+    A sha1-less prefetch *statement* is a separate pre-check (W405): upstream
+    cannot even parse such a line (see `statement_missing_sha1()`), so it is
+    validated with a placeholder sha1 spliced in instead, to catch every
+    *other* defect through the real `validate_prefetch()` rather than one
+    reimplemented here.
     """
+    is_sha1_less_statement = statement_missing_sha1(line)
+    line_to_validate = _with_placeholder_sha1(line) if is_sha1_less_statement else line
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")  # the same reason may repeat per line
         try:
-            valid = validate_prefetch(line)
+            valid = validate_prefetch(line_to_validate)
         except (AttributeError, TypeError, ValueError) as err:
             # validate_prefetch handles the unparsable-line case itself (its
             # regexes returning None); this is the belt-and-braces path for a
@@ -333,7 +383,18 @@ def validate_prefetch_line(line):
                 ),
             )
         )
-    if any(_is_missing(message, "sha1") for message in messages):
+    if is_sha1_less_statement:
+        issues.append(
+            (
+                "W405",
+                (
+                    "prefetch statement has no sha1; sha256 alone is accepted "
+                    "by current BigFix clients, so this is valid but unusual "
+                    f"-- add one, or `{PREFETCH_MARKER}` if intentional"
+                ),
+            )
+        )
+    elif any(_is_missing(message, "sha1") for message in messages):
         issues.append(
             (
                 "W402",

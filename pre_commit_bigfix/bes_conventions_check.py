@@ -64,7 +64,9 @@ Checks:
           change its meaning)
     W205  an <ActionScript> has more than one blank line before </ActionScript>
           (fixable -> collapsed to one)
-    W206  a prefetch / "add prefetch item" line does not match the expected shape
+    W206  a prefetch / "add prefetch item" line does not match the expected
+          shape; a prefetch statement's sha1 is optional when it has a sha256
+          (current BigFix clients accept a sha256-only statement)
     W207  a prefetch / "add prefetch item" URL is not https
     W208  an <ActionScript> body is empty (only blank lines and //-comments)
     W209  a <Title> has leading/trailing whitespace/newlines or embedded tabs
@@ -271,9 +273,13 @@ DATA_URI_RE = re.compile(r"^data:[\w.+-]+/[\w.+-]+(?:;[\w.+-]+)*,.+$", re.DOTALL
 # icon is a base64 blob that would otherwise bury the rest of the report.
 VALUE_QUOTE_LIMIT = 120
 
-# a prefetch statement or an "add prefetch item" line (user-supplied shape)
+# a prefetch statement or an "add prefetch item" line (user-supplied shape).
+# A statement's sha1 is optional -- but only when it has a sha256, current
+# BigFix clients accept a sha256-only statement (bes-actionscript-validate-
+# prefetch's W405 is the same judgement); a block item's sha1 is unaffected
+# here, that is W402's business in the sibling hook, not a shape issue.
 PREFETCH_OK_RE = re.compile(
-    r"(^prefetch \S+ sha1:\S{40} size:\d+ https*:\/\/\S+ sha256:\S{64}$"
+    r"(^prefetch \S+ (sha1:\S{40} )?size:\d+ https*:\/\/\S+ sha256:\S{64}$"
     r"|^\s+add prefetch item name=\S+ sha1=\S{40} size=\d+ url=https*:\/\/\S+"
     r" sha256=\S{64}$)"
 )
