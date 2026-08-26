@@ -407,6 +407,15 @@ def test_mustache_template_skipped(tmp_path):
     assert codes(tmp_path, content) == []
 
 
+def test_literal_double_braces_in_a_heredoc_are_not_a_mustache_template(tmp_path):
+    # `{{` is also the ActionScript escape for a literal `{`; a heredoc payload
+    # containing it is real content, not a template, so linting still runs
+    content = bes(
+        '\ncreatefile until _EOF_\n{{\n  "key": "value"\n}}\n_EOF_\nbadverb x\n'
+    )
+    assert codes(tmp_path, content) == ["E300"]
+
+
 # --- raw (non-.bes) files ----------------------------------------------------
 
 

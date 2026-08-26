@@ -379,6 +379,27 @@ def test_prefetch_prefix_constants_match_the_prefetch_hook():
     assert validator.STATEMENT_PREFETCH == prefetch.STATEMENT_PREFETCH
 
 
+def test_mustache_pattern_matches_every_hook():
+    """All four hooks must agree on what counts as an unrendered template."""
+    from pre_commit_bigfix import bes_actionscript_lint_schclass as schclass
+    from pre_commit_bigfix import bes_actionscript_validate_prefetch as prefetch
+    from pre_commit_bigfix import bes_conventions_check as conventions
+
+    patterns = {
+        validator.MUSTACHE_RE.pattern,
+        schclass.MUSTACHE_RE.pattern,
+        prefetch.MUSTACHE_RE.pattern,
+        conventions.MUSTACHE_RE.pattern,
+    }
+    assert len(patterns) == 1
+
+    # placeholders are templates; a literal-brace escape around content is not
+    assert validator.MUSTACHE_RE.search("<Title>{{vendor}} {{model}}</Title>")
+    assert validator.MUSTACHE_RE.search("delete {{ name }}.lnk")
+    assert not validator.MUSTACHE_RE.search('{{\n  "key": "value"\n}}')
+    assert not validator.MUSTACHE_RE.search("condition:\n{{\n  $re1 = /x/\n}}")
+
+
 # --- E510 / E511: prefetch-block-only commands outside a block ----------------
 
 
@@ -1170,6 +1191,175 @@ def test_waithidden_cmd_is_not_w504():
     assert validator.check_actionscript(body) == []
 
 
+# --- E523: action uses wow64 redirection argument shape ----------------------------
+
+
+def test_wow64_redirection_with_a_substitution_is_fine():
+    body = "action uses wow64 redirection {not x64 of operating system}"
+    assert validator.check_actionscript(body) == []
+
+
+def test_wow64_redirection_true_is_fine():
+    assert validator.check_actionscript("action uses wow64 redirection true") == []
+
+
+def test_wow64_redirection_mixed_case_false_is_fine():
+    """The agent accepts any case, as it does for verbs."""
+    assert validator.check_actionscript("action uses wow64 redirection False") == []
+
+
+def test_wow64_redirection_with_a_bare_word_is_e523():
+    body = "action uses wow64 redirection yes"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E523"]
+    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+
+
+def test_wow64_redirection_with_no_argument_is_e523():
+    assert codes(validator.check_actionscript("action uses wow64 redirection")) == [
+        "E523"
+    ]
+
+
+def test_command_shape_marker_silences_e523(tmp_path):
+    content = bes(
+        "action uses wow64 redirection yes", marker=validator.COMMAND_SHAPE_MARKER
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_e523_silences_it(tmp_path):
+    content = bes("action uses wow64 redirection yes")
+    assert issues_for(tmp_path, content, disabled={"E523"}) == []
+
+
+# --- W505: cmd.exe without /c or /k ------------------------------------------------
+
+
+def test_wait_cmd_without_a_switch_is_w505():
+    body = "wait cmd.exe vs_setup.exe --nocache --wait"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["W505"]
+    assert validator.CMD_MARKER in issues[0][2]
+
+
+def test_waithidden_cmd_without_a_switch_is_w505():
+    body = "waithidden cmd C:\\setup.exe /S"
+    assert codes(validator.check_actionscript(body)) == ["W505"]
+
+
+def test_run_cmd_without_a_switch_is_w505():
+    body = "run cmd.exe install.bat"
+    assert codes(validator.check_actionscript(body)) == ["W505"]
+
+
+def test_quoted_cmd_path_without_a_switch_is_w505():
+    body = 'wait "{windows folder}\\system32\\cmd.exe" install.bat'
+    assert codes(validator.check_actionscript(body)) == ["W505"]
+
+
+def test_cmd_with_slash_c_is_fine():
+    assert validator.check_actionscript("wait cmd.exe /c echo hi") == []
+
+
+def test_cmd_with_uppercase_slash_k_is_fine():
+    assert validator.check_actionscript("waithidden cmd /K echo hi") == []
+
+
+def test_bare_cmd_with_no_arguments_is_fine():
+    """No payload to run, so nothing is silently skipped -- not this check's
+    business.
+    """
+    assert validator.check_actionscript("wait cmd.exe") == []
+
+
+def test_a_non_cmd_executable_is_not_w505():
+    assert validator.check_actionscript("wait powershell.exe -File x.ps1") == []
+
+
+def test_an_executable_merely_ending_in_cmd_is_not_w505():
+    assert validator.check_actionscript("wait install-cmd.exe --quiet") == []
+
+
+def test_cmd_inside_a_heredoc_is_not_w505():
+    body = "createfile until _EOF_\nwait cmd.exe setup.exe\n_EOF_\nwait cmd.exe /c x"
+    assert validator.check_actionscript(body) == []
+
+
+def test_cmd_marker_silences_w505(tmp_path):
+    content = bes("wait cmd.exe setup.exe", marker=validator.CMD_MARKER)
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_w505_silences_it(tmp_path):
+    content = bes("wait cmd.exe setup.exe")
+    assert issues_for(tmp_path, content, disabled={"W505"}) == []
+
+
+# --- W506: move/copy of a scratch file onto an undeleted destination ---------------
+
+
+def test_move_scratch_onto_undeleted_destination_is_w506():
+    body = "createfile until _EOF_\nx\n_EOF_\nmove __createfile setup.reg"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["W506"]
+    assert validator.SCRATCH_DEST_MARKER in issues[0][2]
+
+
+def test_copy_scratch_onto_undeleted_destination_is_w506():
+    body = 'createfile until _EOF_\nx\n_EOF_\ncopy __createfile "c:\\tools\\Bginfo.bat"'
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+def test_delete_before_move_is_fine():
+    body = "createfile until _EOF_\nx\n_EOF_\ndelete setup.reg\nmove __createfile setup.reg"
+    assert validator.check_actionscript(body) == []
+
+
+def test_quoted_delete_matches_an_unquoted_destination():
+    body = (
+        "createfile until _EOF_\nx\n_EOF_\n"
+        'delete "c:\\tools\\setup.reg"\nmove __createfile c:\\tools\\setup.reg'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_folder_delete_of_the_parent_clears_the_destination():
+    """`folder delete` of an ancestor removes anything beneath it."""
+    body = (
+        "folder delete __Local/Upgrade\n"
+        "appendfile #!/bin/sh\n"
+        "move __appendfile __Local/Upgrade/besclientupgrade"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_a_download_folder_destination_is_not_w506():
+    """The action's own download folder is action-scoped, not a persistent path."""
+    body = (
+        "createfile until _EOF_\nx\n_EOF_\nmove __createfile __Download\\Baseline.bes"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_of_a_non_scratch_source_is_not_w506():
+    body = "move __Download/x.deb /var/tmp/x.deb"
+    assert codes(validator.check_actionscript(body)) == ["E513"]
+
+
+def test_scratch_dest_marker_silences_w506(tmp_path):
+    content = bes(
+        "createfile until _EOF_\nx\n_EOF_\nmove __createfile setup.reg",
+        marker=validator.SCRATCH_DEST_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_w506_silences_it(tmp_path):
+    content = bes("createfile until _EOF_\nx\n_EOF_\nmove __createfile setup.reg")
+    assert issues_for(tmp_path, content, disabled={"W506"}) == []
+
+
 # --- E522: override wait/run block termination -------------------------------------
 
 
@@ -1403,6 +1593,16 @@ def test_disable_skips_a_code(tmp_path):
 def test_mustache_templates_are_skipped(tmp_path):
     content = bes("if {{ name }}\nwait cmd /c echo a")
     assert issues_for(tmp_path, content) == []
+
+
+def test_literal_double_braces_in_a_heredoc_are_not_a_mustache_template(tmp_path):
+    # `{{` is also the ActionScript escape for a literal `{`, so heredoc payloads
+    # (YARA rules, JSON, C#) contain it without being templates -- such a file is
+    # real content and must still be checked
+    content = bes(
+        'createfile until _EOF_\n{{\n  "key": "value"\n}}\n_EOF_\nendif',
+    )
+    assert codes(issues_for(tmp_path, content)) == ["E501"]
 
 
 # --- main() ----------------------------------------------------------------

@@ -657,6 +657,16 @@ def test_mustache_templates_are_skipped(tmp_path):
     assert issues_for(tmp_path, content) == []
 
 
+def test_literal_double_braces_in_a_heredoc_are_not_a_mustache_template(tmp_path):
+    # `{{` is also the ActionScript escape for a literal `{`; a heredoc payload
+    # containing it is real content, not a template, so checks still run
+    content = bes(
+        'createfile until _EOF_\n{{\n  "key": "value"\n}}\n_EOF_\n'
+        "prefetch bad size:0 http://example.com/x"
+    )
+    assert "E400" in [code for _lineno, code, _message in issues_for(tmp_path, content)]
+
+
 # --- main() ------------------------------------------------------------------
 
 

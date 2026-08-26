@@ -22,4 +22,5 @@ exclude = ["tests/"]
 # modules and tests carry `#!/usr/bin/env python3` so they can be run
 # directly, but they are imported modules / console_scripts entry
 # points, not executables, so the exec bit is deliberately not set.
-ignore = ["EXE001"]
+# SIM103 (return the condition directly) is disabled per James's request.
+ignore = ["EXE001", "SIM103"]

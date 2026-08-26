@@ -99,6 +99,8 @@ Checks:
           lint-schclass` validates the option lines inside a block (E303);
           this is the pairing check that block's state machine cannot
           express
+    E523  an `action uses wow64 redirection` argument that is not `true`,
+          `false`, or a `{...}` relevance substitution
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -111,6 +113,13 @@ Checks:
           this, but a Linux/macOS agent's case-sensitive filesystem does not.
           Auto-fixable: see AUTO-FIXES below
     W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
+    W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (or
+          `/k`); without one cmd.exe opens a shell and never runs the command
+    W506  a `move`/`copy` of `__createfile`/`__appendfile` onto a destination
+          that is not deleted earlier in the body. Both verbs fail when the
+          destination already exists, so the action works once and fails on
+          every later run; a destination inside the action's own download
+          folder is exempt, being action-scoped rather than persistent
 
 E513 is conservative: it is skipped for a whole body whenever any producer's
 names cannot be known statically -- an `extract`/`unarchive`/`archive now`/
@@ -172,7 +181,9 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-download-ok       (E512, E513)
     actionscript-parameter-ok      (E516, E517)
     actionscript-scratch-ok        (E519, W503)
-    actionscript-command-shape-ok  (E520, E521, W504)
+    actionscript-scratch-dest-ok   (W506)
+    actionscript-command-shape-ok  (E520, E521, E523, W504)
+    actionscript-cmd-ok            (W505)
     actionscript-override-ok       (E522 -- shared with bes-actionscript-lint-schclass's E303)
     actionscript-unreachable-ok    (W501)
     actionscript-parameter-query-ok (W502)
@@ -180,8 +191,10 @@ or out of a single check family with the matching marker anywhere in the file:
 (E514 and E518 belong to the `actionscript-if-ok` family above: they are
 if/continue-if/pause-while condition-shape checks.)
 
-Files that look like mustache templates (containing `{{ ... }}`) are skipped
-silently: they are not real content until rendered.
+Files that look like mustache templates (containing a `{{ placeholder }}`)
+are skipped silently: they are not real content until rendered. Only an
+identifier-like placeholder counts -- `{{` is also the ActionScript escape
+for a literal `{`, so a heredoc payload containing it is real content.
 
 Exit codes:
     0  no E-code issues and nothing auto-fixed (and, without --strict,
@@ -228,7 +241,9 @@ PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, 
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, E513
 PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
-COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, W504
+COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, W504
+CMD_MARKER = "actionscript-cmd-ok"  # W505
+SCRATCH_DEST_MARKER = "actionscript-scratch-dest-ok"  # W506
 # shared with the sibling schclass hook's E303 on purpose: one marker turns
 # off override-block complaints in both hooks.
 OVERRIDE_BLOCK_MARKER = "actionscript-override-ok"  # E522
@@ -259,10 +274,13 @@ CHECK_MARKERS = {
     "E520": COMMAND_SHAPE_MARKER,
     "E521": COMMAND_SHAPE_MARKER,
     "E522": OVERRIDE_BLOCK_MARKER,
+    "E523": COMMAND_SHAPE_MARKER,
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
     "W503": SCRATCH_MARKER,
     "W504": COMMAND_SHAPE_MARKER,
+    "W505": CMD_MARKER,
+    "W506": SCRATCH_DEST_MARKER,
 }
 
 KNOWN_CODES = frozenset(
@@ -290,19 +308,27 @@ KNOWN_CODES = frozenset(
         "E520",
         "E521",
         "E522",
+        "E523",
         "W500",
         "W501",
         "W502",
         "W503",
         "W504",
+        "W505",
+        "W506",
     ]
 )
 
 BES_EXTENSIONS = (".bes", ".ojo")
 ACTIONSCRIPT_MIMETYPE = "application/x-fixlet-windows-shell"  # compared lowercased
 
-# a mustache template ({{ ... }}) is not real content until rendered
-MUSTACHE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+# a mustache template ({{ placeholder }}) is not real content until rendered.
+# Only an identifier-like placeholder counts: `{{` is also the ActionScript
+# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
+# around arbitrary content and must not be mistaken for a template.
+# Kept identical in all four hooks -- see the lockstep test in
+# tests/test_bes_actionscript_validate_script.py.
+MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
 
 # the first token of a line, case-insensitively, anchored to line start so a
 # relevance substitution or argument merely containing one of these words does
@@ -354,6 +380,15 @@ _REGEX_QUANTIFIER_RE = re.compile(r"\{\d+(?:,\d*)?\}")
 # `delete` / `folder delete` lines clean up the working directory; a
 # `__Download\<name>` they mention is not a consumption of that file
 _DELETE_RE = re.compile(r"^(?:folder\s+)?delete\b", re.IGNORECASE)
+# the two delete forms with their argument captured, for the W506 destination scan
+_FILE_DELETE_RE = re.compile(r"^delete\s+(.+?)\s*$", re.IGNORECASE)
+_FOLDER_DELETE_RE = re.compile(r"^folder\s+delete\s+(.+?)\s*$", re.IGNORECASE)
+# a move/copy whose source is a scratch file, with the destination captured
+_SCRATCH_MOVE_RE = re.compile(
+    r'^(move|copy)\s+"?(__createfile|__appendfile)"?\s+(.+?)\s*$', re.IGNORECASE
+)
+# the action's own download folder is action-scoped, not a persistent location
+_DOWNLOAD_DEST_RE = re.compile(r"__download|download path", re.IGNORECASE)
 # `copy`/`move` lines can themselves populate `__Download`, either from a
 # literal `__createfile`/`__appendfile` source (the sole __Download ref is
 # the destination) or by renaming one download to another (>= 2 refs; the
@@ -406,6 +441,16 @@ _REGSET_RE = re.compile(
 )
 _REGSET_KEY_RE = re.compile(r'^"\[', re.IGNORECASE)
 _DOS_VERB_RE = re.compile(r"^dos\b", re.IGNORECASE)
+_WOW64_RE = re.compile(r"^action\s+uses\s+wow64\s+redirection\b(.*)$", re.IGNORECASE)
+# the agent accepts a boolean literal (any case) or a `{...}` substitution
+_WOW64_ARG_RE = re.compile(r"^(?:true|false|\{.*\})$", re.IGNORECASE | re.DOTALL)
+# a launching verb plus everything after it; the executable token is split off
+# by _leading_token because it may be quoted (and may contain substitutions)
+_LAUNCH_VERB_RE = re.compile(
+    r"^(wait|waithidden|run|runhidden)\s+(\S.*)$", re.IGNORECASE
+)
+# cmd.exe interprets its payload only after /c or /k; anywhere in the arguments
+_CMD_SWITCH_RE = re.compile(r"(?:^|\s)/[ck]\b", re.IGNORECASE)
 _OVERRIDE_VERB_RE = re.compile(r"^override\s+(wait|run)\s*$", re.IGNORECASE)
 _OVERRIDE_OPTION_LINE_RE = re.compile(r"^\w+\s*=")
 
@@ -848,6 +893,72 @@ def _check_parameters(lines):
     return issues
 
 
+def _normalize_path(text):
+    """Normalize a path argument for comparison: unquote, unify separators.
+
+    Comparison is textual -- two spellings of the same path that differ by
+    quoting, separator or a trailing slash are treated as equal, but a
+    `{...}` substitution is compared verbatim (its value is unknowable here,
+    so only an identical substitution counts as the same path).
+    """
+    return text.strip().strip('"').replace("\\", "/").rstrip("/")
+
+
+def _clears_destination(line, destination):
+    """True if `line` deletes `destination` or a folder containing it."""
+    stripped = line.strip()
+    match = _FOLDER_DELETE_RE.match(stripped)
+    if match:
+        folder = _normalize_path(match.group(1))
+        # a substituted prefix is unknowable, so compare the trailing literal
+        # segment: `folder delete "{client folder...}/__Local/Upgrade"` covers
+        # `__Local/Upgrade/besclientupgrade`
+        tail = folder.split("}")[-1].strip("/")
+        return bool(tail) and "/" + tail + "/" in "/" + destination
+    match = _FILE_DELETE_RE.match(stripped)
+    return bool(match) and _normalize_path(match.group(1)) == destination
+
+
+def _check_scratch_destinations(lines):
+    """Check that a scratch file is moved/copied onto a cleared destination.
+
+    Returns W506 for a `move`/`copy` of `__createfile`/`__appendfile` whose
+    destination is not deleted earlier in the body. Both verbs fail when the
+    destination already exists, so such an action works once and then fails
+    on every later run; the documented pattern is `delete <dest>` first.
+
+    A destination inside the action's own download folder is exempt: that
+    folder is action-scoped rather than a persistent location.
+    """
+    issues = []
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        match = _SCRATCH_MOVE_RE.match(stripped)
+        if not match:
+            continue
+        verb, destination = match.group(1).lower(), _normalize_path(match.group(3))
+        if not destination or _DOWNLOAD_DEST_RE.search(destination):
+            continue
+        if any(_clears_destination(line, destination) for line in lines[:index]):
+            continue
+        shown = match.group(3).strip().strip('"')
+        issues.append(
+            (
+                index + 1,
+                "W506",
+                (
+                    f'`{verb}` onto "{shown}" without deleting it first; '
+                    f"`{verb}` fails when the destination already exists, so this "
+                    f"action cannot run twice; add `{SCRATCH_DEST_MARKER}` if "
+                    "intentional"
+                ),
+            )
+        )
+    return issues
+
+
 def _check_scratch_references(lines):
     """Check `__createfile`/`__appendfile` production and reference case.
 
@@ -994,6 +1105,33 @@ def fix_scratch_case(src, targets):
     return "\n".join(lines), fixed
 
 
+def _leading_token(text):
+    """Split `text` into its first whitespace-delimited token and the rest.
+
+    A double-quoted token is kept whole (quotes stripped) so a quoted
+    executable path containing spaces -- or a `{...}` substitution that may
+    expand to one -- stays a single token.
+    """
+    text = text.lstrip()
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        if end != -1:
+            return text[1:end], text[end + 1 :].strip()
+    token, _sep, rest = text.partition(" ")
+    return token, rest.strip()
+
+
+def _is_cmd_shell(executable):
+    """True if `executable` names the Windows command interpreter.
+
+    Compares the trailing path component so both `cmd.exe` and a full path
+    like `{windows folder}\\system32\\cmd.exe` are recognized, while an
+    unrelated program whose name merely ends in "cmd" is not.
+    """
+    basename = re.split(r"[\\/]", executable)[-1].strip().lower()
+    return basename in ("cmd", "cmd.exe")
+
+
 def _check_command_shapes(lines):
     """Check per-line command shapes independent of block structure.
 
@@ -1002,8 +1140,10 @@ def _check_command_shapes(lines):
     `setting delete "name" on "{...}" for client|user|action` shape (a
     missing effective-date `on` clause fails at runtime); E521 for a
     `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
-    bracketed `"[HKEY_...]..."` keyname; and W504 for the deprecated `dos`
-    verb (`waithidden cmd.exe /c ...` is the documented replacement).
+    bracketed `"[HKEY_...]..."` keyname; W504 for the deprecated `dos`
+    verb (`waithidden cmd.exe /c ...` is the documented replacement); and
+    W505 for a `wait`/`run` of cmd.exe that passes a command line without the
+    `/c` (or `/k`) switch cmd.exe needs to execute it.
     """
     issues = []
     for index, raw_line in enumerate(lines):
@@ -1038,6 +1178,40 @@ def _check_command_shapes(lines):
                             f'"{verb}" key is not a quoted, bracketed '
                             '"[HKEY_...]..." keyname; add '
                             f"`{COMMAND_SHAPE_MARKER}` if intentional"
+                        ),
+                    )
+                )
+
+        match = _WOW64_RE.match(stripped)
+        if match and not _WOW64_ARG_RE.match(match.group(1).strip()):
+            issues.append(
+                (
+                    lineno,
+                    "E523",
+                    (
+                        "`action uses wow64 redirection` takes `true`, `false`, or a "
+                        "`{...}` relevance substitution; add "
+                        f"`{COMMAND_SHAPE_MARKER}` if intentional"
+                    ),
+                )
+            )
+
+        match = _LAUNCH_VERB_RE.match(stripped)
+        if match:
+            executable, arguments = _leading_token(match.group(2))
+            if (
+                _is_cmd_shell(executable)
+                and arguments
+                and not _CMD_SWITCH_RE.search(arguments)
+            ):
+                issues.append(
+                    (
+                        lineno,
+                        "W505",
+                        (
+                            "cmd.exe is passed a command line but no `/c` (or "
+                            "`/k`); without one it opens a shell and never runs "
+                            f"the command; add `{CMD_MARKER}` if intentional"
                         ),
                     )
                 )
@@ -1206,6 +1380,7 @@ def check_actionscript(body):
     issues = _check_download_names(lines)  # E512 / E513
     issues.extend(_check_parameters(lines))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
+    issues.extend(_check_scratch_destinations(lines))  # W506
     issues.extend(_check_command_shapes(lines))  # E520 / E521 / W504
     issues.extend(_check_condition_shapes(lines))  # E518
     issues.extend(_check_override_blocks(lines))  # E522

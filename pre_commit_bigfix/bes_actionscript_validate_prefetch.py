@@ -195,7 +195,13 @@ NOHASH_PREFETCH = "add nohash prefetch item"
 BLOCK_PREFETCH = "add prefetch item"
 STATEMENT_PREFETCH = "prefetch "
 
-MUSTACHE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+# an unrendered mustache template ({{ placeholder }}) is not real content yet.
+# Only an identifier-like placeholder counts: `{{` is also the ActionScript
+# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
+# around arbitrary content and must not be mistaken for a template.
+# Kept identical in all four hooks -- see the lockstep test in
+# tests/test_bes_actionscript_validate_script.py.
+MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
 
 
 def find_prefetch_lines(body):

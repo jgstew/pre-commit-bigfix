@@ -49,6 +49,59 @@ patterns outside ActionScript bodies:
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py) for the
 full list.
 
+Further checks in both content hooks, found by surveying a second corpus: the
+2,986 `.bes` files (2,743 Tasks, 112 Fixlets, 91 Analyses, 28 ComputerGroups,
+12 Baselines) exported from a live BigFix instance in
+`bigfix_backup_plugin_jgstew/export`. Unlike `bigfix-content`, roughly two
+thirds of that corpus is machine-generated (AutoPkg recipes), so a single
+template defect repeats thousands of times; each check below was measured
+against the whole corpus and its hits reviewed before being kept.
+
+New `bes-conventions-check` checks:
+
+- **`E220`**: two `<Property>` entries in one `<Analysis>` sharing a `Name` or
+  an `ID` - reporting cannot tell two same-named properties apart, and the API
+  addresses a property by its ID. Two real hits, both authoring slips made in
+  the console (`BES_Client_Info`, `DEX_relevance_draft`). New
+  `analysis-property-ok` marker.
+- **`W218`**: a `<PreLink>`/`<Link>`/`<PostLink>` containing a run of 2+
+  spaces. The three are assembled into one sentence in the console, and the
+  gap is almost always where a generator substituted an empty product name -
+  130 hits, e.g. `<PostLink> to deploy  v11.3.2.</PostLink>` and
+  `... to uninstall Microsoft SQL Server  2016  Policies CTP3.2`. Deliberately
+  not auto-fixed: the missing word is what needs restoring, not the space. New
+  `link-text-ok` marker.
+- **`W209`** now also covers an internal run of 2+ spaces in a `<Title>` (40
+  hits, mostly `... - Windows  TODO`), and its auto-fix collapses such runs to
+  a single space alongside the trim and de-tab it already did.
+
+New `bes-actionscript-validate-script` checks:
+
+- **`W505`**: a `wait`/`run` of cmd.exe that passes a command line but no `/c`
+  (or `/k`). Without the switch cmd.exe opens an interactive shell and never
+  runs the command, so the action reports success having done nothing. Nine
+  hits, all real (`wait cmd.exe __Download\vs_setup.exe --nocache ...` in the
+  Visual Studio tasks, and one `waithidden CMD __Download\replace_file.bat`).
+  An executable merely *ending* in `cmd` (`firewall-cmd`, `NirCmd`) is not
+  matched. New `actionscript-cmd-ok` marker.
+- **`W506`**: a `move`/`copy` of `__createfile`/`__appendfile` onto a
+  destination that is not deleted earlier in the body. Both verbs fail when
+  the destination already exists, so the action works once and fails on every
+  later run. Nine hits. Two exemptions keep it quiet on correct content: a
+  destination inside the action's own download folder (action-scoped, not
+  persistent) and a `folder delete` of an ancestor directory. New
+  `actionscript-scratch-dest-ok` marker.
+- **`E523`**: an `action uses wow64 redirection` argument that is not `true`,
+  `false`, or a `{...}` substitution. Zero corpus hits - a guard rail on a
+  line whose only valid shapes are these, added alongside `E520`/`E521` under
+  the existing `actionscript-command-shape-ok` marker.
+
+A check considered and **not** added: `appendfile` without a preceding
+`delete __appendfile`. All 162 apparent violations turned out to be one
+baseline that does clear the file, spelled as the fully-qualified
+`"{(client folder of current site as string) & "/__appendfile"}"` rather than
+the bare token - leaving no real hits and a demonstrated false-positive trap.
+
 `bes-actionscript-validate-script` gets its first auto-fix:
 
 - **`--auto-fix` (`W503`)**: rewrites every wrong-case `__download`,
@@ -58,6 +111,17 @@ full list.
   No other check in this hook is auto-fixable.
 
 ### Fixed
+
+The mustache-template skip in **all four hooks** no longer swallows real
+content. `{{ ... }}` was matched with `re.DOTALL`, so any file containing a
+`{{` anywhere was skipped entirely - but `{{` is also the ActionScript escape
+for a literal `{`, which heredoc payloads (YARA rules, JSON, C#) contain
+routinely. The pattern now matches only an identifier-like placeholder
+(`{{name}}`, `{{ vendor }}`), so genuine `*.bes.mustache` templates are still
+skipped while a task like `OpenSSL 3.0.0 - 3.0.6 Detection - YARA Scan` is
+checked for the first time. A new cross-module test keeps the four patterns
+identical. One known limit remains: a minified JavaScript payload containing
+`{{this.stateChangeEl}}` is still indistinguishable from a placeholder.
 
 More `bes-actionscript-validate-script` false positives, found the same way
 v0.8.1's were:

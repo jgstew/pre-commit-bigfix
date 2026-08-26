@@ -47,7 +47,8 @@ prefetch-line shape and https URLs, CDATA usage, blank-line and
 trailing-whitespace spacing, empty ActionScript, dynamic download statements,
 a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
 non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
-names, unique Action IDs, SuccessCriteria body/Option consistency, a
+names, unique Analysis Property names/IDs, unique Action IDs, action link text
+free of empty-substitution gaps, SuccessCriteria body/Option consistency, a
 SourceSeverity vocabulary (default Low/Moderate/Important/Critical/Unspecified,
 overridable with `--severity-values`), description placeholders / empty
 descriptions, and Task/Fixlet release-date / modification-time presence.
@@ -292,8 +293,22 @@ A `setting` line that is not the documented
 `setting "name"="value" on "{...}" for client|user|action` shape is `E520` -
 a missing effective-date clause fails at runtime. A
 `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
-bracketed `"[HKEY_...]..."` keyname is `E521`. The deprecated `dos` verb
+bracketed `"[HKEY_...]..."` keyname is `E521`. An
+`action uses wow64 redirection` argument that is not `true`, `false`, or a
+`{...}` substitution is `E523`. The deprecated `dos` verb
 warns `W504`; use `waithidden cmd.exe /c ...` instead.
+
+A `wait`/`run` of cmd.exe that passes a command line but no `/c` (or `/k`)
+warns `W505`: without the switch cmd.exe opens an interactive shell and never
+runs the command, so the action reports success having done nothing.
+
+A `move`/`copy` of `__createfile`/`__appendfile` onto a destination that is
+not deleted earlier in the body warns `W506`. Both verbs fail when the
+destination already exists, so such an action works the first time and fails
+on every later run; the documented pattern is to `delete` the destination
+first. A destination inside the action's own download folder is exempt, being
+action-scoped rather than a persistent location, and a `folder delete` of an
+ancestor counts as clearing it.
 
 An `override wait` / `override run` block not terminated by its own matching
 verb - it hits end of body, is terminated by the *other* verb's command, or
@@ -334,7 +349,9 @@ its `E301`, so one marker covers both hooks),
 `actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
 `actionscript-download-ok` (`E512`, `E513`), `actionscript-parameter-ok`
 (`E516`, `E517`), `actionscript-scratch-ok` (`E519`, `W503`),
-`actionscript-command-shape-ok` (`E520`, `E521`, `W504`),
+`actionscript-scratch-dest-ok` (`W506`),
+`actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `W504`),
+`actionscript-cmd-ok` (`W505`),
 `actionscript-override-ok` (`E522` - shared with
 `bes-actionscript-lint-schclass`'s `E303`), `actionscript-unreachable-ok`
 (`W501`), or `actionscript-parameter-query-ok` (`W502`). E-codes fail the

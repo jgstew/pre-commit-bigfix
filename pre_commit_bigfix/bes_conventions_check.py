@@ -59,6 +59,9 @@ Checks:
           object share the same ID
     E219  an x-relevance-evaluation-period value is not a valid HH:MM:SS
           duration (matched case-insensitively; MM and SS must each be 00-59)
+    E220  two <Property> entries in one <Analysis> share a Name or an ID --
+          reporting cannot tell two same-named properties apart, and the API
+          addresses a property by its ID
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -76,8 +79,10 @@ Checks:
           (current BigFix clients accept a sha256-only statement)
     W207  a prefetch / "add prefetch item" URL is not https
     W208  an <ActionScript> body is empty (only blank lines and //-comments)
-    W209  a <Title> has leading/trailing whitespace/newlines or embedded tabs
-          (fixable -> trimmed, tabs replaced with spaces)
+    W209  a <Title> has leading/trailing whitespace/newlines, embedded tabs,
+          or an internal run of 2+ spaces -- the last is usually where a
+          substitution expanded to nothing (fixable -> trimmed, tabs replaced
+          with spaces, repeated spaces collapsed to one)
     W210  a line has trailing whitespace (fixable -> stripped)
     W211  an <ActionScript> uses a dynamic `download` statement (a line whose
           first non-whitespace token is `download`); prefer a static prefetch
@@ -93,6 +98,11 @@ Checks:
     W217  (only with --check-filename) a file's basename does not match its
           first content object's <Title>, sanitized for filename-illegal
           characters (/, backslash, :, *, ?, ", <, >, | -> _)
+    W218  a <PreLink>/<Link>/<PostLink> contains a run of 2+ spaces; the three
+          are assembled into one console sentence, and the gap is almost
+          always where a generator substituted an empty product name (e.g.
+          "<PostLink> to deploy  v11.3.2.</PostLink>"). Not auto-fixed: the
+          missing word is what needs restoring, not the space
 
 Timestamp fields (E202, E216): x-fixlet-modification-time and
 x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
@@ -194,6 +204,8 @@ file, e.g. in an XML comment):
     download-ok             (W211)
     cve-names-ok            (E209)
     mimefield-name-ok       (E210)
+    analysis-property-ok    (E220)
+    link-text-ok            (W218)
     success-criteria-ok    (E217)
     action-id-ok            (E218)
     evaluation-period-ok   (E219)
@@ -203,10 +215,12 @@ file, e.g. in an XML comment):
 description-ok also covers W215 (an empty/missing Task/Fixlet Description) --
 it is the same marker as E204 since both describe a Description problem.
 
-Files that look like mustache templates (containing `{{ ... }}`, e.g. the
-`*.bes.mustache` sources that ContentFromTemplate renders) are skipped silently:
-they are not valid BES XML until rendered, and their own output is what should
-be linted.
+Files that look like mustache templates (containing a `{{ placeholder }}`,
+e.g. the `*.bes.mustache` sources that ContentFromTemplate renders) are skipped
+silently: they are not valid BES XML until rendered, and their own output is
+what should be linted. Only an identifier-like placeholder counts -- `{{` is
+also the ActionScript escape for a literal `{`, so a heredoc payload (YARA,
+JSON, C#) containing it is real content and is still checked.
 
 Exit codes:
     0  no E-code issues and nothing auto-fixed (and, without --strict, regardless
@@ -249,6 +263,8 @@ TRAILING_WS_MARKER = "trailing-whitespace-ok"  # W210
 DOWNLOAD_MARKER = "download-ok"  # W211
 CVE_NAMES_MARKER = "cve-names-ok"  # E209
 MIMEFIELD_DUP_MARKER = "mimefield-name-ok"  # E210
+ANALYSIS_PROPERTY_MARKER = "analysis-property-ok"  # E220
+LINK_TEXT_MARKER = "link-text-ok"  # W218
 SUCCESS_CRITERIA_MARKER = "success-criteria-ok"  # E217
 ACTION_ID_MARKER = "action-id-ok"  # E218
 EVALUATION_PERIOD_MARKER = "evaluation-period-ok"  # E219
@@ -342,6 +358,13 @@ PREFETCH_URL_RE = re.compile(r"\b(?:url=|https?://)", re.IGNORECASE)
 PREFETCH_URL_SCHEME_RE = re.compile(r"(?:url=)?(https?)://", re.IGNORECASE)
 
 # <Title>, <Relevance>, and <CVENames> element bodies
+# a run of 2+ spaces, the visible trace of a substitution that expanded to
+# nothing (e.g. "<PostLink> to deploy  v11.3.2.</PostLink>")
+DOUBLE_SPACE_RE = re.compile(r"  +")
+# the three action link-text elements, checked together for that same trace
+LINK_TEXT_RE = re.compile(
+    r"<(PreLink|Link|PostLink)>(.*?)</\1>", re.DOTALL | re.IGNORECASE
+)
 TITLE_TAG_RE = re.compile(r"<Title>(.*?)</Title>", re.DOTALL)
 RELEVANCE_TAG_RE = re.compile(r"<Relevance>(.*?)</Relevance>", re.DOTALL)
 CVENAMES_TAG_RE = re.compile(r"<CVENames>(.*?)</CVENames>", re.DOTALL)
@@ -421,6 +444,12 @@ FIRST_PROP_VALUE_RE = re.compile(
     + r"\s*</Name>\s*<Value>(.*?)</Value>",
     re.DOTALL,
 )
+# an Analysis <Property>, with its Name and (optional) ID attributes; the two
+# may appear in either order, so ID is looked for across the whole tag
+ANALYSIS_PROPERTY_RE = re.compile(
+    r'<Property\b[^>]*?\bName="([^"]*)"(?:[^>]*?\bID="([^"]*)")?[^>]*>',
+    re.IGNORECASE,
+)
 NAMED_MIMEFIELD_RE = re.compile(
     r"<Name>\s*([^<]*?)\s*</Name>\s*<Value>(.*?)</Value>", re.DOTALL
 )
@@ -431,7 +460,13 @@ CONTENT_BLOCK_RE = re.compile(r"(<(Task|Fixlet)\b[^>]*>)(.*?)(</\2>)", re.DOTALL
 CONTENT_OBJECT_SPAN_RE = re.compile(
     r"<(" + "|".join(sorted(CONTENT_TAGS)) + r")\b[^>]*>.*?</\1>", re.DOTALL
 )
-MUSTACHE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+# an unrendered mustache template ({{ placeholder }}) is not real content yet.
+# Only an identifier-like placeholder counts: `{{` is also the ActionScript
+# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
+# around arbitrary content and must not be mistaken for a template.
+# Kept identical in all four hooks -- see the lockstep test in
+# tests/test_bes_actionscript_validate_script.py.
+MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
 CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 # 2+ blank lines immediately before a </ActionScript> close (an optional CDATA
 # terminator may sit between the blank lines and the close tag)
@@ -474,6 +509,8 @@ KNOWN_CODES = frozenset(
         "E208",  # file is not entirely CRLF-terminated
         "E209",  # CVENames value invalid or multiple CVENames elements
         "E210",  # duplicate MIMEField Name within one content object
+        "E220",  # duplicate Analysis <Property> Name or ID
+        "W218",  # action link text has a run of 2+ spaces
         "E211",  # Title is a default placeholder value
         "E212",  # Relevance is the literal `true`
         "E213",  # Relevance is empty / whitespace only
@@ -1080,6 +1117,80 @@ def check_duplicate_mimefield_names(src):
     return issues
 
 
+def check_link_text(src):
+    """W218: action link text should not contain a run of 2+ spaces.
+
+    `<PreLink>Click </PreLink><Link>here</Link><PostLink> to deploy this
+    action.</PostLink>` is assembled into one sentence shown in the console.
+    A double space in it is almost always where a generator substituted an
+    empty product name, so the sentence reads "to deploy  v11.3.2." -- the
+    gap is the symptom, and there is nothing to auto-fix: the missing word
+    is what needs restoring.
+    """
+    issues = []
+    for match in LINK_TEXT_RE.finditer(src):
+        tag, inner = match.group(1), match.group(2)
+        if "<![CDATA[" in inner:
+            continue
+        if DOUBLE_SPACE_RE.search(inner):
+            issues.append(
+                (
+                    _lineno(src, match.start()),
+                    "W218",
+                    (
+                        f"<{tag}> has a run of 2+ spaces, usually where a "
+                        "substitution expanded to nothing; add "
+                        f"`{LINK_TEXT_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def check_duplicate_analysis_properties(src):
+    """E220: <Property> entries in one Analysis must not share a Name or ID.
+
+    The console lets an edit introduce a second property with an existing
+    name, and reporting then cannot tell the two apart; a repeated ID is the
+    same collision in the field the API addresses properties by. Runs per
+    content object, so two analyses may each carry the same property name.
+    """
+    issues = []
+    seen_names = set()
+    seen_ids = set()
+    for match in ANALYSIS_PROPERTY_RE.finditer(src):
+        lineno = _lineno(src, match.start())
+        name = match.group(1).strip()
+        prop_id = (match.group(2) or "").strip()
+        if name in seen_names:
+            issues.append(
+                (
+                    lineno,
+                    "E220",
+                    (
+                        f'duplicate Analysis <Property> Name "{name}" in one '
+                        f"Analysis; add `{ANALYSIS_PROPERTY_MARKER}` if intentional"
+                    ),
+                )
+            )
+        else:
+            seen_names.add(name)
+        if prop_id and prop_id in seen_ids:
+            issues.append(
+                (
+                    lineno,
+                    "E220",
+                    (
+                        f'duplicate Analysis <Property> ID "{prop_id}" in one '
+                        f"Analysis; add `{ANALYSIS_PROPERTY_MARKER}` if intentional"
+                    ),
+                )
+            )
+        elif prop_id:
+            seen_ids.add(prop_id)
+    return issues
+
+
 def check_success_criteria(src):
     """E217: a <SuccessCriteria> body/Option combination must be consistent.
 
@@ -1228,6 +1339,18 @@ def check_title(src):
                     "W209",
                     (
                         "Title has leading/trailing whitespace or embedded tabs; add "
+                        f"`{TITLE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        if "<![CDATA[" not in inner and DOUBLE_SPACE_RE.search(inner.strip()):
+            issues.append(
+                (
+                    lineno,
+                    "W209",
+                    (
+                        f'Title "{value.strip()}" has a run of 2+ spaces, usually '
+                        "where a substitution expanded to nothing; add "
                         f"`{TITLE_MARKER}` if intentional"
                     ),
                 )
@@ -1453,6 +1576,7 @@ VALUE_CHECKS = (
     (("E207",), CDATA_MARKER, check_cdata_required),
     (("E209",), CVE_NAMES_MARKER, check_cve_names),
     (("E210",), MIMEFIELD_DUP_MARKER, check_duplicate_mimefield_names),
+    (("E220",), ANALYSIS_PROPERTY_MARKER, check_duplicate_analysis_properties),
     (("E211", "W209", "W214"), TITLE_MARKER, check_title),
     (("E212", "E213", "W212", "W213"), RELEVANCE_MARKER, check_relevance),
     (("E215",), CDATA_CLOSE_MARKER, check_cdata_close),
@@ -1466,6 +1590,7 @@ VALUE_CHECKS = (
     (("W207",), PREFETCH_HTTPS_MARKER, check_prefetch_https),
     (("W208",), ACTIONSCRIPT_EMPTY_MARKER, check_empty_actionscript),
     (("W211",), DOWNLOAD_MARKER, check_dynamic_download),
+    (("W218",), LINK_TEXT_MARKER, check_link_text),
 )
 
 # (presence code, opt-out marker) -- markers scoped like the value checks
@@ -1624,7 +1749,7 @@ def fix_download_size(src):
 
 
 def fix_title(src):
-    """W209: trim a <Title> and replace embedded tabs with spaces.
+    """W209: trim a <Title>, detab it, and collapse internal space runs.
 
     A CDATA-wrapped title is left untouched (its content is opaque here).
     """
@@ -1634,14 +1759,14 @@ def fix_title(src):
         inner = match.group(1)
         if "<![CDATA[" in inner:
             return match.group(0)
-        new_inner = inner.replace("\t", " ").strip()
+        new_inner = DOUBLE_SPACE_RE.sub(" ", inner.replace("\t", " ").strip())
         if new_inner == inner:
             return match.group(0)
         fixed.append(
             (
                 _lineno(src, match.start()),
                 "W209",
-                "trimmed Title and replaced tabs with spaces",
+                "normalized Title whitespace (trim, tabs, repeated spaces)",
             )
         )
         return f"<Title>{new_inner}</Title>"

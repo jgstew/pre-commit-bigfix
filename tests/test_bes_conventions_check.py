@@ -314,6 +314,30 @@ def analysis(description, marker=None):
     )
 
 
+def analysis_properties(properties, marker=None):
+    """Build a single-Analysis BES document carrying `properties`.
+
+    `properties` is an iterable of (name, id) pairs, one <Property> each.
+    """
+    rows = "".join(
+        f'\t\t<Property Name="{name}" ID="{prop_id}" '
+        'EvaluationPeriod="PT1H">version of client</Property>\n'
+        for name, prop_id in properties
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+        'xsi:noNamespaceSchemaLocation="BES.xsd">\n'
+        + (f"\t<!-- {marker} -->\n" if marker else "")
+        + "\t<Analysis>\n"
+        "\t\t<Title>Some analysis</Title>\n"
+        "\t\t<Description><![CDATA[A real description.]]></Description>\n"
+        + rows
+        + "\t</Analysis>\n"
+        "</BES>\n"
+    )
+
+
 @pytest.mark.parametrize(
     "description",
     [
@@ -811,6 +835,16 @@ def test_mustache_template_skipped(tmp_path):
     assert codes(tmp_path, tmpl) == []
 
 
+def test_literal_double_braces_in_a_heredoc_are_not_a_mustache_template(tmp_path):
+    # `{{` is also the ActionScript escape for a literal `{`; a heredoc payload
+    # containing it is real content, not a template, so checks still run
+    content = task(
+        body='\ncreatefile until _EOF_\n{{\n  "key": "value"\n}}\n_EOF_\n',
+        relevance="true",
+    )
+    assert codes(tmp_path, content) == ["E212"]
+
+
 def test_unparsable_xml_is_w200_only(tmp_path):
     assert codes(tmp_path, "<BES><Task><Unclosed></Task></BES>") == ["W200"]
 
@@ -1091,6 +1125,36 @@ def test_e210_marker_opts_out(tmp_path):
     assert "E210" not in codes(tmp_path, content)
 
 
+# --- E220 duplicate Analysis Property Name / ID ---------------------------
+
+
+def test_e220_duplicate_property_name_flagged(tmp_path):
+    content = analysis_properties([("CPU frequency", "1"), ("CPU frequency", "2")])
+    assert "E220" in codes(tmp_path, content)
+
+
+def test_e220_duplicate_property_id_flagged(tmp_path):
+    content = analysis_properties([("manufacturer", "3"), ("model", "3")])
+    assert "E220" in codes(tmp_path, content)
+
+
+def test_e220_distinct_properties_clean(tmp_path):
+    content = analysis_properties([("manufacturer", "1"), ("model", "2")])
+    assert "E220" not in codes(tmp_path, content)
+
+
+def test_e220_marker_opts_out(tmp_path):
+    content = analysis_properties(
+        [("model", "1"), ("model", "2")], marker="analysis-property-ok"
+    )
+    assert "E220" not in codes(tmp_path, content)
+
+
+def test_e220_disable_silences_it(tmp_path):
+    content = analysis_properties([("model", "1"), ("model", "2")])
+    assert "E220" not in codes(tmp_path, content, disabled={"E220"})
+
+
 # --- E211 / W209 Title hygiene --------------------------------------------
 
 
@@ -1124,8 +1188,70 @@ def test_w209_autofix_trims_and_detabs(tmp_path):
     assert any(code == "W209" for _, code, _ in fixed)
 
 
+def test_w209_internal_double_space_flagged(tmp_path):
+    # usually the visible trace of a substitution that expanded to nothing
+    assert "W209" in codes(tmp_path, task(title="Install Widget  - Windows"))
+
+
+def test_w209_single_spaces_clean(tmp_path):
+    assert "W209" not in codes(tmp_path, task(title="Install Widget - Windows"))
+
+
+def test_w209_autofix_collapses_internal_runs(tmp_path):
+    out, fixed = autofix(tmp_path, task(title="Install Widget   - Windows"))
+    assert "<Title>Install Widget - Windows</Title>" in out
+    assert any(code == "W209" for _, code, _ in fixed)
+
+
+def test_w209_ignores_a_settings_lock_title(tmp_path):
+    """<Title>false</Title> inside SettingsLocks is not a content title."""
+    content = task().replace(
+        "\t\t</DefaultAction>",
+        "\t\t\t<SettingsLocks><PostActionBehavior>"
+        "<Title>false</Title>"
+        "</PostActionBehavior></SettingsLocks>\n\t\t</DefaultAction>",
+    )
+    assert codes(tmp_path, content) == []
+
+
 def test_title_marker_opts_out(tmp_path):
     assert "E211" not in codes(tmp_path, task(title="Custom Task", marker="title-ok"))
+
+
+# --- W218 link text double spaces -----------------------------------------
+
+
+def _with_links(pre="Click ", link="here", post=" to deploy this action."):
+    return task().replace(
+        "\t\t</DefaultAction>",
+        f"\t\t\t<PreLink>{pre}</PreLink><Link>{link}</Link>"
+        f"<PostLink>{post}</PostLink>\n\t\t</DefaultAction>",
+    )
+
+
+def test_w218_double_space_in_postlink_flagged(tmp_path):
+    # the empty gap is where a product-name substitution produced nothing
+    assert "W218" in codes(tmp_path, _with_links(post=" to deploy  v11.3.2."))
+
+
+def test_w218_double_space_in_prelink_flagged(tmp_path):
+    assert "W218" in codes(tmp_path, _with_links(pre="Click  "))
+
+
+def test_w218_normal_link_text_clean(tmp_path):
+    assert "W218" not in codes(tmp_path, _with_links())
+
+
+def test_w218_marker_opts_out(tmp_path):
+    content = _with_links(post=" to deploy  v11.3.2.").replace(
+        "\t<Task>", "\t<!-- link-text-ok -->\n\t<Task>", 1
+    )
+    assert "W218" not in codes(tmp_path, content)
+
+
+def test_w218_disable_silences_it(tmp_path):
+    content = _with_links(post=" to deploy  v11.3.2.")
+    assert "W218" not in codes(tmp_path, content, disabled={"W218"})
 
 
 # --- E212 / E213 Relevance ------------------------------------------------
