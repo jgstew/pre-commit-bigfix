@@ -32,7 +32,10 @@ Checks:
           `appendfile <content>` lines are exempt from both E508 and E509 --
           everything after the verb is one line of raw file content written
           out verbatim (`appendfile }` appends a literal `}`), not
-          ActionScript
+          ActionScript. A regex interval quantifier's braces (`{40}`,
+          `{1,3}`, `{2,}` -- common in a `regex "..."` literal used to pull
+          a sha1/sha256/size/url back out of a matched line) are skipped
+          whole and never count as an open or a close
     E510  an `add prefetch item` / `add nohash prefetch item` outside an open
           `begin prefetch block` (the agent rejects these outside a block)
     E511  a `collect prefetch items` outside an open prefetch block
@@ -44,7 +47,9 @@ Checks:
           separate `if` per OS) are NOT compared: this checker cannot verify
           their conditions are mutually exclusive, and BigFix content
           routinely relies on exactly that pattern for cross-platform
-          prefetch blocks
+          prefetch blocks. Also NOT flagged: two declarations whose sha1/
+          sha256/size all match -- mirror URLs for the identical file,
+          where either one satisfies the download
     E513  a command references `__Download\\<name>` but nothing prefetches or
           downloads a file of that name (a typo catcher; skipped entirely
           when any producer's names are unknowable -- see below. `delete` and
@@ -335,6 +340,17 @@ _UNKNOWABLE_PRODUCER_RE = re.compile(
 # a bare `download` verb, any shape -- the fallback when neither download
 # shape above matched (e.g. a URL with a space inside a substitution)
 _DOWNLOAD_VERB_RE = re.compile(r"^download\b", re.IGNORECASE)
+# sha1/sha256/size attributes on a producer line, in either the `prefetch`
+# statement's colon form (`sha1:...`) or `add prefetch item`'s key=value form
+# (`sha1=...`) -- used to tell whether two same-named declarations are
+# actually mirror URLs for the identical file (see `_fingerprint`)
+_HASH_ATTR_RE = re.compile(r"\b(sha1|sha256|size)\s*[:=]\s*(\S+)", re.IGNORECASE)
+# a regex interval quantifier, e.g. `{40}`, `{1,3}`, `{2,}` -- relevance
+# substitutions routinely embed a `regex "..."` literal (to pull a sha1/
+# sha256/size/url back out of a line with `parenthesized part N of first
+# match`), and a quantifier's braces are plain regex syntax, not a nested
+# relevance substitution or its close; see `_check_substitution_braces`
+_REGEX_QUANTIFIER_RE = re.compile(r"\{\d+(?:,\d*)?\}")
 # `delete` / `folder delete` lines clean up the working directory; a
 # `__Download\<name>` they mention is not a consumption of that file
 _DELETE_RE = re.compile(r"^(?:folder\s+)?delete\b", re.IGNORECASE)
@@ -435,6 +451,12 @@ def _check_substitution_braces(lineno, line):
     pending_escapes = 0  # `{{`/`}}` literals a lone `}` may pair with
     index = 0
     while index < len(line):
+        match = _REGEX_QUANTIFIER_RE.match(line, index)
+        if match:
+            # `{40}` etc -- a regex quantifier's braces, not a nested
+            # substitution or its close; skip over the whole span untouched
+            index = match.end()
+            continue
         char = line[index]
         if open_col is None:
             if line.startswith("{{", index) or line.startswith("}}", index):
@@ -494,6 +516,26 @@ def _url_basename(url):
     return base
 
 
+def _fingerprint(line):
+    """Return a hashable `{attr: value}` snapshot of a producer line's
+    sha1/sha256/size attributes, lowercased and order-independent, or None.
+
+    if the line declares none of them.
+
+    Two producer declarations of the same download name with matching
+    fingerprints are the same file offered from multiple mirror URLs --
+    a common BigFix pattern -- not a real duplicate; see `_co_executable`'s
+    caller in `_check_download_names`. A line with no hash attributes at
+    all (a `download as`, `move`/`copy`, or redirect producer) fingerprints
+    to None, which never matches another None -- those stay flagged as
+    before, since there is nothing here to confirm they are the same file.
+    """
+    attrs = tuple(
+        sorted((k.lower(), v.lower()) for k, v in _HASH_ATTR_RE.findall(line))
+    )
+    return attrs or None
+
+
 def _co_executable(path_a, path_b):
     """Return True only when two declarations are known to run together.
 
@@ -547,7 +589,7 @@ def _check_download_names(lines):
     as producers where the destination name is determinable.
     """
     issues = []
-    producers = {}  # lowercased name -> [(lineno, if-branch path), ...]
+    producers = {}  # lowercased name -> [(lineno, if-branch path, fingerprint), ...]
     knowable = True
     if_stack = []  # each entry: [if_id, branch_index]
     next_if_id = 0
@@ -555,7 +597,7 @@ def _check_download_names(lines):
     def current_path():
         return {if_id: branch for if_id, branch in if_stack}
 
-    def produce(lineno, name):
+    def produce(lineno, name, fingerprint=None):
         nonlocal knowable
         if name is None or "{" in name:
             knowable = False
@@ -566,23 +608,29 @@ def _check_download_names(lines):
             return
         path = current_path()
         declarations = producers.setdefault(name, [])
-        for existing_lineno, existing_path in declarations:
-            if _co_executable(path, existing_path):
-                issues.append(
+        for existing_lineno, existing_path, existing_fingerprint in declarations:
+            if not _co_executable(path, existing_path):
+                continue
+            if fingerprint is not None and fingerprint == existing_fingerprint:
+                # same name, same sha1/sha256/size -- mirror URLs for the
+                # identical file, not a real duplicate; whichever download
+                # succeeds satisfies both
+                continue
+            issues.append(
+                (
+                    lineno,
+                    "E512",
                     (
-                        lineno,
-                        "E512",
-                        (
-                            f'duplicate download name "{name}" (first '
-                            f"declared on line {existing_lineno}, and both "
-                            "can run in the same execution); the second "
-                            "declaration silently overwrites the first; add "
-                            f"`{DOWNLOAD_MARKER}` if intentional"
-                        ),
-                    )
+                        f'duplicate download name "{name}" (first '
+                        f"declared on line {existing_lineno}, and both "
+                        "can run in the same execution); the second "
+                        "declaration silently overwrites the first; add "
+                        f"`{DOWNLOAD_MARKER}` if intentional"
+                    ),
                 )
-                break
-        declarations.append((lineno, path))
+            )
+            break
+        declarations.append((lineno, path, fingerprint))
 
     for index, raw_line in enumerate(lines):
         lineno = index + 1
@@ -612,11 +660,11 @@ def _check_download_names(lines):
             continue
         if lowered.startswith((BLOCK_PREFETCH, NOHASH_PREFETCH)):
             match = _NAME_KV_RE.search(stripped)
-            produce(lineno, match.group(1) if match else None)
+            produce(lineno, match.group(1) if match else None, _fingerprint(stripped))
             continue
         if lowered.startswith(STATEMENT_PREFETCH):
             match = _PREFETCH_STATEMENT_RE.match(stripped)
-            produce(lineno, match.group(1) if match else None)
+            produce(lineno, match.group(1) if match else None, _fingerprint(stripped))
             continue
         match = _DOWNLOAD_AS_RE.match(stripped)
         if match:

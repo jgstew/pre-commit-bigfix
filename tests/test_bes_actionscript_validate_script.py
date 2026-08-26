@@ -321,6 +321,23 @@ def test_real_close_follows_an_escaped_close_inside_a_substitution():
     assert issues == []
 
 
+def test_regex_quantifier_braces_inside_a_substitution_are_not_e509():
+    """`{40}` etc is a regex interval quantifier, not a substitution close --
+    it must not prematurely close the substitution and orphan the real one.
+    """
+    body = (
+        "wait cmd /c echo {(if (true) then (parenthesized part 3 of first "
+        'match (case insensitive regex "sha1(=|:)(\\S{40})( |\\b)") of it) '
+        'else "")}'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_regex_quantifier_with_range_is_not_e509():
+    body = 'wait cmd /c echo {(regex "\\d{1,3}") of it}'
+    assert validator.check_actionscript(body) == []
+
+
 def test_substitution_column_is_reported_from_the_raw_line():
     issues = validator.check_actionscript("    wait cmd /c echo {x")
     assert "column 22" in issues[0][2]
@@ -407,6 +424,28 @@ def test_duplicate_prefetch_name_is_e512():
     assert codes(issues) == ["E512"]
     assert issues[0][0] == 2
     assert validator.DOWNLOAD_MARKER in issues[0][2]
+
+
+def test_duplicate_prefetch_name_with_matching_hash_is_not_e512():
+    """Two mirror URLs for the identical file (same sha1/sha256/size) are
+    not a real duplicate -- either satisfies the download.
+    """
+    body = (
+        "prefetch a.exe sha1:x size:1 http://mirror-one/a.exe sha256:z\n"
+        "prefetch a.exe sha1:x size:1 http://mirror-two/a.exe sha256:z\n"
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_duplicate_prefetch_name_with_mismatched_hash_is_still_e512():
+    """Matching name but a differing hash is a real duplicate, not mirrors."""
+    body = (
+        "prefetch a.exe sha1:x size:1 http://mirror-one/a.exe sha256:z\n"
+        "prefetch a.exe sha1:x size:1 http://mirror-two/a.exe sha256:different\n"
+        "wait __Download\\a.exe"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E512"]
 
 
 def test_duplicate_name_across_producer_kinds_is_e512():
