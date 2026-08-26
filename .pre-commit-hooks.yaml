@@ -179,8 +179,32 @@
     `begin prefetch block` not at the top of the script (only comments,
     blank lines, `action parameter query`, and `parameter` assignments may
     precede it) is E515 -- plain `prefetch` statements are legal anywhere
-    and are not placement-checked. A command after an unconditional
-    exit/restart/shutdown is unreachable and warns W501; an
+    and are not placement-checked. Two `parameter "name" = ...` assignments
+    to the same name that can co-execute (the same conditional-context rule
+    as E512) is E516, since action parameters are write-once and the second
+    assignment silently overwrites the first; a `parameter "name"`
+    reference before that name's assignment elsewhere in the body is E517
+    (a name never assigned in-script, e.g. a secure parameter from the
+    Description page, is not flagged at all). A `continue if` or
+    `pause while` condition that is not a `{...}` substitution is E518,
+    the same E514 rule extended to those two verbs. A command referencing
+    `__createfile` or `__appendfile` with no matching `createfile until` /
+    `appendfile` producer anywhere in the body is E519 (the E513 rule
+    reapplied, with the same `delete`/`folder delete` cleanup exemption);
+    any `__Download`, `__createfile`, or `__appendfile` reference whose case
+    does not match exactly warns W503, since Windows tolerates the mismatch
+    but a case-sensitive Linux/macOS filesystem does not. A `setting` line
+    that is not the documented
+    `setting "name"="value" on "{...}" for client|user|action` shape is
+    E520; a `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a
+    quoted, bracketed `"[HKEY_...]..."` keyname is E521; the deprecated
+    `dos` verb warns W504 (use `waithidden cmd.exe /c ...` instead). An
+    `override wait` / `override run` block not terminated by its own
+    matching verb -- end of body, the other verb's command, or being
+    reopened by another `override` first -- is E522: the option lines
+    inside a block are bes-actionscript-lint-schclass's E303, this is the
+    pairing check that hook's state machine cannot express. A command after
+    an unconditional exit/restart/shutdown is unreachable and warns W501; an
     `action parameter query` after execution began warns W502. E-codes
     fail the hook; this hook has no auto-fixes, since a hook has no way to know where a
     missing `endif` or `end prefetch block` was meant to go, and guessing
@@ -194,12 +218,16 @@
     are W500 (bes-schema-validate owns validity). A file opts out of every
     check here with `pre-commit-skip: bes-actionscript-validate-script`
     anywhere in it, or out of one family with `actionscript-if-ok` (E500,
-    E501, E505, E506, E514), `actionscript-prefetch-block-ok` (E502, E503,
-    E504), `actionscript-block-nesting-ok` (E507),
+    E501, E505, E506, E514, E518), `actionscript-prefetch-block-ok` (E502,
+    E503, E504), `actionscript-block-nesting-ok` (E507),
     `actionscript-substitution-ok` (E508, E509 -- the marker
     bes-actionscript-lint-schclass also uses for its E301),
     `actionscript-prefetch-placement-ok` (E510, E511, E515),
-    `actionscript-download-ok` (E512, E513), `actionscript-unreachable-ok`
+    `actionscript-download-ok` (E512, E513), `actionscript-parameter-ok`
+    (E516, E517), `actionscript-scratch-ok` (E519, W503),
+    `actionscript-command-shape-ok` (E520, E521, W504),
+    `actionscript-override-ok` (E522 -- shared with
+    bes-actionscript-lint-schclass's E303), `actionscript-unreachable-ok`
     (W501), or `actionscript-parameter-query-ok` (W502). E-codes fail the
     hook; pass
     --strict to also fail on warnings.

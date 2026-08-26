@@ -4,8 +4,13 @@
 These exercise the if/endif and begin/end prefetch block balance walk
 (E500-E507), the per-line {...} relevance-substitution brace balance
 (E508, E509), prefetch placement (E510, E511, E515), download-name
-consistency (E512, E513), if-condition shape (E514), unreachable code
-(W501), action-parameter-query placement (W502), the lxml-based extraction of every <ActionScript> from BES XML
+consistency (E512, E513), if-condition shape (E514), duplicate/out-of-order
+parameter assignment (E516, E517), continue-if/pause-while condition shape
+(E518), __createfile/__appendfile production (E519), unreachable code
+(W501), action-parameter-query placement (W502), wrong-case scratch-file
+references (W503), setting/regset line shape (E520, E521), the deprecated
+`dos` verb (W504), override wait/run block termination (E522), the
+lxml-based extraction of every <ActionScript> from BES XML
 (sourceline-accurate linenos, case-insensitive MIMEType gating), raw non-.bes
 file checking, createfile-heredoc masking, the skip/opt-out markers,
 --disable, W500 on unparsable XML, the mustache-template skip, and main()'s
@@ -467,7 +472,7 @@ def test_download_reference_with_no_producer_is_e513():
 
 
 def test_download_reference_matches_case_insensitively():
-    body = "prefetch A.exe sha1:x size:1 http://x/a.exe\nwait __download/a.EXE"
+    body = "prefetch A.exe sha1:x size:1 http://x/a.exe\nwait __Download/a.EXE"
     assert validator.check_actionscript(body) == []
 
 
@@ -534,6 +539,7 @@ def test_substituted_consumer_name_is_not_judged():
 
 def test_copy_from_createfile_registers_the_destination():
     body = (
+        "createfile until EOF\ncontent\nEOF\n"
         "copy __createfile __Download\\ResponseFile.txt\n"
         "wait __Download\\ResponseFile.txt"
     )
@@ -542,6 +548,7 @@ def test_copy_from_createfile_registers_the_destination():
 
 def test_move_from_createfile_registers_the_destination():
     body = (
+        "createfile until EOF\ncontent\nEOF\n"
         "move __createfile __Download\\WUA_Search.vbs\n"
         "wait __Download\\WUA_Search.vbs"
     )
@@ -551,6 +558,7 @@ def test_move_from_createfile_registers_the_destination():
 def test_move_from_createfile_with_substituted_destination_suppresses_e513():
     """`{download path "X"}` -- no literal __Download ref to read back."""
     body = (
+        "createfile until EOF\ncontent\nEOF\n"
         'move __createfile "{ download path "WUA_Search.vbs" }"\n'
         "wait __Download\\anything.exe"
     )
@@ -575,6 +583,7 @@ def test_move_of_an_undeclared_download_with_no_createfile_is_still_e513():
 
 def test_redirection_into_download_registers_the_target():
     body = (
+        "createfile until EOF\ncontent\nEOF\n"
         "move __createfile __Download\\WUA_Search.vbs\n"
         "waithidden cmd /c cscript __Download\\WUA_Search.vbs "
         "> __Download\\results_WindowsUpdates.ini\n"
@@ -705,6 +714,255 @@ def test_parameter_query_after_only_declarations_is_fine():
     assert validator.check_actionscript(body) == []
 
 
+# --- E516: duplicate parameter assignment ---------------------------------------
+
+
+def test_duplicate_unconditional_parameter_assignment_is_e516():
+    body = 'parameter "a" = "1"\nparameter "a" = "2"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E516"]
+    assert issues[0][0] == 2
+    assert validator.PARAMETER_MARKER in issues[0][2]
+
+
+def test_parameter_assignment_in_separate_if_branches_is_fine():
+    """Cross-platform content assigns the same parameter in separate ifs."""
+    body = (
+        "if {windows of operating system}\n"
+        'parameter "path" = "C:\\x"\n'
+        "endif\n"
+        "if {mac of operating system}\n"
+        'parameter "path" = "/tmp/x"\n'
+        "endif"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_parameter_assignment_in_same_if_elseif_branches_is_fine():
+    body = (
+        "if {true}\n" 'parameter "a" = "1"\n' "else\n" 'parameter "a" = "2"\n' "endif"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_parameter_reassignment_in_same_branch_is_e516():
+    body = "if {true}\n" 'parameter "a" = "1"\n' 'parameter "a" = "2"\n' "endif"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E516"]
+    assert issues[0][0] == 3
+
+
+def test_single_assignment_reports_nothing():
+    body = 'parameter "a" = "1"\nwait cmd /c echo {parameter "a"}'
+    assert validator.check_actionscript(body) == []
+
+
+# --- E517: parameter referenced before its assignment ---------------------------
+
+
+def test_parameter_referenced_before_assignment_is_e517():
+    body = 'wait cmd /c echo {parameter "a"}\nparameter "a" = "1"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E517"]
+    assert issues[0][0] == 1
+    assert validator.PARAMETER_MARKER in issues[0][2]
+
+
+def test_parameter_referenced_after_assignment_is_fine():
+    body = 'parameter "a" = "1"\nwait cmd /c echo {parameter "a"}'
+    assert validator.check_actionscript(body) == []
+
+
+def test_parameter_never_assigned_in_script_is_not_flagged():
+    """A secure parameter supplied from the Description page is invisible here."""
+    body = 'wait cmd /c echo {parameter "secret" of action}'
+    assert validator.check_actionscript(body) == []
+
+
+# --- E518: continue if / pause while condition must be a substitution -----------
+
+
+def test_continue_if_without_substitution_is_e518():
+    body = "continue if true"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E518"]
+    assert validator.IF_MARKER in issues[0][2]
+
+
+def test_continue_if_with_substitution_is_fine():
+    body = 'continue if {exists file "x"}'
+    assert validator.check_actionscript(body) == []
+
+
+def test_pause_while_without_substitution_is_e518():
+    body = "pause while true"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E518"]
+
+
+def test_pause_while_with_substitution_is_fine():
+    body = 'pause while {exists process "x"}'
+    assert validator.check_actionscript(body) == []
+
+
+# --- E519: __createfile / __appendfile referenced with no producer --------------
+
+
+def test_createfile_reference_with_no_producer_is_e519():
+    body = "move __createfile __Download\\x.txt"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E519"]
+    assert validator.SCRATCH_MARKER in issues[0][2]
+
+
+def test_createfile_reference_with_a_producer_is_fine():
+    body = "createfile until EOF\ncontent\nEOF\nmove __createfile __Download\\x.txt"
+    assert validator.check_actionscript(body) == []
+
+
+def test_appendfile_reference_with_no_producer_is_e519():
+    body = "wait cmd /c type __appendfile"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E519"]
+
+
+def test_appendfile_reference_with_a_producer_is_fine():
+    body = "appendfile line one\nwait cmd /c type __appendfile"
+    assert validator.check_actionscript(body) == []
+
+
+def test_deleting_createfile_with_no_producer_is_not_flagged():
+    """Cleanup, not consumption -- the same exemption E513 uses."""
+    body = "delete __createfile"
+    assert validator.check_actionscript(body) == []
+
+
+# --- W503: wrong-case __Download / __createfile / __appendfile reference --------
+
+
+def test_lowercase_download_reference_is_w503():
+    body = "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __download\\a.exe"
+    issues = validator.check_actionscript(body)
+    assert "W503" in codes(issues)
+    assert (
+        validator.SCRATCH_MARKER
+        in [msg for _, code, msg in issues if code == "W503"][0]
+    )
+
+
+def test_lowercase_createfile_reference_is_w503():
+    body = "createfile until EOF\ncontent\nEOF\nmove __CreateFile __Download\\x.txt"
+    issues = validator.check_actionscript(body)
+    assert "W503" in codes(issues)
+
+
+def test_correct_case_scratch_references_are_fine():
+    body = (
+        "createfile until EOF\ncontent\nEOF\n"
+        "move __createfile __Download\\x.txt\n"
+        "wait __Download\\x.txt"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+# --- E520: malformed setting line -------------------------------------------------
+
+
+def test_setting_missing_on_clause_is_e520():
+    body = 'setting "x"="1"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E520"]
+    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+
+
+def test_well_formed_setting_line_is_fine():
+    body = 'setting "x"="1" on "{parameter "action issue date" of action}" for client'
+    assert validator.check_actionscript(body) == []
+
+
+# --- E521: regset/regdelete key not bracketed -------------------------------------
+
+
+def test_regset_unbracketed_key_is_e521():
+    body = 'regset HKEY_LOCAL_MACHINE\\SOFTWARE\\x "v"="1"'
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E521"]
+    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+
+
+def test_regset_bracketed_key_is_fine():
+    body = 'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\x]" "v"="1"'
+    assert validator.check_actionscript(body) == []
+
+
+def test_regset64_bracketed_key_is_fine():
+    body = 'regset64 "[HKEY_LOCAL_MACHINE\\SOFTWARE\\x]" "v"="1"'
+    assert validator.check_actionscript(body) == []
+
+
+def test_regdelete_unbracketed_key_is_e521():
+    body = "regdelete HKEY_LOCAL_MACHINE\\SOFTWARE\\x"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E521"]
+
+
+# --- W504: deprecated dos verb -----------------------------------------------------
+
+
+def test_dos_verb_is_w504():
+    body = "dos cd C:\\x && npm install"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["W504"]
+    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+
+
+def test_waithidden_cmd_is_not_w504():
+    body = "waithidden cmd.exe /c echo hi"
+    assert validator.check_actionscript(body) == []
+
+
+# --- E522: override wait/run block termination -------------------------------------
+
+
+def test_override_wait_terminated_by_wait_is_fine():
+    body = "override wait\nhidden=true\nwait cmd /c echo a"
+    assert validator.check_actionscript(body) == []
+
+
+def test_override_run_terminated_by_run_is_fine():
+    body = "override run\nhidden=true\nrun cmd /c echo a"
+    assert validator.check_actionscript(body) == []
+
+
+def test_override_wait_terminated_by_run_is_e522():
+    body = "override wait\nhidden=true\nrun cmd /c echo a"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E522"]
+    assert issues[0][0] == 1
+    assert validator.OVERRIDE_BLOCK_MARKER in issues[0][2]
+
+
+def test_override_wait_terminated_by_waithidden_is_e522():
+    """`waithidden` is a different verb from `wait`; the override does not apply."""
+    body = "override wait\nhidden=true\nwaithidden cmd /c echo a"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E522"]
+
+
+def test_override_never_terminated_is_e522():
+    body = "override wait\nhidden=true"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E522"]
+    assert issues[0][0] == 1
+
+
+def test_override_reopened_before_a_command_is_e522():
+    body = "override wait\nhidden=true\noverride run\nrun cmd /c echo a"
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E522"]
+    assert issues[0][0] == 1
+
+
 # --- new-check opt-outs and --disable -------------------------------------------
 
 
@@ -731,6 +989,40 @@ def test_if_marker_silences_e514(tmp_path):
 
 def test_disable_w501_silences_it(tmp_path):
     issues = issues_for(tmp_path, bes("exit 0\nwait a"), disabled={"W501"})
+    assert issues == []
+
+
+def test_parameter_marker_silences_e516(tmp_path):
+    content = bes(
+        'parameter "a" = "1"\nparameter "a" = "2"',
+        marker=validator.PARAMETER_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_scratch_marker_silences_e519(tmp_path):
+    content = bes(
+        "move __createfile __Download\\x.txt",
+        marker=validator.SCRATCH_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_command_shape_marker_silences_e520(tmp_path):
+    content = bes('setting "x"="1"', marker=validator.COMMAND_SHAPE_MARKER)
+    assert issues_for(tmp_path, content) == []
+
+
+def test_override_block_marker_silences_e522(tmp_path):
+    content = bes(
+        "override wait\nhidden=true\nrun cmd /c echo a",
+        marker=validator.OVERRIDE_BLOCK_MARKER,
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_w504_silences_it(tmp_path):
+    issues = issues_for(tmp_path, bes("dos echo hi"), disabled={"W504"})
     assert issues == []
 
 

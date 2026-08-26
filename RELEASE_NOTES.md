@@ -1,5 +1,45 @@
 # Release Notes
 
+## v0.9.0
+
+### Added
+
+New `bes-actionscript-validate-script` checks, found by surveying all 7,069
+ActionScript bodies across 1,043 `.bes` files in `bigfix-content/fixlet` for
+defect patterns the hook did not yet cover:
+
+- **`E516`**: a second `parameter "name" = ...` assignment to the same name
+  that can co-execute with an earlier one (the same conditional-context rule
+  `E512` uses). Action parameters are write-once; the second assignment
+  silently overwrites the first.
+- **`E517`**: a `parameter "name"` reference before that name's assignment
+  elsewhere in the body - an ordering bug, since the substitution evaluates
+  to empty at that point. A name never assigned in-script (a secure
+  parameter from the Description page, say) is not flagged.
+- **`E518`**: a `continue if` or `pause while` condition that is not a
+  `{...}` relevance substitution - the same rule `E514` applies to `if`/
+  `elseif`, extended to these two other condition-bearing verbs.
+- **`E519`**: a command references `__createfile` or `__appendfile` but the
+  body has no matching `createfile until` / `appendfile` line anywhere - the
+  `E513` rule reapplied to these two scratch-file verbs, with the same
+  `delete`/`folder delete` cleanup exemption.
+- **`W503`**: a `__Download`, `__createfile`, or `__appendfile` reference
+  whose case does not match exactly - Windows tolerates this, a
+  case-sensitive Linux/macOS filesystem does not.
+- **`E520`**: a `setting` line that is not the documented
+  `setting "name"="value" on "{...}" for client|user|action` shape.
+- **`E521`**: a `regset`/`regset64`/`regdelete`/`regdelete64` key that is not
+  a quoted, bracketed `"[HKEY_...]..."` keyname.
+- **`W504`**: the deprecated `dos` verb; use `waithidden cmd.exe /c ...`
+  instead. The one new check that fires on existing `bigfix-content`
+  (6 uses across Node.js/uBlock tasks) - everything else surveyed clean.
+- **`E522`**: an `override wait` / `override run` block not terminated by
+  its own matching verb (end of body, the *other* verb's command, or being
+  reopened by another `override` first).
+  `bes-actionscript-lint-schclass` validates the option lines inside a block
+  (`E303`); this is the pairing check that block's state machine cannot
+  express.
+
 ## v0.8.2
 
 ### Changed

@@ -51,6 +51,33 @@ Checks:
           only blank lines, `//` comments, `action parameter query` lines,
           and `parameter` assignments may precede it. Plain `prefetch`
           statements are NOT placement-checked; they are legal anywhere
+    E516  two `parameter "name" = ...` assignments to the same name that can
+          co-execute (see E512's co-executable rule -- assignments in
+          different `if`/`elseif`/`else` branches are not compared): action
+          parameters are write-once, and the second assignment silently
+          overwrites the first
+    E517  a `parameter "name"` substitution is referenced before the line
+          that assigns it -- the assignment exists later in the same body,
+          so this is an ordering bug, not a parameter supplied from outside
+          the script (which this hook cannot see and does not flag)
+    E518  a `continue if` or `pause while` condition is not a `{...}`
+          relevance substitution -- the same E514 rule extended to these two
+          other condition-bearing verbs
+    E519  a command references `__createfile` or `__appendfile` but the body
+          never has a matching `createfile until` / `appendfile` line
+          earlier; `delete`/`folder delete` lines are cleanup, not
+          consumption, and never count (E513's rule, reapplied)
+    E520  a `setting` line is not the documented
+          `setting "name"="value" on "{...}" for client|user|action` shape
+          -- a missing effective-date clause fails at runtime
+    E521  a `regset`/`regset64`/`regdelete`/`regdelete64` key is not a
+          quoted, bracketed `"[HKEY_...]..."` keyname
+    E522  an `override wait` / `override run` block is not terminated by its
+          matching verb -- it hits end of body, is terminated by the *other*
+          override verb's command, or is immediately reopened by another
+          `override` before any command runs. `bes-actionscript-lint-schclass`
+          validates the option lines inside a block (E303); this is the
+          pairing check that block's state machine cannot express
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -58,11 +85,21 @@ Checks:
           only the first unreachable line is reported
     W502  an `action parameter query` after the first execution command --
           these are console-time prompts and belong at the top
+    W503  a `__Download`, `__createfile`, or `__appendfile` reference is not
+          exactly that case (e.g. `__download\\x.exe`) -- Windows tolerates
+          this, but a Linux/macOS agent's case-sensitive filesystem does not
+    W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
 
 E513 is conservative: it is skipped for a whole body whenever any producer's
 names cannot be known statically -- an `extract`/`unarchive`/`archive now`/
 `utility` command, a `download` with no `as <name>` whose URL is not a literal
 with a basename, or any producer name/URL containing a `{` substitution.
+
+E517 is likewise conservative: a `parameter "name"` reference is only checked
+against assignments made elsewhere in the *same* body. A name never assigned
+in-script is not flagged at all -- real content routinely supplies parameters
+from the action's Description page (secure parameters, REST credentials) that
+this hook cannot see, and flagging every such reference would be pure noise.
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given. This hook has no auto-fixes: a hook
@@ -92,17 +129,21 @@ text.
 A file can opt out of all checks with a comment anywhere in it:
     <!-- pre-commit-skip: bes-actionscript-validate-script -->
 or out of a single check family with the matching marker anywhere in the file:
-    actionscript-if-ok             (E500, E501, E505, E506)
+    actionscript-if-ok             (E500, E501, E505, E506, E514, E518)
     actionscript-prefetch-block-ok (E502, E503, E504)
     actionscript-block-nesting-ok  (E507)
     actionscript-substitution-ok   (E508, E509)
     actionscript-prefetch-placement-ok (E510, E511, E515)
     actionscript-download-ok       (E512, E513)
+    actionscript-parameter-ok      (E516, E517)
+    actionscript-scratch-ok        (E519, W503)
+    actionscript-command-shape-ok  (E520, E521, W504)
+    actionscript-override-ok       (E522 -- shared with bes-actionscript-lint-schclass's E303)
     actionscript-unreachable-ok    (W501)
     actionscript-parameter-query-ok (W502)
 
-(E514 belongs to the `actionscript-if-ok` family above: it is an if-shape
-check.)
+(E514 and E518 belong to the `actionscript-if-ok` family above: they are
+if/continue-if/pause-while condition-shape checks.)
 
 Files that look like mustache templates (containing `{{ ... }}`) are skipped
 silently: they are not real content until rendered.
@@ -148,6 +189,12 @@ BLOCK_NESTING_MARKER = "actionscript-block-nesting-ok"  # E507
 SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E508, E509
 PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, E515
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, E513
+PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517
+SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
+COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, W504
+# shared with the sibling schclass hook's E303 on purpose: one marker turns
+# off override-block complaints in both hooks.
+OVERRIDE_BLOCK_MARKER = "actionscript-override-ok"  # E522
 UNREACHABLE_MARKER = "actionscript-unreachable-ok"  # W501
 PARAMETER_QUERY_MARKER = "actionscript-parameter-query-ok"  # W502
 
@@ -168,8 +215,17 @@ CHECK_MARKERS = {
     "E513": DOWNLOAD_MARKER,
     "E514": IF_MARKER,
     "E515": PREFETCH_PLACEMENT_MARKER,
+    "E516": PARAMETER_MARKER,
+    "E517": PARAMETER_MARKER,
+    "E518": IF_MARKER,
+    "E519": SCRATCH_MARKER,
+    "E520": COMMAND_SHAPE_MARKER,
+    "E521": COMMAND_SHAPE_MARKER,
+    "E522": OVERRIDE_BLOCK_MARKER,
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
+    "W503": SCRATCH_MARKER,
+    "W504": COMMAND_SHAPE_MARKER,
 }
 
 KNOWN_CODES = frozenset(
@@ -190,9 +246,18 @@ KNOWN_CODES = frozenset(
         "E513",
         "E514",
         "E515",
+        "E516",
+        "E517",
+        "E518",
+        "E519",
+        "E520",
+        "E521",
+        "E522",
         "W500",
         "W501",
         "W502",
+        "W503",
+        "W504",
     ]
 )
 
@@ -248,6 +313,39 @@ _REDIRECT_TARGET_RE = re.compile(
 _TERMINATOR_RE = re.compile(r"^(?:exit|restart|shutdown)\b", re.IGNORECASE)
 _ACTION_PARAMETER_QUERY_RE = re.compile(r"^action\s+parameter\s+query\b", re.IGNORECASE)
 _PARAMETER_RE = re.compile(r"^parameter\b", re.IGNORECASE)
+# a `parameter "name" = ...` assignment; the value is everything after `=`
+_PARAMETER_ASSIGN_RE = re.compile(r'^parameter\s+"([^"]+)"\s*=', re.IGNORECASE)
+# a `parameter "name"` reference anywhere on a line, assignments included --
+# callers distinguish an assignment's own name from a reference to another
+_PARAMETER_REF_RE = re.compile(r'\bparameter\s+"([^"]+)"', re.IGNORECASE)
+_CONTINUE_IF_RE = re.compile(r"^continue\s+if\b(.*)$", re.IGNORECASE)
+_PAUSE_WHILE_RE = re.compile(r"^pause\s+while\b(.*)$", re.IGNORECASE)
+_CREATEFILE_UNTIL_RE = re.compile(r"^createfile\s+until\b", re.IGNORECASE)
+_APPENDFILE_VERB_RE = re.compile(r"^appendfile\b", re.IGNORECASE)
+# `__createfile`/`__appendfile` references, any case; callers compare the
+# matched text against the canonical spelling to catch a wrong-case use
+_CREATEFILE_REF_RE = re.compile(r"__createfile\b", re.IGNORECASE)
+_APPENDFILE_REF_RE = re.compile(r"__appendfile\b", re.IGNORECASE)
+# `__Download`/`__createfile`/`__appendfile` in any case, for the W503
+# wrong-case scan; grouped so one search finds all three spellings at once
+_SCRATCH_REF_RE = re.compile(r"__(download|createfile|appendfile)\b", re.IGNORECASE)
+_SCRATCH_CANONICAL = {
+    "download": "__Download",
+    "createfile": "__createfile",
+    "appendfile": "__appendfile",
+}
+_SETTING_RE = re.compile(r"^setting\s+(.*)$", re.IGNORECASE | re.DOTALL)
+_SETTING_SHAPE_RE = re.compile(
+    r'^setting\s+".+"\s*=\s*".*"\s+on\s+"\{.*\}"\s+for\s+(client\b|user\b|action\b)',
+    re.IGNORECASE | re.DOTALL,
+)
+_REGSET_RE = re.compile(
+    r"^(regset64|regset|regdelete64|regdelete)\s+(.*)$", re.IGNORECASE
+)
+_REGSET_KEY_RE = re.compile(r'^"\[', re.IGNORECASE)
+_DOS_VERB_RE = re.compile(r"^dos\b", re.IGNORECASE)
+_OVERRIDE_VERB_RE = re.compile(r"^override\s+(wait|run)\s*$", re.IGNORECASE)
+_OVERRIDE_OPTION_LINE_RE = re.compile(r"^\w+\s*=")
 
 # lines that do not count as "execution has started" for W502: declarations,
 # prompts, structure, and prefetching
@@ -533,6 +631,364 @@ def _check_download_names(lines):
     return issues
 
 
+def _check_parameters(lines):
+    """Check `parameter "name" = ...` assignments and references.
+
+    Returns E516 issues for a second assignment to a name that can
+    co-execute with an earlier one (the same `_co_executable` if-branch-path
+    rule E512 uses -- assignments in mutually exclusive `if`/`elseif`/`else`
+    branches are not compared), since action parameters are write-once and
+    the second assignment would silently overwrite the first at runtime.
+
+    Also returns E517 issues for a `parameter "name"` reference on a line
+    before that name's (first) assignment elsewhere in the body -- an
+    ordering bug, since the substitution evaluates to empty at that point.
+    A name never assigned anywhere in the body is not flagged: it may be
+    supplied from outside the script (a secure parameter, say), which this
+    hook cannot see.
+    """
+    issues = []
+    if_stack = []  # each entry: [if_id, branch_index], mirrors _check_download_names
+    next_if_id = 0
+    declarations = {}  # lowercased name -> [(lineno, if-branch path), ...]
+    first_assign_lineno = {}  # lowercased name -> earliest assignment lineno
+    deferred_refs = []  # (lineno, name, raw_name) references seen so far
+
+    def current_path():
+        return {if_id: branch for if_id, branch in if_stack}
+
+    # first pass: record every assignment (for E516 and to know where each
+    # name is first assigned), in source order
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        if _IF_RE.match(stripped):
+            next_if_id += 1
+            if_stack.append([next_if_id, 0])
+            continue
+        if _ELSEIF_RE.match(stripped) or _ELSE_RE.match(stripped):
+            if if_stack:
+                if_stack[-1][1] += 1
+            continue
+        if _ENDIF_RE.match(stripped):
+            if if_stack:
+                if_stack.pop()
+            continue
+
+        match = _PARAMETER_ASSIGN_RE.match(stripped)
+        if match:
+            name = match.group(1)
+            key = name.lower()
+            if key not in first_assign_lineno:
+                first_assign_lineno[key] = lineno
+            path = current_path()
+            existing = declarations.setdefault(key, [])
+            for existing_lineno, existing_path in existing:
+                if _co_executable(path, existing_path):
+                    issues.append(
+                        (
+                            lineno,
+                            "E516",
+                            (
+                                f'duplicate assignment to parameter "{name}" '
+                                f"(first assigned on line {existing_lineno}, "
+                                "and both can run in the same execution); "
+                                "action parameters are write-once and the "
+                                "second assignment silently overwrites the "
+                                f"first; add `{PARAMETER_MARKER}` if "
+                                "intentional"
+                            ),
+                        )
+                    )
+                    break
+            existing.append((lineno, path))
+
+    # second pass: every `parameter "name"` reference, including inside an
+    # assignment's own value (self-reference is a real ordering bug too, and
+    # the assignment's own name= part is excluded by scanning after it)
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        assign_match = _PARAMETER_ASSIGN_RE.match(stripped)
+        scan_from = assign_match.end() if assign_match else 0
+        for match in _PARAMETER_REF_RE.finditer(stripped, scan_from):
+            deferred_refs.append((lineno, match.group(1)))
+
+    for lineno, name in deferred_refs:
+        key = name.lower()
+        assign_lineno = first_assign_lineno.get(key)
+        if assign_lineno is not None and lineno < assign_lineno:
+            issues.append(
+                (
+                    lineno,
+                    "E517",
+                    (
+                        f'`parameter "{name}"` is referenced here but not '
+                        f"assigned until line {assign_lineno}; the "
+                        "substitution evaluates to empty at this point; add "
+                        f"`{PARAMETER_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def _check_scratch_references(lines):
+    """Check `__createfile`/`__appendfile` production and reference case.
+
+    Returns E519 issues for a command referencing `__createfile` (resp.
+    `__appendfile`) when the body has no `createfile until` (resp.
+    `appendfile`) line anywhere -- the E513 rule reapplied to these two
+    scratch-file verbs, with the same `delete`/`folder delete` exemption
+    (clearing scratch output is normal housekeeping, not consumption).
+
+    Also returns W503 issues for any `__download`, `__createfile`, or
+    `__appendfile` reference whose case does not match the canonical
+    spelling -- Windows tolerates this, a case-sensitive Linux/macOS
+    filesystem does not.
+    """
+    issues = []
+    has_createfile = any(
+        _CREATEFILE_UNTIL_RE.match(line.strip())
+        for line in lines
+        if line.strip() and not line.strip().startswith("//")
+    )
+    has_appendfile = any(
+        _APPENDFILE_VERB_RE.match(line.strip())
+        for line in lines
+        if line.strip() and not line.strip().startswith("//")
+    )
+
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        for match in _SCRATCH_REF_RE.finditer(raw_line):
+            matched_text = match.group(0)
+            canonical = _SCRATCH_CANONICAL[match.group(1).lower()]
+            if matched_text != canonical:
+                issues.append(
+                    (
+                        lineno,
+                        "W503",
+                        (
+                            f'"{matched_text}" is not exactly "{canonical}"; '
+                            "Windows tolerates the case mismatch but a "
+                            "case-sensitive Linux/macOS filesystem does not; "
+                            f"add `{SCRATCH_MARKER}` if intentional"
+                        ),
+                    )
+                )
+
+        if _DELETE_RE.match(stripped):
+            continue  # cleanup, not consumption -- same exemption as E513
+
+        if not has_createfile and _CREATEFILE_REF_RE.search(stripped):
+            issues.append(
+                (
+                    lineno,
+                    "E519",
+                    (
+                        "`__createfile` is referenced but the body has no "
+                        f"`createfile until` line; add `{SCRATCH_MARKER}` if intentional"
+                    ),
+                )
+            )
+        if not has_appendfile and _APPENDFILE_REF_RE.search(stripped):
+            issues.append(
+                (
+                    lineno,
+                    "E519",
+                    (
+                        "`__appendfile` is referenced but the body has no "
+                        "`appendfile` line; add "
+                        f"`{SCRATCH_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def _check_command_shapes(lines):
+    """Check per-line command shapes independent of block structure.
+
+    Returns E520 for a `setting` line that is not the documented
+    `setting "name"="value" on "{...}" for client|user|action` shape (a
+    missing effective-date `on` clause fails at runtime); E521 for a
+    `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
+    bracketed `"[HKEY_...]..."` keyname; and W504 for the deprecated `dos`
+    verb (`waithidden cmd.exe /c ...` is the documented replacement).
+    """
+    issues = []
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        if _SETTING_RE.match(stripped) and not _SETTING_SHAPE_RE.match(stripped):
+            issues.append(
+                (
+                    lineno,
+                    "E520",
+                    (
+                        "`setting` line does not match the documented "
+                        '`setting "name"="value" on "{...}" for '
+                        "client|user|action` shape; add "
+                        f"`{COMMAND_SHAPE_MARKER}` if intentional"
+                    ),
+                )
+            )
+
+        match = _REGSET_RE.match(stripped)
+        if match:
+            verb, rest = match.group(1), match.group(2).strip()
+            if not _REGSET_KEY_RE.match(rest):
+                issues.append(
+                    (
+                        lineno,
+                        "E521",
+                        (
+                            f'"{verb}" key is not a quoted, bracketed '
+                            '"[HKEY_...]..." keyname; add '
+                            f"`{COMMAND_SHAPE_MARKER}` if intentional"
+                        ),
+                    )
+                )
+
+        if _DOS_VERB_RE.match(stripped):
+            issues.append(
+                (
+                    lineno,
+                    "W504",
+                    (
+                        "`dos` is deprecated; use `waithidden cmd.exe /c "
+                        "...` instead; add "
+                        f"`{COMMAND_SHAPE_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
+def _check_condition_shapes(lines):
+    """Check `continue if` / `pause while` condition shape.
+
+    Returns E518 for a `continue if` or `pause while` whose condition is not
+    a `{...}` relevance substitution -- the same rule E514 applies to `if`/
+    `elseif`, extended to these two other condition-bearing verbs.
+    """
+    issues = []
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        for regex, verb in (
+            (_CONTINUE_IF_RE, "continue if"),
+            (_PAUSE_WHILE_RE, "pause while"),
+        ):
+            match = regex.match(stripped)
+            if match and not match.group(1).lstrip().startswith("{"):
+                issues.append(
+                    (
+                        lineno,
+                        "E518",
+                        (
+                            f"`{verb}` condition is not a `{{...}}` "
+                            "relevance substitution; the agent requires "
+                            f"one; add `{IF_MARKER}` if intentional"
+                        ),
+                    )
+                )
+    return issues
+
+
+def _check_override_blocks(lines):
+    """Check `override wait` / `override run` block termination.
+
+    `bes_actionscript_lint_schclass.py` validates the keyword=value option
+    lines inside a block (E303) but its state machine never notices a block
+    that is left open: hitting end of body, being reopened by another
+    `override` before any command runs, or being closed by the *wrong*
+    verb's command (an `override wait` block whose next real command is
+    `run ...` instead of `wait ...`, or vice versa). This is that pairing
+    check.
+    """
+    issues = []
+    open_verb = None
+    open_lineno = None
+    for index, raw_line in enumerate(lines):
+        lineno = index + 1
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        match = _OVERRIDE_VERB_RE.match(stripped)
+        if match:
+            if open_verb is not None:
+                issues.append(
+                    (
+                        open_lineno,
+                        "E522",
+                        (
+                            f"`override {open_verb}` is reopened by another "
+                            f"`override` on line {lineno} before any "
+                            f"command runs; add `{OVERRIDE_BLOCK_MARKER}` if "
+                            "intentional"
+                        ),
+                    )
+                )
+            open_verb = match.group(1).lower()
+            open_lineno = lineno
+            continue
+
+        if open_verb is None:
+            continue
+        if _OVERRIDE_OPTION_LINE_RE.match(stripped):
+            continue  # a keyword=value option line; the block is still open
+
+        # the first non-option line closes the block -- its own verb must
+        # match the one `override` opened
+        verb = re.match(r"[A-Za-z_]+", stripped)
+        command_verb = verb.group(0).lower() if verb else ""
+        if command_verb != open_verb:
+            issues.append(
+                (
+                    open_lineno,
+                    "E522",
+                    (
+                        f"`override {open_verb}` is terminated by `{command_verb}` "
+                        f"on line {lineno}, not `{open_verb}`; add "
+                        f"`{OVERRIDE_BLOCK_MARKER}` if intentional"
+                    ),
+                )
+            )
+        open_verb = None
+
+    if open_verb is not None:
+        issues.append(
+            (
+                open_lineno,
+                "E522",
+                (
+                    f"`override {open_verb}` is never terminated by a "
+                    f"matching `{open_verb}` command; add "
+                    f"`{OVERRIDE_BLOCK_MARKER}` if intentional"
+                ),
+            )
+        )
+    return issues
+
+
 def check_actionscript(body):
     """Check a single ActionScript body for balanced blocks and substitutions.
 
@@ -546,6 +1002,11 @@ def check_actionscript(body):
     """
     lines, _createfile_issues = _mask_heredocs(body.split("\n"))
     issues = _check_download_names(lines)  # E512 / E513
+    issues.extend(_check_parameters(lines))  # E516 / E517
+    issues.extend(_check_scratch_references(lines))  # E519 / W503
+    issues.extend(_check_command_shapes(lines))  # E520 / E521 / W504
+    issues.extend(_check_condition_shapes(lines))  # E518
+    issues.extend(_check_override_blocks(lines))  # E522
     if_stack = []  # each entry: [lineno, seen_else]
     prefetch_stack = []  # each entry: [lineno, if_depth_at_open]
     preamble_over = False  # True once anything a prefetch block may not follow
