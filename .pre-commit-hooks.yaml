@@ -178,7 +178,7 @@
     E512 (only within the same conditional context -- declarations in different
     if/elseif/else branches are not compared, since cross-platform content
     declares one name per OS in separate `if`s); a `__Download\<name>`
-    reference nothing prefetches or downloads is E513 (skipped whenever any
+    reference nothing prefetches or downloads warns W507 (skipped whenever any
     producer's names are unknowable -- extract, a `download` with no `as`, or
     a `{...}` in a name; `delete`/`folder delete` are cleanup, and
     `copy`/`move` destinations and `>` redirection targets are producers); an `if`/`elseif`
@@ -196,7 +196,7 @@
     `pause while` condition that is not a `{...}` substitution is E518,
     the same E514 rule extended to those two verbs. A command referencing
     `__createfile` or `__appendfile` with no matching `createfile until` /
-    `appendfile` producer anywhere in the body is E519 (the E513 rule
+    `appendfile` producer anywhere in the body is E519 (the W507 rule
     reapplied, with the same `delete`/`folder delete` cleanup exemption);
     any `__Download`, `__createfile`, or `__appendfile` reference whose case
     does not match exactly warns W503, since Windows tolerates the mismatch
@@ -245,7 +245,7 @@
     `actionscript-substitution-ok` (E508, E509 -- the marker
     bes-actionscript-lint-schclass also uses for its E301),
     `actionscript-prefetch-placement-ok` (E510, E511, E515),
-    `actionscript-download-ok` (E512, E513), `actionscript-parameter-ok`
+    `actionscript-download-ok` (E512, W507), `actionscript-parameter-ok`
     (E516, E517), `actionscript-scratch-ok` (E519, W503),
     `actionscript-scratch-dest-ok` (W506),
     `actionscript-command-shape-ok` (E520, E521, E523, W504),

@@ -50,13 +50,6 @@ Checks:
           prefetch blocks. Also NOT flagged: two declarations whose sha1/
           sha256/size all match -- mirror URLs for the identical file,
           where either one satisfies the download
-    E513  a command references `__Download\\<name>` but nothing prefetches or
-          downloads a file of that name (a typo catcher; skipped entirely
-          when any producer's names are unknowable -- see below. `delete` and
-          `folder delete` lines are cleanup, not consumption, and never
-          count. A reference containing a glob wildcard, e.g.
-          `__Download\\mysql*rpm`, is never flagged -- the shell matches it
-          at runtime, not this checker)
     E514  an `if` or `elseif` whose condition is not a `{...}` relevance
           substitution (`if true`, bare `if`; the agent requires one)
     E515  a `begin prefetch block` that is not at the top of the script --
@@ -83,7 +76,7 @@ Checks:
     E519  a command references `__createfile` or `__appendfile` but the body
           never has a matching `createfile until` / `appendfile` line
           earlier; `delete`/`folder delete` lines are cleanup, not
-          consumption, and never count (E513's rule, reapplied)
+          consumption, and never count (W507's rule, reapplied)
     E520  a `setting` line is not the documented
           `setting "name"="value" on "{...}" for client|user|action` or
           `setting delete "name" on "{...}" for client|user|action` shape
@@ -121,8 +114,17 @@ Checks:
           destination already exists, so the action works once and fails on
           every later run; a destination inside the action's own download
           folder is exempt, being action-scoped rather than persistent
+    W507  a command references `__Download\\<name>` but nothing prefetches or
+          downloads a file of that name (a typo catcher; skipped entirely
+          when any producer's names are unknowable -- see below. `delete` and
+          `folder delete` lines are cleanup, not consumption, and never
+          count. A reference containing a glob wildcard, e.g.
+          `__Download\\mysql*rpm`, is never flagged -- the shell matches it
+          at runtime, not this checker). Downgraded from E513 to advisory
+          (2026-08-26): validation against real content threw too many false
+          positives for a hard failure
 
-E513 is conservative: it is skipped for a whole body whenever any producer's
+W507 is conservative: it is skipped for a whole body whenever any producer's
 names cannot be known statically -- an `extract`/`unarchive`/`archive now`/
 `utility` command, a `download` with no `as <name>` whose URL is not a literal
 with a basename, or any producer name/URL containing a `{` substitution.
@@ -179,7 +181,7 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-block-nesting-ok  (E507)
     actionscript-substitution-ok   (E508, E509)
     actionscript-prefetch-placement-ok (E510, E511, E515)
-    actionscript-download-ok       (E512, E513)
+    actionscript-download-ok       (E512, W507)
     actionscript-parameter-ok      (E516, E517)
     actionscript-scratch-ok        (E519, W503)
     actionscript-scratch-dest-ok   (W506)
@@ -239,7 +241,7 @@ BLOCK_NESTING_MARKER = "actionscript-block-nesting-ok"  # E507
 # does contain odd braces wants.
 SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E508, E509
 PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, E515
-DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, E513
+DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, W507
 PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
 COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, W504
@@ -265,7 +267,6 @@ CHECK_MARKERS = {
     "E510": PREFETCH_PLACEMENT_MARKER,
     "E511": PREFETCH_PLACEMENT_MARKER,
     "E512": DOWNLOAD_MARKER,
-    "E513": DOWNLOAD_MARKER,
     "E514": IF_MARKER,
     "E515": PREFETCH_PLACEMENT_MARKER,
     "E516": PARAMETER_MARKER,
@@ -282,6 +283,7 @@ CHECK_MARKERS = {
     "W504": COMMAND_SHAPE_MARKER,
     "W505": CMD_MARKER,
     "W506": SCRATCH_DEST_MARKER,
+    "W507": DOWNLOAD_MARKER,
 }
 
 KNOWN_CODES = frozenset(
@@ -299,7 +301,6 @@ KNOWN_CODES = frozenset(
         "E510",
         "E511",
         "E512",
-        "E513",
         "E514",
         "E515",
         "E516",
@@ -317,6 +318,7 @@ KNOWN_CODES = frozenset(
         "W504",
         "W505",
         "W506",
+        "W507",
     ]
 )
 
@@ -360,7 +362,7 @@ _DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
 # literal name and is left unchecked, the same as a `{...}` substitution.
 _GLOB_WILDCARD_RE = re.compile(r"[*?]")
 # producers whose output names cannot be known statically; their presence
-# turns E513 off for the whole body
+# turns W507 off for the whole body
 _UNKNOWABLE_PRODUCER_RE = re.compile(
     r"^(?:extract|unarchive|archive\s+now|utility)\b", re.IGNORECASE
 )
@@ -599,7 +601,7 @@ def _co_executable(path_a, path_b):
     identical sequence of branch choices. Anything reached via a different
     `if` (even one that looks platform-exclusive) is treated as potentially
     mutually exclusive and left unflagged, on the same false-alarm-is-worse
-    principle E513's gating uses.
+    principle W507's gating uses.
     """
     return path_a == path_b
 
@@ -612,8 +614,8 @@ def _check_download_names(lines):
     would silently overwrite the first at runtime) -- declarations of the
     same name in mutually exclusive `if`/`elseif`/`else` branches (see
     `_co_executable`) are not flagged, since only one of them ever runs.
-    Also returns E513 issues for a `__Download\\<name>` consumer no producer
-    creates. E513 is conservative: the moment any producer's names are
+    Also returns W507 issues for a `__Download\\<name>` consumer no producer
+    creates. W507 is conservative: the moment any producer's names are
     unknowable (an extract/unarchive/archive now/utility command, a
     `download` with no `as <name>` and no literal URL basename, or a
     name/URL containing a `{` substitution), the whole consumer check is
@@ -778,7 +780,7 @@ def _check_download_names(lines):
                     issues.append(
                         (
                             lineno,
-                            "E513",
+                            "W507",
                             (
                                 f"`__Download\\{name}` is referenced but nothing "
                                 "prefetches or downloads a file of that name; "
@@ -967,7 +969,7 @@ def _check_scratch_references(lines):
 
     Returns E519 issues for a command referencing `__createfile` (resp.
     `__appendfile`) when the body has no `createfile until` (resp.
-    `appendfile`) line anywhere -- the E513 rule reapplied to these two
+    `appendfile`) line anywhere -- the W507 rule reapplied to these two
     scratch-file verbs, with the same `delete`/`folder delete` exemption
     (clearing scratch output is normal housekeeping, not consumption).
 
@@ -1012,7 +1014,7 @@ def _check_scratch_references(lines):
                 )
 
         if _DELETE_RE.match(stripped):
-            continue  # cleanup, not consumption -- same exemption as E513
+            continue  # cleanup, not consumption -- same exemption as W507
 
         if not has_createfile and _CREATEFILE_REF_RE.search(stripped):
             issues.append(
@@ -1393,7 +1395,7 @@ def check_actionscript(body):
     own E302 belongs to the sibling schclass hook, not here).
     """
     lines, _createfile_issues = _mask_heredocs(body.split("\n"))
-    issues = _check_download_names(lines)  # E512 / E513
+    issues = _check_download_names(lines)  # E512 / W507
     issues.extend(_check_parameters(lines))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
     issues.extend(_check_scratch_destinations(lines))  # W506

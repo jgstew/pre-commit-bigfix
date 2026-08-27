@@ -112,6 +112,11 @@ the bare token - leaving no real hits and a demonstrated false-positive trap.
 
 ### Changed
 
+- **`E513` downgraded to `W507`**: a `__Download\<name>` consumer reference
+  with no matching prefetch/download producer is now advisory, not a hard
+  failure. It fired too many false positives against real content to block a
+  commit on; the check logic, gating (skipped whenever any producer's names
+  are unknowable), and `actionscript-download-ok` marker are unchanged.
 - **`W505`** now also flags `cmd.exe` invoked with `/k` instead of `/c`. `/k`
   does run the command, but leaves the shell open afterward; under the BES
   client (SYSTEM account, no interactive desktop) that shell never exits, so

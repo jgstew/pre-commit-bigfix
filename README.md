@@ -256,7 +256,7 @@ producers declaring the same download name in the same conditional context is
 through different `if`/`elseif`/`else` branch choices are not compared, since
 cross-platform content routinely declares the same `name=` once per OS in a
 separate `if` per platform, and a `__Download\<name>` reference that nothing
-prefetches or downloads is `E513` - a typo catcher that is skipped entirely
+prefetches or downloads warns `W507` - a typo catcher that is skipped entirely
 whenever any producer's names are unknowable (an `extract`/`unarchive`/
 `archive now`/`utility` command, a `download` with no `as <name>` and no
 literal URL basename, or a `{...}` substitution in a name or URL); a
@@ -283,7 +283,7 @@ relevance substitution is `E518` - the same rule `E514` applies to `if`/
 
 A command referencing `__createfile` or `__appendfile` when the body has no
 matching `createfile until` / `appendfile` line anywhere is `E519` - the
-`E513` rule reapplied to these two scratch-file verbs, with the same
+`W507` rule reapplied to these two scratch-file verbs, with the same
 `delete`/`folder delete` cleanup exemption. Any `__Download`, `__createfile`,
 or `__appendfile` reference whose case does not match exactly warns `W503`:
 Windows tolerates the mismatch, a case-sensitive Linux/macOS filesystem does
@@ -349,7 +349,7 @@ or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
 (`E508`, `E509` - the same marker `bes-actionscript-lint-schclass` uses for
 its `E301`, so one marker covers both hooks),
 `actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
-`actionscript-download-ok` (`E512`, `E513`), `actionscript-parameter-ok`
+`actionscript-download-ok` (`E512`, `W507`), `actionscript-parameter-ok`
 (`E516`, `E517`), `actionscript-scratch-ok` (`E519`, `W503`),
 `actionscript-scratch-dest-ok` (`W506`),
 `actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `W504`),

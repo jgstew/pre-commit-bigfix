@@ -4,7 +4,7 @@
 These exercise the if/endif and begin/end prefetch block balance walk
 (E500-E507), the per-line {...} relevance-substitution brace balance
 (E508, E509), prefetch placement (E510, E511, E515), download-name
-consistency (E512, E513), if-condition shape (E514), duplicate/out-of-order
+consistency (E512, W507), if-condition shape (E514), duplicate/out-of-order
 parameter assignment (E516, E517), continue-if/pause-while condition shape
 (E518), __createfile/__appendfile production (E519), unreachable code
 (W501), action-parameter-query placement (W502), wrong-case scratch-file
@@ -541,13 +541,13 @@ def test_unconditional_duplicate_inside_and_outside_an_if_is_not_e512():
     assert validator.check_actionscript(body) == []
 
 
-# --- E513: __Download reference with no producer -------------------------------
+# --- W507: __Download reference with no producer -------------------------------
 
 
-def test_download_reference_with_no_producer_is_e513():
+def test_download_reference_with_no_producer_is_w507():
     body = "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __Download\\b.exe"
     issues = validator.check_actionscript(body)
-    assert codes(issues) == ["E513"]
+    assert codes(issues) == ["W507"]
     assert issues[0][0] == 2
     assert validator.DOWNLOAD_MARKER in issues[0][2]
 
@@ -567,7 +567,7 @@ def test_download_as_counts_as_a_producer():
     assert validator.check_actionscript(body) == []
 
 
-def test_extract_present_suppresses_e513():
+def test_extract_present_suppresses_w507():
     """An archive's contents are unknowable, so no consumer can be judged."""
     body = (
         "prefetch a.zip sha1:x size:1 http://x/a.zip\n"
@@ -577,7 +577,7 @@ def test_extract_present_suppresses_e513():
     assert validator.check_actionscript(body) == []
 
 
-def test_substituted_producer_name_suppresses_e513():
+def test_substituted_producer_name_suppresses_w507():
     body = (
         'prefetch {parameter "n"} sha1:x size:1 http://x/a.exe\n'
         "wait __Download\\b.exe"
@@ -596,7 +596,7 @@ def test_delete_of_a_download_is_cleanup_not_consumption():
     assert validator.check_actionscript(body) == []
 
 
-def test_unshaped_download_line_suppresses_e513():
+def test_unshaped_download_line_suppresses_w507():
     """A substituted URL contains a space, matching neither download shape."""
     body = (
         'parameter "u" = "http://169.254.169.254/latest/document"\n'
@@ -623,7 +623,7 @@ def test_glob_wildcard_consumer_name_is_not_judged():
     assert validator.check_actionscript(body) == []
 
 
-def test_glob_wildcard_consumer_does_not_disable_other_e513_checks():
+def test_glob_wildcard_consumer_does_not_disable_other_w507_checks():
     """The wildcard skip is per-reference, not a whole-body knowability
     escape hatch: an unrelated real typo two lines later still fires.
     """
@@ -633,11 +633,11 @@ def test_glob_wildcard_consumer_does_not_disable_other_e513_checks():
         "wait __Download\\b.exe"
     )
     issues = validator.check_actionscript(body)
-    assert codes(issues) == ["E513"]
+    assert codes(issues) == ["W507"]
     assert "b.exe" in issues[0][2]
 
 
-# --- E513: copy/move and shell-redirection producers ---------------------------
+# --- W507: copy/move and shell-redirection producers ---------------------------
 
 
 def test_copy_from_createfile_registers_the_destination():
@@ -658,7 +658,7 @@ def test_move_from_createfile_registers_the_destination():
     assert validator.check_actionscript(body) == []
 
 
-def test_move_from_createfile_with_substituted_destination_suppresses_e513():
+def test_move_from_createfile_with_substituted_destination_suppresses_w507():
     """`{download path "X"}` -- no literal __Download ref to read back."""
     body = (
         "createfile until EOF\ncontent\nEOF\n"
@@ -677,11 +677,11 @@ def test_move_renaming_one_download_to_another_registers_the_new_name():
     assert validator.check_actionscript(body) == []
 
 
-def test_move_of_an_undeclared_download_with_no_createfile_is_still_e513():
+def test_move_of_an_undeclared_download_with_no_createfile_is_still_w507():
     """A single __Download ref with no __createfile source is a plain typo."""
     body = "move __Download\\typo.exe elsewhere"
     issues = validator.check_actionscript(body)
-    assert codes(issues) == ["E513"]
+    assert codes(issues) == ["W507"]
 
 
 def test_redirection_into_download_registers_the_target():
@@ -971,7 +971,7 @@ def test_appendfile_reference_with_a_producer_is_fine():
 
 
 def test_deleting_createfile_with_no_producer_is_not_flagged():
-    """Cleanup, not consumption -- the same exemption E513 uses."""
+    """Cleanup, not consumption -- the same exemption W507 uses."""
     body = "delete __createfile"
     assert validator.check_actionscript(body) == []
 
@@ -1360,7 +1360,7 @@ def test_a_download_folder_destination_is_not_w506():
 
 def test_move_of_a_non_scratch_source_is_not_w506():
     body = "move __Download/x.deb /var/tmp/x.deb"
-    assert codes(validator.check_actionscript(body)) == ["E513"]
+    assert codes(validator.check_actionscript(body)) == ["W507"]
 
 
 def test_scratch_dest_marker_silences_w506(tmp_path):
@@ -1454,7 +1454,7 @@ def test_prefetch_placement_marker_silences_e510(tmp_path):
     assert issues_for(tmp_path, content) == []
 
 
-def test_download_marker_silences_e513(tmp_path):
+def test_download_marker_silences_w507(tmp_path):
     content = bes(
         "prefetch a.exe sha1:x size:1 http://x/a.exe\nwait __Download\\b.exe",
         marker=validator.DOWNLOAD_MARKER,
