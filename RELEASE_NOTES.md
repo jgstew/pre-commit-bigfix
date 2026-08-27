@@ -110,6 +110,15 @@ the bare token - leaving no real hits and a demonstrated false-positive trap.
   when auto-discovering, matching the sibling hooks' `--auto-fix` convention.
   No other check in this hook is auto-fixable.
 
+### Changed
+
+- **`W505`** now also flags `cmd.exe` invoked with `/k` instead of `/c`. `/k`
+  does run the command, but leaves the shell open afterward; under the BES
+  client (SYSTEM account, no interactive desktop) that shell never exits, so
+  the action hangs instead of completing rather than silently doing nothing
+  like the no-switch case. `/c` is the only switch that lets `cmd.exe` exit;
+  `/c` alongside `/k` still passes, since `/c` wins.
+
 ### Fixed
 
 The mustache-template skip in **all four hooks** no longer swallows real

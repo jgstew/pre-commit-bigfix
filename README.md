@@ -298,9 +298,11 @@ bracketed `"[HKEY_...]..."` keyname is `E521`. An
 `{...}` substitution is `E523`. The deprecated `dos` verb
 warns `W504`; use `waithidden cmd.exe /c ...` instead.
 
-A `wait`/`run` of cmd.exe that passes a command line but no `/c` (or `/k`)
-warns `W505`: without the switch cmd.exe opens an interactive shell and never
-runs the command, so the action reports success having done nothing.
+A `wait`/`run` of cmd.exe that passes a command line but no `/c` warns
+`W505`: without the switch cmd.exe opens an interactive shell and never runs
+the command, so the action reports success having done nothing. `/k` is
+likewise flagged: it does run the command, but leaves the shell open
+afterward, so the action hangs instead of completing.
 
 A `move`/`copy` of `__createfile`/`__appendfile` onto a destination that is
 not deleted earlier in the body warns `W506`. Both verbs fail when the

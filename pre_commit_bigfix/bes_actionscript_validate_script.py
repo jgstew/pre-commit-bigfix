@@ -113,8 +113,9 @@ Checks:
           this, but a Linux/macOS agent's case-sensitive filesystem does not.
           Auto-fixable: see AUTO-FIXES below
     W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
-    W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (or
-          `/k`); without one cmd.exe opens a shell and never runs the command
+    W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (cmd.exe
+          opens a shell and never runs the command), or uses `/k` instead (the
+          command runs but the shell never exits, so the action hangs)
     W506  a `move`/`copy` of `__createfile`/`__appendfile` onto a destination
           that is not deleted earlier in the body. Both verbs fail when the
           destination already exists, so the action works once and fails on
@@ -450,7 +451,9 @@ _LAUNCH_VERB_RE = re.compile(
     r"^(wait|waithidden|run|runhidden)\s+(\S.*)$", re.IGNORECASE
 )
 # cmd.exe interprets its payload only after /c or /k; anywhere in the arguments
-_CMD_SWITCH_RE = re.compile(r"(?:^|\s)/[ck]\b", re.IGNORECASE)
+_CMD_RUN_SWITCH_RE = re.compile(r"(?:^|\s)/c\b", re.IGNORECASE)
+# /k runs the command but leaves the shell alive, so the action never returns
+_CMD_PERSIST_SWITCH_RE = re.compile(r"(?:^|\s)/k\b", re.IGNORECASE)
 _OVERRIDE_VERB_RE = re.compile(r"^override\s+(wait|run)\s*$", re.IGNORECASE)
 _OVERRIDE_OPTION_LINE_RE = re.compile(r"^\w+\s*=")
 
@@ -1142,8 +1145,9 @@ def _check_command_shapes(lines):
     `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
     bracketed `"[HKEY_...]..."` keyname; W504 for the deprecated `dos`
     verb (`waithidden cmd.exe /c ...` is the documented replacement); and
-    W505 for a `wait`/`run` of cmd.exe that passes a command line without the
-    `/c` (or `/k`) switch cmd.exe needs to execute it.
+    W505 for a `wait`/`run` of cmd.exe that passes a command line without `/c`
+    (cmd.exe needs it to execute the command), or that uses `/k` instead
+    (cmd.exe runs the command but the shell never exits, so the action hangs).
     """
     issues = []
     for index, raw_line in enumerate(lines):
@@ -1199,22 +1203,34 @@ def _check_command_shapes(lines):
         match = _LAUNCH_VERB_RE.match(stripped)
         if match:
             executable, arguments = _leading_token(match.group(2))
-            if (
-                _is_cmd_shell(executable)
-                and arguments
-                and not _CMD_SWITCH_RE.search(arguments)
-            ):
-                issues.append(
-                    (
-                        lineno,
-                        "W505",
+            if _is_cmd_shell(executable) and arguments:
+                if _CMD_RUN_SWITCH_RE.search(arguments):
+                    pass  # /c (with or without /k alongside it) runs and exits
+                elif _CMD_PERSIST_SWITCH_RE.search(arguments):
+                    issues.append(
                         (
-                            "cmd.exe is passed a command line but no `/c` (or "
-                            "`/k`); without one it opens a shell and never runs "
-                            f"the command; add `{CMD_MARKER}` if intentional"
-                        ),
+                            lineno,
+                            "W505",
+                            (
+                                "`cmd.exe` is run with `/k`, which leaves the "
+                                "shell open after the command finishes, so the "
+                                f"action never completes; use `/c`; add "
+                                f"`{CMD_MARKER}` if intentional"
+                            ),
+                        )
                     )
-                )
+                else:
+                    issues.append(
+                        (
+                            lineno,
+                            "W505",
+                            (
+                                "cmd.exe is passed a command line but no `/c`; "
+                                "without it cmd opens a shell and never runs "
+                                f"the command; add `{CMD_MARKER}` if intentional"
+                            ),
+                        )
+                    )
 
         if _DOS_VERB_RE.match(stripped):
             issues.append(
@@ -1381,7 +1397,7 @@ def check_actionscript(body):
     issues.extend(_check_parameters(lines))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
     issues.extend(_check_scratch_destinations(lines))  # W506
-    issues.extend(_check_command_shapes(lines))  # E520 / E521 / W504
+    issues.extend(_check_command_shapes(lines))  # E520 / E521 / E523 / W504 / W505
     issues.extend(_check_condition_shapes(lines))  # E518
     issues.extend(_check_override_blocks(lines))  # E522
     if_stack = []  # each entry: [lineno, seen_else]

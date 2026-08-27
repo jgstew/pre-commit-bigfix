@@ -209,9 +209,10 @@
     `action uses wow64 redirection` argument that is not `true`, `false`, or
     a `{...}` substitution is E523; the deprecated
     `dos` verb warns W504 (use `waithidden cmd.exe /c ...` instead). A
-    `wait`/`run` of cmd.exe that passes a command line but no `/c` (or `/k`)
-    warns W505 -- without the switch cmd.exe opens a shell and never runs the
-    command. A `move`/`copy` of `__createfile`/`__appendfile` onto a
+    `wait`/`run` of cmd.exe that passes a command line but no `/c` warns
+    W505 -- without the switch cmd.exe opens a shell and never runs the
+    command. `/k` is likewise flagged: it runs the command but leaves the
+    shell open, so the action hangs instead of completing. A `move`/`copy` of `__createfile`/`__appendfile` onto a
     destination not deleted earlier in the body warns W506: both verbs fail
     when the destination already exists, so the action works once and fails on
     every later run (a destination inside the action's own download folder is

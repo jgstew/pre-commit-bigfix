@@ -1233,7 +1233,7 @@ def test_disable_e523_silences_it(tmp_path):
     assert issues_for(tmp_path, content, disabled={"E523"}) == []
 
 
-# --- W505: cmd.exe without /c or /k ------------------------------------------------
+# --- W505: cmd.exe without /c, or with /k -----------------------------------------
 
 
 def test_wait_cmd_without_a_switch_is_w505():
@@ -1262,8 +1262,19 @@ def test_cmd_with_slash_c_is_fine():
     assert validator.check_actionscript("wait cmd.exe /c echo hi") == []
 
 
-def test_cmd_with_uppercase_slash_k_is_fine():
-    assert validator.check_actionscript("waithidden cmd /K echo hi") == []
+def test_cmd_with_uppercase_slash_k_is_w505():
+    issues = validator.check_actionscript("waithidden cmd /K echo hi")
+    assert codes(issues) == ["W505"]
+    assert "/c" in issues[0][2]
+
+
+def test_cmd_with_lowercase_slash_k_is_w505():
+    assert codes(validator.check_actionscript("wait cmd /k setup.exe")) == ["W505"]
+
+
+def test_cmd_with_both_switches_is_fine():
+    """/c wins even when /k is also present -- the shell still exits."""
+    assert validator.check_actionscript("wait cmd /k /c echo hi") == []
 
 
 def test_bare_cmd_with_no_arguments_is_fine():
@@ -1294,6 +1305,11 @@ def test_cmd_marker_silences_w505(tmp_path):
 def test_disable_w505_silences_it(tmp_path):
     content = bes("wait cmd.exe setup.exe")
     assert issues_for(tmp_path, content, disabled={"W505"}) == []
+
+
+def test_cmd_marker_silences_slash_k(tmp_path):
+    content = bes("wait cmd /k setup.exe", marker=validator.CMD_MARKER)
+    assert issues_for(tmp_path, content) == []
 
 
 # --- W506: move/copy of a scratch file onto an undeleted destination ---------------
