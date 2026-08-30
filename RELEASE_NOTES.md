@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.1
+
 ### Added
 
 **New hook: `bes-relevance-lint`** - the first check in this repo that looks
