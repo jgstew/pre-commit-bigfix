@@ -4,6 +4,31 @@
 
 ### Added
 
+**New hook: `bes-relevance-lint`** - the first check in this repo that looks
+*inside* relevance instead of treating `{...}` as an opaque lexer state. It
+hands every `<Relevance>` body, CustomRelevance `<SuccessCriteria>`, Analysis
+`<Property>` and ActionScript `{...}` substitution to
+[bigfix-relevance-analyzer](https://github.com/jgstew/bigfix-relevance-analyzer),
+which parses it, binds `it`, resolves inspectors against the client dumps,
+type-checks the result and scores its evaluation cost: `E600` parse failure,
+`E601` unlexable text, `E602` unbound `it`, `E603` type error, `E604`
+complexity over `--max-score`, `E605` evaluation cost over
+`--max-evaluation-cost`, `E606` a walk stopped at `--max-depth`, `W600` an
+unknown inspector name, `W601` a singular property over a possibly-plural
+object.
+
+Tuned against the 1,108 `.bes` files in `bigfix-content`: `W601` fires 6,127
+times there, so the hook declaration disables it by default (`--enable W601`
+switches it back on), while the whole rest of the corpus produces 8 findings -
+a signal worth reading. Unparsable XML is skipped (`bes-schema-validate` owns
+validity), a file opts out with `pre-commit-skip: bes-relevance-lint`, and
+there is no auto-fix.
+
+This hook requires **Python 3.11+**; the dependency carries an environment
+marker so the other six hooks stay installable on 3.8-3.10, and the hook itself
+reports what it needs instead of passing silently on an older interpreter. Closes
+[#14](https://github.com/jgstew/pre-commit-bigfix/issues/14).
+
 New `bes-conventions-check` checks, found by surveying the non-ActionScript
 content of the same 1,043 `.bes` files in `bigfix-content/fixlet` used for the
 v0.9.0 `bes-actionscript-validate-script` survey, this time for defect

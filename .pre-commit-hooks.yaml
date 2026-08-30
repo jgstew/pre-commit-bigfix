@@ -260,3 +260,35 @@
   entry: bes-actionscript-validate-script
   types: [text]
   files: \.bes$
+- id: bes-relevance-lint
+  name: Lint BigFix relevance
+  description: >
+    Parses and checks the relevance inside BES files with
+    bigfix-relevance-analyzer, rather than treating `{...}` as opaque like the
+    ActionScript hooks do: every <Relevance> body, CustomRelevance
+    <SuccessCriteria>, Analysis <Property> and `{...}` ActionScript
+    substitution is parsed, `it` is bound, every inspector is resolved against
+    the dumps, the result is type-checked, and complexity/evaluation cost are
+    scored against a ceiling. E600 parse failure; E601 unlexable text; E602
+    unbound `it`; E603 type error; E604 complexity over --max-score; E605
+    evaluation cost over --max-evaluation-cost; E606 a walk stopped at
+    --max-depth (auto-discovery only); W600 a name no inspector dump defines;
+    W601 a singular property over a possibly-plural object. W601 is disabled
+    by default here -- it fires several times per file across real content --
+    and `--enable W601` switches it back on. Unparsable XML is skipped
+    (bes-schema-validate owns validity), so a clean run says the relevance
+    that could be extracted is sound, not that the file parses. A file opts
+    out entirely with `pre-commit-skip: bes-relevance-lint`. No auto-fix.
+    E-codes fail the hook; pass --strict to also fail on warnings. Requires
+    Python 3.11 or newer -- the interpreter pre-commit picks by default is
+    usually fine, and `language_version: python3.12` (or whichever you have)
+    points it at a newer one. On an older interpreter the hook says what it
+    needs and fails rather than passing silently.
+  language: python
+  pass_filenames: True
+  entry: bes-relevance-lint
+  args: [--disable, W601]
+  types: [text]
+  # `bes\.xml` is spelled out: the `$` anchor means a bare `bes` alternative
+  # never matches `Something.bes.xml`, which the extractor does read as BES XML.
+  files: \.(bes|bes\.xml|ojo|besrpt|beswrpt|webreport|bsr|rel)$

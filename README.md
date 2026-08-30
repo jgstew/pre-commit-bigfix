@@ -18,6 +18,7 @@ repos:
       - id: bes-actionscript-lint-schclass
       - id: bes-actionscript-validate-prefetch
       - id: bes-actionscript-validate-script
+      - id: bes-relevance-lint
 ```
 
 The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
@@ -363,6 +364,64 @@ hook; pass
 See the docstring in
 [bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
+
+### bes-relevance-lint
+
+Every other hook here treats relevance as opaque - `{...}` is a lexer state
+mechanically identical to a string literal, and the most any check proves about
+a condition is that it starts with a brace. This hook is where that stops. It
+hands each statement to
+[bigfix-relevance-analyzer](https://github.com/jgstew/bigfix-relevance-analyzer),
+which parses it, binds `it`, resolves every inspector against the client dumps,
+type-checks the result, and scores what it costs to evaluate.
+
+Every site the analyzer's extractor recognizes is checked - `<Relevance>`
+bodies, `<SuccessCriteria Option="CustomRelevance">` bodies, Analysis
+`<Property>` bodies, and the `{...}` substitutions inside `<ActionScript>` - so
+a defect in a substitution is reported at the line it lives on, not at the top
+of the file.
+
+| code | meaning |
+| --- | --- |
+| `E600` | the statement could not be parsed |
+| `E601` | the statement contains text that could not be lexed |
+| `E602` | `it` is used where there is no context to bind it to |
+| `E603` | the type checker reported a problem beyond an unbound `it` |
+| `E604` | the complexity score is above the ceiling (raise with `--max-score`) |
+| `E605` | the evaluation cost is above the ceiling (raise with `--max-evaluation-cost`) |
+| `E606` | a directory tree was deeper than `--max-depth`, so it was not fully scanned (auto-discovery only; pre-commit always passes filenames) |
+| `W600` | a name no inspector dump defines |
+| `W601` | a property written singular over an object that may be plural |
+
+`W600` is a warning rather than an error because a repo running a newer client
+than the analyzer's dump snapshot legitimately uses names it has never heard
+of. `W601` is **disabled by default** in the hook declaration: across 1,108
+`.bes` files of real content it fires 6,127 times, which drowns everything
+else. Switch it back on with `--enable W601`.
+
+Unparsable XML is skipped rather than reported - `bes-schema-validate` owns
+file validity. That does mean a truncated file passes this hook: a clean run
+says the relevance that could be extracted is sound, not that the file parses.
+
+A file opts out of every check here with
+`<!-- pre-commit-skip: bes-relevance-lint -->` anywhere in it. There is no
+per-rule marker: `--disable` takes a code repo-wide, and a single file that
+legitimately needs relevance this complex is what `--max-score` is for. There
+is no auto-fix - nothing this hook reports has a mechanical rewrite. E-codes
+fail the hook; pass `--strict` to also fail on warnings.
+
+This hook needs **Python 3.11 or newer** - the analyzer requires it, while the
+rest of this package still runs on 3.8. No specific interpreter is pinned, since
+`language_version` names an exact executable and pinning `python3.11` would
+break machines that only have something newer; set it yourself
+(`language_version: python3.12`) if pre-commit's default is too old. The
+dependency carries a matching environment marker, so the other hooks stay
+installable on 3.8-3.10; run this one there anyway and it says what it needs
+and fails rather than passing silently.
+
+See the docstring in
+[bes_relevance_lint.py](pre_commit_bigfix/bes_relevance_lint.py) for the full
+list of check codes and options.
 
 ## Development
 
