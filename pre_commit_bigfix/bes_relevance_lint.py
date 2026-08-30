@@ -51,9 +51,12 @@ Usage:
     bes-relevance-lint [--strict] [--disable E604] [--enable W601] [FILES...]
 
 Exit status:
-    0  no E-code findings (and, without --strict, no warnings either)
+    0  no E-code findings (and, without --strict, no warnings either), or the
+       interpreter is older than 3.11, where the analyzer cannot be installed
+       and the hook skips with a notice rather than failing a build that has
+       no way to go green
     1  an E-code fired, a warning fired under --strict, or the analyzer is
-       not installed
+       missing on a 3.11+ interpreter, where it should have been installed
 """
 
 import argparse
@@ -100,6 +103,40 @@ KNOWN_CODES = frozenset(CODES.values())
 # The reverse direction, for --disable/--enable: a repo names an E-code, the
 # analyzer's LintConfig wants its own.
 ANALYZER_CODES = {code: name for name, code in CODES.items()}
+
+
+MIN_ANALYZER_PYTHON = (3, 11)
+
+
+def _analyzer_unavailable():
+    """Explain the missing analyzer and return the exit status to use.
+
+    The two cases are not the same failure. Below 3.11 the dependency cannot
+    be installed at all -- setup.cfg holds it back with an environment marker
+    on purpose, because this package still supports 3.8 -- so nothing the repo
+    writes in its config makes the hook run, and failing would leave it a
+    permanently red build with no fix available. There the hook skips: it
+    prints why and exits 0. On 3.11+ the analyzer is a hard dependency, so a
+    missing one is a broken install and stays a failure.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    if sys.version_info < MIN_ANALYZER_PYTHON:
+        print(
+            "bes-relevance-lint: skipped. It requires bigfix-relevance-analyzer, "
+            f"which needs Python 3.11 or newer; this interpreter is {running}. "
+            "To actually run this hook, point pre-commit at a 3.11+ interpreter "
+            "with `default_language_version` in your .pre-commit-config.yaml. "
+            f"({IMPORT_ERROR})"
+        )
+        return 0
+    print(
+        "bes-relevance-lint requires bigfix-relevance-analyzer, which is not "
+        f"importable on this Python {running} interpreter even though it is new "
+        "enough for it. Reinstall this package's dependencies (pip install "
+        "--upgrade pre-commit-bigfix), or drop this hook from your config. "
+        f"({IMPORT_ERROR})"
+    )
+    return 1
 
 
 def _split_codes(raw):
@@ -165,14 +202,7 @@ def main(argv=None):
     when called directly as `main(sys.argv[1:])`.
     """
     if IMPORT_ERROR is not None:
-        print(
-            "bes-relevance-lint requires bigfix-relevance-analyzer, which needs "
-            f"Python 3.11 or newer; this interpreter is {sys.version_info[0]}.{sys.version_info[1]}. Install a 3.11+ "
-            "interpreter and point pre-commit at it with "
-            "`default_language_version` in your .pre-commit-config.yaml, or "
-            f"drop this hook from your config. ({IMPORT_ERROR})"
-        )
-        return 1
+        return _analyzer_unavailable()
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

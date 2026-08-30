@@ -12,6 +12,8 @@ rule this hook does not map, which would otherwise drop that rule's findings on
 the floor without a word.
 """
 
+import sys
+
 import pytest
 
 from pre_commit_bigfix import bes_relevance_lint as linter
@@ -264,8 +266,8 @@ def test_the_skip_marker_opts_a_file_out_when_discovering(
 def test_the_import_guard_does_not_recommend_a_per_hook_language_version(
     monkeypatch, capsys
 ):
-    """On an old interpreter the hook must fail loudly and give advice that
-    matches the hook declaration.
+    """On an old interpreter the hook must say so and give advice that matches
+    the hook declaration.
 
     `language_version` names an *exact* executable, so pinning 3.11 on the hook
     breaks every machine that has only 3.12 or newer -- which is why
@@ -274,10 +276,44 @@ def test_the_import_guard_does_not_recommend_a_per_hook_language_version(
     mention here has to be the `default_language_version` form.
     """
     monkeypatch.setattr(linter, "IMPORT_ERROR", ImportError("no analyzer here"))
+    monkeypatch.setattr(sys, "version_info", (3, 8, 18, "final", 0))
 
     status = linter.main([])
     out = capsys.readouterr().out
 
-    assert status == 1
+    assert status == 0
     assert "3.11" in out
     assert out.count("language_version") == out.count("default_language_version")
+
+
+def test_an_interpreter_too_old_for_the_analyzer_skips_instead_of_failing(
+    monkeypatch, capsys
+):
+    """<3.11 is an environment fact, not a defect in the content.
+
+    setup.cfg's environment marker keeps the analyzer off those interpreters
+    on purpose, so a repo whose pre-commit runs on 3.8 cannot install it from
+    any config it writes. Failing there is an unfixable red build (which is
+    exactly what `pre-commit try-repo` on the 3.8 leg of test_build.yaml hit),
+    so the hook skips with a notice.
+    """
+    monkeypatch.setattr(linter, "IMPORT_ERROR", ImportError("no analyzer here"))
+    monkeypatch.setattr(sys, "version_info", (3, 8, 18, "final", 0))
+
+    assert linter.main([]) == 0
+    assert "skipped" in capsys.readouterr().out
+
+
+def test_a_missing_analyzer_on_a_new_enough_interpreter_still_fails(
+    monkeypatch, capsys
+):
+    """On 3.11+ the analyzer is a hard dependency.
+
+    Its absence there means a broken install, which the repo *can* fix -- so
+    this one stays an error rather than quietly passing every file unchecked.
+    """
+    monkeypatch.setattr(linter, "IMPORT_ERROR", ImportError("no analyzer here"))
+    monkeypatch.setattr(sys, "version_info", (3, 12, 0, "final", 0))
+
+    assert linter.main([]) == 1
+    assert "skipped" not in capsys.readouterr().out

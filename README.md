@@ -416,8 +416,10 @@ rest of this package still runs on 3.8. No specific interpreter is pinned, since
 break machines that only have something newer; set it yourself
 (`language_version: python3.12`) if pre-commit's default is too old. The
 dependency carries a matching environment marker, so the other hooks stay
-installable on 3.8-3.10; run this one there anyway and it says what it needs
-and fails rather than passing silently.
+installable on 3.8-3.10; run this one there anyway and it prints why it cannot
+run and skips (exit 0) - no config on a 3.8-3.10 interpreter can make it pass,
+so failing there would only be an unfixable red build. On 3.11+ a missing
+analyzer is a broken install, and the hook still fails.
 
 See the docstring in
 [bes_relevance_lint.py](pre_commit_bigfix/bes_relevance_lint.py) for the full

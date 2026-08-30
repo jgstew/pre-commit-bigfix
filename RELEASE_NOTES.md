@@ -25,8 +25,8 @@ validity), a file opts out with `pre-commit-skip: bes-relevance-lint`, and
 there is no auto-fix.
 
 This hook requires **Python 3.11+**; the dependency carries an environment
-marker so the other six hooks stay installable on 3.8-3.10, and the hook itself
-reports what it needs instead of passing silently on an older interpreter. Closes
+marker so the other six hooks stay installable on 3.8-3.10, and on an older
+interpreter the hook prints why it cannot run and skips instead of failing. Closes
 [#14](https://github.com/jgstew/pre-commit-bigfix/issues/14).
 
 New `bes-conventions-check` checks, found by surveying the non-ActionScript

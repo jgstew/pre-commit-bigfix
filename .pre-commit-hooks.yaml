@@ -282,8 +282,9 @@
     E-codes fail the hook; pass --strict to also fail on warnings. Requires
     Python 3.11 or newer -- the interpreter pre-commit picks by default is
     usually fine, and `language_version: python3.12` (or whichever you have)
-    points it at a newer one. On an older interpreter the hook says what it
-    needs and fails rather than passing silently.
+    points it at a newer one. On an older interpreter, where the analyzer
+    cannot be installed at all, the hook prints why and skips (exit 0) rather
+    than failing a build that has no way to go green.
   language: python
   pass_filenames: True
   entry: bes-relevance-lint
