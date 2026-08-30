@@ -1083,6 +1083,13 @@ def test_e209_valid_multiple_values_clean(tmp_path):
     assert "E209" not in codes(tmp_path, content)
 
 
+def test_e209_valid_semicolon_separated_values_clean(tmp_path):
+    content = _with_cve(
+        "<CVENames>CVE-2024-30117; CVE-2024-28929; CVE-2024-28930</CVENames>"
+    )
+    assert "E209" not in codes(tmp_path, content)
+
+
 def test_e209_invalid_value_flagged(tmp_path):
     assert "E209" in codes(tmp_path, _with_cve("<CVENames>CVE-BAD</CVENames>"))
 

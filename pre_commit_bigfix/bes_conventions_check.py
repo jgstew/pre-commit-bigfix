@@ -34,7 +34,9 @@ Checks:
     E208  the file is not CRLF throughout -- BES files must use CRLF line
           endings (fixable -> the whole file is normalized to CRLF)
     E209  a <CVENames> value is not a valid CVE id (e.g. CVE-2021-44228), or
-          more than one <CVENames> element is present in a single content object
+          more than one <CVENames> element is present in a single content
+          object -- multiple CVE ids in one <CVENames> may be separated by
+          commas, semicolons, and/or whitespace
     E210  two <MIMEField> entries in one content object share the same <Name>
     E211  a <Title> is a default placeholder ("Custom Fixlet"/"Custom Task"/
           "Custom Baseline"/"Custom Analysis")
@@ -1061,8 +1063,9 @@ def check_dynamic_download(src):
 def check_cve_names(src):
     """E209: each <CVENames> value must be a valid CVE id; only one CVENames.
 
-    A single <CVENames> may hold several comma/space-separated CVE ids, but a
-    content object must not carry more than one <CVENames> element.
+    A single <CVENames> may hold several comma/semicolon/space-separated CVE
+    ids, but a content object must not carry more than one <CVENames>
+    element.
     """
     issues = []
     matches = list(CVENAMES_TAG_RE.finditer(src))
@@ -1080,7 +1083,7 @@ def check_cve_names(src):
         )
     for match in matches:
         value = _strip_cdata(match.group(1))
-        for token in re.split(r"[,\s]+", value):
+        for token in re.split(r"[,;\s]+", value):
             if token and not CVE_RE.match(token):
                 issues.append(
                     (
