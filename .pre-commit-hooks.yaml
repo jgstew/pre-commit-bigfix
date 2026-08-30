@@ -34,8 +34,8 @@
     non-trivial non-empty Relevance with no stray whitespace; unique MIMEField
     names; unique Analysis Property names/IDs; unique Action IDs; action link
     text free of empty-substitution gaps; SuccessCriteria body/Option consistency;
-    a SourceSeverity vocabulary (default Low/Moderate/Important/Critical/
-    Unspecified, overridable with --severity-values); description-placeholder
+    a SourceSeverity vocabulary (default Low/Moderate/Important/High/
+    Critical/Unspecified, overridable with --severity-values); description-placeholder
     and empty-Description; and Task/Fixlet release-date/modification-time
     presence and download actions. Auto-fixes the fixable ones in place
     (DownloadSize -> 0, missing dates -> now, blank-line collapse, Title trim,

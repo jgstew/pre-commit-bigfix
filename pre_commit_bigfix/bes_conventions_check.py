@@ -36,7 +36,8 @@ Checks:
     E209  a <CVENames> value is not a valid CVE id (e.g. CVE-2021-44228), or
           more than one <CVENames> element is present in a single content
           object -- multiple CVE ids in one <CVENames> may be separated by
-          commas, semicolons, and/or whitespace
+          commas, semicolons, and/or whitespace, and a lone `Unspecified` is
+          accepted as the "no CVEs" sentinel
     E210  two <MIMEField> entries in one content object share the same <Name>
     E211  a <Title> is a default placeholder ("Custom Fixlet"/"Custom Task"/
           "Custom Baseline"/"Custom Analysis")
@@ -96,7 +97,8 @@ Checks:
     W215  a Task/Fixlet <Description> is empty or missing (distinct from
           E204's boilerplate-placeholder check)
     W216  a non-empty <SourceSeverity> is not one of Low/Moderate/Important/
-          Critical/Unspecified (exact case) -- override with --severity-values
+          High/Critical/Unspecified (exact case) -- override with
+          --severity-values
     W217  (only with --check-filename) a file's basename does not match its
           first content object's <Title>, sanitized for filename-illegal
           characters (/, backslash, :, *, ?, ", <, >, | -> _)
@@ -160,7 +162,7 @@ auto-fixed file fails the hook so the change is reviewed and re-staged.
 Usage:
     bes_conventions_check.py [--strict] [--errors-only] [--auto-fix=yes|no]
         [--disable E200,W201] [--check-filename]
-        [--severity-values Low,Moderate,Important,Critical,Unspecified]
+        [--severity-values Low,Moderate,Important,High,Critical,Unspecified]
         [file.bes ...]
 
 --check-filename is OFF by default: it enables W217 (a file's basename must
@@ -169,11 +171,11 @@ characters). It is opt-in because many repos deliberately version or
 otherwise diverge a Title from its filename.
 
 --severity-values overrides the vocabulary W216 accepts for a non-empty
-<SourceSeverity> (default: Low, Moderate, Important, Critical, Unspecified,
-matched exact-case). Pass a comma-separated list of the values this repo
-considers valid, e.g. --severity-values "low,medium,high,critical"; an empty
-value in the list is ignored, and an empty <SourceSeverity> is always allowed
-regardless of this setting.
+<SourceSeverity> (default: Low, Moderate, Important, High, Critical,
+Unspecified, matched exact-case). Pass a comma-separated list of the values
+this repo considers valid, e.g. --severity-values "low,medium,high,critical";
+an empty value in the list is ignored, and an empty <SourceSeverity> is always
+allowed regardless of this setting.
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
@@ -373,6 +375,11 @@ CVENAMES_TAG_RE = re.compile(r"<CVENames>(.*?)</CVENames>", re.DOTALL)
 
 # a single CVE identifier, e.g. CVE-2021-44228 (4-digit year, 4+ digit sequence)
 CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$")
+# the sentinel BigFix content uses for "this object has no associated CVEs";
+# the same word the console writes into SourceID/SourceSeverity/SANSID, so it
+# is accepted as a whole CVENames value (exact case) rather than as a token --
+# "CVE-2021-44228 Unspecified" is still a malformed list.
+CVE_UNSPECIFIED = "Unspecified"
 
 # the default placeholder titles the BigFix console emits for new content
 DEFAULT_TITLES = frozenset(
@@ -398,8 +405,10 @@ EVALUATION_PERIOD_RE = re.compile(r"^\d{2,}:[0-5]\d:[0-5]\d$")
 # <SourceSeverity> body
 SOURCE_SEVERITY_RE = re.compile(r"<SourceSeverity>(.*?)</SourceSeverity>", re.DOTALL)
 # the canonical, exact-case severity vocabulary; empty is always allowed
+# "High" is here for third-party application content (Mozilla, Adobe, Zoom,
+# ...), which rates that way rather than on the Microsoft patch scale.
 CANONICAL_SEVERITIES = frozenset(
-    ["Low", "Moderate", "Important", "Critical", "Unspecified"]
+    ["Low", "Moderate", "Important", "High", "Critical", "Unspecified"]
 )
 
 # characters not allowed in a filename on common filesystems -- used to derive
@@ -1065,7 +1074,8 @@ def check_cve_names(src):
 
     A single <CVENames> may hold several comma/semicolon/space-separated CVE
     ids, but a content object must not carry more than one <CVENames>
-    element.
+    element. The lone value `Unspecified` is accepted as the "no CVEs"
+    sentinel; `N/A` and friends are not.
     """
     issues = []
     matches = list(CVENAMES_TAG_RE.finditer(src))
@@ -1083,6 +1093,8 @@ def check_cve_names(src):
         )
     for match in matches:
         value = _strip_cdata(match.group(1))
+        if value.strip() == CVE_UNSPECIFIED:
+            continue
         for token in re.split(r"[,;\s]+", value):
             if token and not CVE_RE.match(token):
                 issues.append(

@@ -50,8 +50,8 @@ a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
 non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
 names, unique Analysis Property names/IDs, unique Action IDs, action link text
 free of empty-substitution gaps, SuccessCriteria body/Option consistency, a
-SourceSeverity vocabulary (default Low/Moderate/Important/Critical/Unspecified,
-overridable with `--severity-values`), description placeholders / empty
+SourceSeverity vocabulary (default Low/Moderate/Important/High/Critical/
+Unspecified, overridable with `--severity-values`), description placeholders / empty
 descriptions, and Task/Fixlet release-date / modification-time presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so

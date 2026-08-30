@@ -1090,6 +1090,19 @@ def test_e209_valid_semicolon_separated_values_clean(tmp_path):
     assert "E209" not in codes(tmp_path, content)
 
 
+def test_e209_unspecified_sentinel_clean(tmp_path):
+    assert "E209" not in codes(tmp_path, _with_cve("<CVENames>Unspecified</CVENames>"))
+
+
+def test_e209_na_sentinel_flagged(tmp_path):
+    assert "E209" in codes(tmp_path, _with_cve("<CVENames>N/A</CVENames>"))
+
+
+def test_e209_unspecified_mixed_with_cve_flagged(tmp_path):
+    content = _with_cve("<CVENames>CVE-2021-44228; Unspecified</CVENames>")
+    assert "E209" in codes(tmp_path, content)
+
+
 def test_e209_invalid_value_flagged(tmp_path):
     assert "E209" in codes(tmp_path, _with_cve("<CVENames>CVE-BAD</CVENames>"))
 
@@ -1589,7 +1602,7 @@ def test_e219_marker_opts_out(tmp_path):
 # --- W216 SourceSeverity vocabulary -----------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["high", "Recommended", "CRITICAL"])
+@pytest.mark.parametrize("bad", ["high", "Medium", "Recommended", "CRITICAL"])
 def test_w216_bad_severity_flagged(tmp_path, bad):
     content = task().replace(
         "<Source>test</Source>",
@@ -1599,7 +1612,8 @@ def test_w216_bad_severity_flagged(tmp_path, bad):
 
 
 @pytest.mark.parametrize(
-    "good", ["", "Low", "Moderate", "Important", "Critical", "Unspecified"]
+    "good",
+    ["", "Low", "Moderate", "Important", "High", "Critical", "Unspecified"],
 )
 def test_w216_good_severity_clean(tmp_path, good):
     content = task().replace(
