@@ -98,6 +98,8 @@ CODES = {
     "unknown-inspector": "W600",
     "non-unique-risk": "W601",
     "plural-preferred": "W602",
+    "version-like-string-compare": "W603",
+    "version-truncating-compare": "W604",
 }
 
 KNOWN_CODES = frozenset(CODES.values())

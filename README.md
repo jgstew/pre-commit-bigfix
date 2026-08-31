@@ -394,6 +394,8 @@ of the file.
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
 | `W602` | a `whose` filter written on a singular spelling, where the plural reads safer |
+| `W603` | two version-looking strings compared as strings, not as versions |
+| `W604` | a version comparison that truncates to the shorter operand's components |
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard
