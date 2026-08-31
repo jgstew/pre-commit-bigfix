@@ -272,8 +272,10 @@
     scored against a ceiling. E600 parse failure; E601 unlexable text; E602
     unbound `it`; E603 type error; E604 complexity over --max-score; E605
     evaluation cost over --max-evaluation-cost; E606 a walk stopped at
-    --max-depth (auto-discovery only); W600 a name no inspector dump defines;
-    W601 a singular property over a possibly-plural object. W601 is disabled
+    --max-depth (auto-discovery only); E607 a given path does not exist or
+    could not be read; W600 a name no inspector dump defines; W601 a singular
+    property over a possibly-plural object; W602 a `whose` filter written on
+    a singular spelling where the plural reads safer. W601 is disabled
     by default here -- it fires several times per file across real content --
     and `--enable W601` switches it back on. Unparsable XML is skipped
     (bes-schema-validate owns validity), so a clean run says the relevance

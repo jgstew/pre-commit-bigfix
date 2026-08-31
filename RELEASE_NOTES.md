@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+`bes-relevance-lint` picks up two rules added in `bigfix-relevance-analyzer`
+1.10.1: `E607`, a path given to the linter that does not exist or could not
+be read (always an error - a misspelled path used to lint nothing silently
+and pass), and `W602`, a `whose` filter written on a singular spelling where
+the plural reads safer (the sibling of `W601`, for the shape where a singular
+collapse can't raise `Singular expression refers to non-unique object.` but
+still raises on no match). Requires `bigfix-relevance-analyzer >= 1.10.1`.
+
 ## v1.2.1
 
 ### Added

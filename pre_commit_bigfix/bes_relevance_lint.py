@@ -94,8 +94,10 @@ CODES = {
     "complexity": "E604",
     "evaluation-cost": "E605",
     "max-depth-exceeded": "E606",
+    "file-error": "E607",
     "unknown-inspector": "W600",
     "non-unique-risk": "W601",
+    "plural-preferred": "W602",
 }
 
 KNOWN_CODES = frozenset(CODES.values())

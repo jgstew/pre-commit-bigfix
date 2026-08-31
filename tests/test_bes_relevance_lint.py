@@ -203,10 +203,17 @@ def test_an_unrecognized_suffix_yields_nothing(tmp_path, capsys):
     assert status == 0
 
 
-def test_a_missing_file_is_not_an_error(tmp_path, capsys):
-    status = linter.main([str(tmp_path / "nope.bes")])
-    assert capsys.readouterr().out == ""
-    assert status == 0
+def test_a_missing_file_is_reported_as_a_file_error(tmp_path, capsys):
+    """A misspelled path yields no sites, which reads exactly like a clean
+    file unless the analyzer reports it -- so this must fail loudly rather.
+
+    than pass having linted nothing.
+    """
+    missing = tmp_path / "nope.bes"
+    status = linter.main([str(missing)])
+    out = capsys.readouterr().out
+    assert f"{missing}:1: [E607] cannot lint: no such file (file-error)" in out
+    assert status == 1
 
 
 def test_the_skip_marker_opts_a_file_out(tmp_path, capsys):

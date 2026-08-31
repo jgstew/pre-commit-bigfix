@@ -390,8 +390,10 @@ of the file.
 | `E604` | the complexity score is above the ceiling (raise with `--max-score`) |
 | `E605` | the evaluation cost is above the ceiling (raise with `--max-evaluation-cost`) |
 | `E606` | a directory tree was deeper than `--max-depth`, so it was not fully scanned (auto-discovery only; pre-commit always passes filenames) |
+| `E607` | a path given to the linter does not exist or could not be read |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
+| `W602` | a `whose` filter written on a singular spelling, where the plural reads safer |
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard
