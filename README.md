@@ -391,6 +391,8 @@ of the file.
 | `E605` | the evaluation cost is above the ceiling (raise with `--max-evaluation-cost`) |
 | `E606` | a directory tree was deeper than `--max-depth`, so it was not fully scanned (auto-discovery only; pre-commit always passes filenames) |
 | `E607` | a path given to the linter does not exist or could not be read |
+| `E608` | the value does not fit the kind of site it came from: a `<Relevance>` that is not a boolean, or an ActionScript `{...}` substitution that is plural |
+| `E609` | inspectors exclusive to client relevance and to session relevance in one statement, which no engine can answer |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
 | `W602` | a `whose` filter written on a singular spelling, where the plural reads safer |

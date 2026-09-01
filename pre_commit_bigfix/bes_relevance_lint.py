@@ -24,6 +24,11 @@ Checks:
     E606  a directory tree was deeper than the walk's limit, so it was not
           fully scanned. Only reachable when auto-discovering -- pre-commit
           always passes filenames
+    E607  a path given to the linter does not exist or could not be read
+    E608  the value does not fit the kind of site it was extracted from -- a
+          non-boolean <Relevance>, or a plural ActionScript substitution
+    E609  inspectors exclusive to client relevance and to session relevance in
+          one statement, which no engine can answer
     W600  a name no inspector dump defines. A warning rather than an error
           because a repo running a newer client than the analyzer's snapshot
           legitimately uses names it has never heard of
@@ -31,6 +36,11 @@ Checks:
           Disabled by default in .pre-commit-hooks.yaml: it fires ~6 times per
           file across real content, which drowns everything else. Enable it
           deliberately with --enable W601
+    W602  a `whose` filter written on a singular spelling, where the plural
+          reads safer
+    W603  two version-looking strings compared as strings, not as versions
+    W604  a version comparison that truncates to the shorter operand's
+          components
 
 E-codes fail the hook; warnings fail only under --strict.
 
@@ -95,6 +105,8 @@ CODES = {
     "evaluation-cost": "E605",
     "max-depth-exceeded": "E606",
     "file-error": "E607",
+    "site-type-mismatch": "E608",
+    "mixed-dialect": "E609",
     "unknown-inspector": "W600",
     "non-unique-risk": "W601",
     "plural-preferred": "W602",

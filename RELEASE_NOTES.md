@@ -12,6 +12,14 @@ the plural reads safer (the sibling of `W601`, for the shape where a singular
 collapse can't raise `Singular expression refers to non-unique object.` but
 still raises on no match). Requires `bigfix-relevance-analyzer >= 1.10.1`.
 
+`bes-relevance-lint` picks up two more rules added in
+`bigfix-relevance-analyzer` 1.11.0, both errors: `E608`, a value that does not
+fit the kind of site it was extracted from (a `<Relevance>` body that is not a
+boolean, or an ActionScript `{...}` substitution that is plural - the content
+cannot work either way), and `E609`, a statement mixing inspectors that exist
+only in client relevance with inspectors that exist only in session relevance,
+which no engine can answer. Requires `bigfix-relevance-analyzer >= 1.11.0`.
+
 ## v1.2.1
 
 ### Added

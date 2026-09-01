@@ -107,7 +107,17 @@ def test_codes_are_unique():
         pytest.param(TOO_COMPLEX, "E604", id="complexity"),
         pytest.param(TOO_COSTLY, "E605", id="evaluation-cost"),
         pytest.param("exists bogusinspectorname", "W600", id="unknown-inspector"),
-        pytest.param('name of files "x"', "W601", id="non-unique-risk"),
+        pytest.param(
+            'exists (name of files "x") whose (it = "y")',
+            "W601",
+            id="non-unique-risk",
+        ),
+        pytest.param('"a"', "E608", id="site-type-mismatch"),
+        pytest.param(
+            '(exists files of folders "/") and (exists bes computers)',
+            "E609",
+            id="mixed-dialect",
+        ),
     ],
 )
 def test_each_code_fires(tmp_path, capsys, relevance, code):
@@ -161,7 +171,7 @@ def test_enable_undoes_a_declared_disable(tmp_path, capsys):
     """
     _, out = run(
         tmp_path,
-        'name of files "x"',
+        'exists (name of files "x") whose (it = "y")',
         "--disable",
         "W601",
         "--enable",
