@@ -52,7 +52,9 @@ names, unique Analysis Property names/IDs, unique Action IDs, action link text
 free of empty-substitution gaps, SuccessCriteria body/Option consistency, a
 SourceSeverity vocabulary (default Low/Moderate/Important/High/Critical/
 Unspecified, overridable with `--severity-values`), description placeholders / empty
-descriptions, and Task/Fixlet release-date / modification-time presence.
+descriptions, a Description `<script>` block free of `//` line comments
+(lost when the file is converted to FXF, since Description newlines are
+collapsed), and Task/Fixlet release-date / modification-time presence.
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`

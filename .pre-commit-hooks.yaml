@@ -36,12 +36,14 @@
     text free of empty-substitution gaps; SuccessCriteria body/Option consistency;
     a SourceSeverity vocabulary (default Low/Moderate/Important/High/
     Critical/Unspecified, overridable with --severity-values); description-placeholder
-    and empty-Description; and Task/Fixlet release-date/modification-time
-    presence and download actions. Auto-fixes the fixable ones in place
-    (DownloadSize -> 0, missing dates -> now, blank-line collapse, Title trim,
-    Relevance whitespace trim, trailing-whitespace strip, XML-declaration
-    insert/normalize; and, under --strict, CDATA wrapping) and exits 1 when
-    anything was fixed. --check-filename (off by default) additionally checks
+    and empty-Description; a Description <script> block free of `//` line
+    comments (which are lost when the file is converted to FXF); and
+    Task/Fixlet release-date/modification-time presence and download actions.
+    Auto-fixes the fixable ones in place (DownloadSize -> 0, missing dates ->
+    now, blank-line collapse, Title trim, Relevance whitespace trim,
+    trailing-whitespace strip, XML-declaration insert/normalize, Description
+    `//` comments rewritten as `/* ... */`; and, under --strict, CDATA
+    wrapping) and exits 1 when anything was fixed. --check-filename (off by default) additionally checks
     that a file's basename matches its first content object's Title. Unparsable
     files are skipped (bes-schema-validate owns validity). E-codes fail the
     hook; pass --strict to also fail on warnings.

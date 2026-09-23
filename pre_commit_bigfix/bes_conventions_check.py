@@ -65,6 +65,17 @@ Checks:
     E220  two <Property> entries in one <Analysis> share a Name or an ID --
           reporting cannot tell two same-named properties apart, and the API
           addresses a property by its ID
+    E221  a <Description>'s <script> block uses a `// comment` style
+          JavaScript comment (fixable -> rewritten as `/* comment */`). When a
+          BES file is converted to FXF (the path Prop-tool / Git-based sites
+          take), newlines inside the Description are collapsed onto one line;
+          everything after a `//` on that collapsed line -- including real
+          code that follows it -- is then silently swallowed as part of the
+          comment. A `/* ... */` block comment survives the collapse. Only
+          `//` outside a string/template literal, regex literal, and existing
+          `/* */` block comment is flagged; a comment whose text itself
+          contains `*/` cannot be wrapped in a single block comment and is
+          left as an unfixed error
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -147,10 +158,13 @@ lines before </ActionScript> (W205); a Title trimmed with tabs replaced by
 spaces (W209); a Relevance trimmed of leading/trailing whitespace (W213);
 trailing whitespace stripped from every line (W210); whitespace
 around an ActionScript CDATA terminator stripped (E215); a missing or
-non-UTF-8 XML declaration inserted / normalized (E214); and a
+non-UTF-8 XML declaration inserted / normalized (E214); a
 Description/Relevance/ActionScript that entity-escapes < > & is unescaped and
-CDATA-wrapped (E207). One fix is gated behind --strict: wrapping an
-otherwise-plain ActionScript body in <![CDATA[ ... ]]> (W204). The file-level
+CDATA-wrapped (E207); and a `// comment` in a Description <script> block
+rewritten as `/* comment */` (E221, applied after E207 in the same pass so an
+entity-escaped Description is unescaped first). One fix is gated behind
+--strict: wrapping an otherwise-plain ActionScript body in <![CDATA[ ... ]]>
+(W204). The file-level
 fixers (W210 then E214) run after the per-block ones. Finally, CRLF
 normalization runs LAST: whenever --auto-fix is on, the whole file is rewritten
 with CRLF line endings (E208), so any fix -- and any file that was not already
@@ -215,6 +229,7 @@ file, e.g. in an XML comment):
     evaluation-period-ok   (E219)
     severity-ok             (W216)
     filename-ok             (W217, only relevant with --check-filename)
+    script-comment-ok       (E221)
 
 description-ok also covers W215 (an empty/missing Task/Fixlet Description) --
 it is the same marker as E204 since both describe a Description problem.
@@ -274,6 +289,7 @@ ACTION_ID_MARKER = "action-id-ok"  # E218
 EVALUATION_PERIOD_MARKER = "evaluation-period-ok"  # E219
 SEVERITY_MARKER = "severity-ok"  # W216
 FILENAME_MARKER = "filename-ok"  # W217 (only with --check-filename)
+SCRIPT_COMMENT_MARKER = "script-comment-ok"  # E221
 
 BES_EXTENSIONS = (".bes",)
 
@@ -436,6 +452,14 @@ CDATA_ELEMENT_RE = re.compile(
 # body is <PreLink>/<Link>/<PostLink> markup, from an entity-escaped text body)
 CHILD_ELEMENT_RE = re.compile(r"<[A-Za-z]")
 
+# a <Description> element (content-object or action), used to scope E221 to
+# Description bodies only -- Relevance/ActionScript are not scanned for it
+DESCRIPTION_ELEMENT_RE = re.compile(r"<Description\b[^>]*>(.*?)</Description>", re.DOTALL)
+# a <script> block within a (possibly CDATA-wrapped, possibly entity-escaped)
+# Description body
+SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+SCRIPT_OPEN_RE = re.compile(r"<script\b", re.IGNORECASE)
+
 ACTIONSCRIPT_OPEN_RE = re.compile(r"<ActionScript\b([^>]*)>")
 ACTIONSCRIPT_FULL_RE = re.compile(
     r"<ActionScript\b([^>]*)>(.*?)</ActionScript>", re.DOTALL
@@ -531,6 +555,7 @@ KNOWN_CODES = frozenset(
         "E217",  # SuccessCriteria body/Option consistency
         "E218",  # duplicate Action ID within one content object
         "E219",  # x-relevance-evaluation-period value not a valid HH:MM:SS duration
+        "E221",  # Description <script> block uses a `//` line comment
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -881,6 +906,151 @@ def check_cdata_required(src):
                 )
             )
     return issues
+
+
+def _js_line_comments(js):
+    """Find `//` end-of-line comments in `js` outside strings/templates/regex
+    literals/block comments; return [(start, end, body), ...].
+
+    `start`/`end` are offsets into `js` spanning the comment from its opening
+    `//` up to (not including) the line terminator or end of string; `body` is
+    the text after `//` on that line. This is a lightweight tokenizer, good
+    enough for typical BigFix Description scripts -- not a full ECMAScript
+    parser. A `/` starts a regex literal unless the previous significant token
+    was a value (an identifier/number, a closing string/template/regex, or `)`
+    / `]`); this is the standard division-vs-regex heuristic and can misjudge
+    a keyword-suffixed regex literal (e.g. `return /x/`) as division, which is
+    not expected to appear in a BES Description script. The legacy `<!-- ... `
+    / `//-->` HTML-comment-hiding idiom is recognized (a comment whose body,
+    stripped, is exactly `-->`) and is not reported -- rewriting it would
+    break the hiding trick, and it is boilerplate, not content.
+    """
+    hits = []
+    i = 0
+    n = len(js)
+    prev_value = False
+    while i < n:
+        c = js[i]
+        if c in ("'", '"'):
+            i += 1
+            while i < n and js[i] != c:
+                i += 2 if js[i] == "\\" and i + 1 < n else 1
+            i += 1
+            prev_value = True
+            continue
+        if c == "`":
+            i += 1
+            while i < n and js[i] != "`":
+                i += 2 if js[i] == "\\" and i + 1 < n else 1
+            i += 1
+            prev_value = True
+            continue
+        if c == "/" and i + 1 < n and js[i + 1] == "*":
+            end = js.find("*/", i + 2)
+            i = end + 2 if end != -1 else n
+            continue
+        if c == "/" and i + 1 < n and js[i + 1] == "/":
+            eol = js.find("\n", i)
+            if eol == -1:
+                eol = n
+            body = js[i + 2 : eol]
+            if body.strip() != "-->":
+                hits.append((i, eol, body))
+            i = eol
+            prev_value = False
+            continue
+        if c == "/":
+            if prev_value:
+                i += 1
+                prev_value = True
+                continue
+            j = i + 1
+            in_class = False
+            while j < n:
+                ch = js[j]
+                if ch == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if ch == "\n":
+                    break
+                if ch == "[":
+                    in_class = True
+                elif ch == "]":
+                    in_class = False
+                elif ch == "/" and not in_class:
+                    j += 1
+                    break
+                j += 1
+            while j < n and js[j].isalpha():
+                j += 1
+            i = j
+            prev_value = True
+            continue
+        if c.isalnum() or c in "_$":
+            j = i
+            while j < n and (js[j].isalnum() or js[j] in "_$"):
+                j += 1
+            i = j
+            prev_value = True
+            continue
+        if c in ")]":
+            prev_value = True
+            i += 1
+            continue
+        if c.isspace():
+            i += 1
+            continue
+        prev_value = False
+        i += 1
+    return hits
+
+
+def check_script_comments(src):
+    """E221: a `//` line comment inside a Description <script> block.
+
+    <script> may appear as literal (CDATA-wrapped or plain) markup, in which
+    case it is scanned directly for an exact file line number, or hidden
+    behind entity escapes (a Description that should have been CDATA-wrapped,
+    per E207), in which case it is unescaped first -- newline count is
+    unaffected by entity decoding, so the reported line stays accurate. Only
+    <script> blocks are scanned: ordinary Description prose (a bare
+    `http://...` URL, a `//`-prefixed protocol-relative href) is never
+    special-cased away because it is never scanned in the first place.
+    """
+    issues = []
+    for desc_match in DESCRIPTION_ELEMENT_RE.finditer(src):
+        body = desc_match.group(1)
+        body_start = desc_match.start(1)
+        if SCRIPT_OPEN_RE.search(body):
+            for script_match in SCRIPT_BLOCK_RE.finditer(body):
+                script_body = script_match.group(1)
+                script_body_start = body_start + script_match.start(1)
+                for start, _end, _comment_body in _js_line_comments(script_body):
+                    issues.append(_e221_issue(_lineno(src, script_body_start + start)))
+            continue
+        decoded = _xml_unescape(body)
+        if not SCRIPT_OPEN_RE.search(decoded):
+            continue
+        base_line = _lineno(src, body_start)
+        for script_match in SCRIPT_BLOCK_RE.finditer(decoded):
+            script_body = script_match.group(1)
+            script_base_line = base_line + decoded.count("\n", 0, script_match.start(1))
+            for start, _end, _comment_body in _js_line_comments(script_body):
+                lineno = script_base_line + script_body.count("\n", 0, start)
+                issues.append(_e221_issue(lineno))
+    return issues
+
+
+def _e221_issue(lineno):
+    return (
+        lineno,
+        "E221",
+        (
+            "Description <script> uses a `//` comment, which is lost when the "
+            "file is converted to FXF (Description newlines are collapsed); "
+            f"use `/* ... */` instead; add `{SCRIPT_COMMENT_MARKER}` if intentional"
+        ),
+    )
 
 
 def check_actionscript_cdata(src):
@@ -1606,6 +1776,7 @@ VALUE_CHECKS = (
     (("W208",), ACTIONSCRIPT_EMPTY_MARKER, check_empty_actionscript),
     (("W211",), DOWNLOAD_MARKER, check_dynamic_download),
     (("W218",), LINK_TEXT_MARKER, check_link_text),
+    (("E221",), SCRIPT_COMMENT_MARKER, check_script_comments),
 )
 
 # (presence code, opt-out marker) -- markers scoped like the value checks
@@ -1692,6 +1863,11 @@ def _fix_block(block, marker_text, disabled, strict, now):
         fixed += got
     if "E207" not in disabled and CDATA_MARKER not in marker_text:
         block, got = fix_cdata_required(block)
+        fixed += got
+    # runs after E207 so an entity-escaped Description is unescaped and
+    # CDATA-wrapped first, revealing its literal <script> body to rewrite
+    if "E221" not in disabled and SCRIPT_COMMENT_MARKER not in marker_text:
+        block, got = fix_script_comments(block)
         fixed += got
     # runs after the W205 collapse, which preserves the terminator's indentation
     if "E215" not in disabled and CDATA_CLOSE_MARKER not in marker_text:
@@ -1889,6 +2065,69 @@ def fix_cdata_required(src):
         return f"{open_tag}<![CDATA[{decoded}]]></{tag}>"
 
     return CDATA_ELEMENT_RE.sub(repl, src), fixed
+
+
+def _sub_capture(match, new_inner):
+    """Return match.group(0) with its capture group 1 replaced by `new_inner`."""
+    full = match.group(0)
+    start = match.start(1) - match.start(0)
+    end = match.end(1) - match.start(0)
+    return full[:start] + new_inner + full[end:]
+
+
+def fix_script_comments(src):
+    """E221: rewrite a `//` line comment inside a Description <script> block
+    as `/* ... */`.
+
+    Operates on the literal <script> markup already in `src` -- run this
+    after fix_cdata_required (E207) in the same pass so an entity-escaped
+    Description is unescaped and CDATA-wrapped first, revealing its literal
+    <script> body for this fixer to rewrite. A comment whose text contains
+    `*/` cannot be safely wrapped in a single block comment and is left alone
+    (still reported by check_script_comments).
+    """
+    fixed = []
+
+    def rewrite_body(body_text):
+        pieces = []
+        cursor = 0
+        hits = []
+        for start, end, comment_body in _js_line_comments(body_text):
+            if "*/" in comment_body:
+                continue
+            pieces.append(body_text[cursor:start])
+            pieces.append("/*" + comment_body.rstrip(" \t") + " */")
+            cursor = end
+            hits.append(start)
+        pieces.append(body_text[cursor:])
+        return "".join(pieces), hits
+
+    def repl_description(desc_match):
+        body = desc_match.group(1)
+        body_abs_start = desc_match.start(1)
+        if not SCRIPT_OPEN_RE.search(body):
+            return desc_match.group(0)
+
+        def repl_script(script_match):
+            script_body = script_match.group(1)
+            script_abs_start = body_abs_start + script_match.start(1)
+            new_script_body, hit_offsets = rewrite_body(script_body)
+            for offset in hit_offsets:
+                fixed.append(
+                    (
+                        _lineno(src, script_abs_start + offset),
+                        "E221",
+                        "rewrote a `//` comment as `/* ... */` in a Description "
+                        "<script> block",
+                    )
+                )
+            return _sub_capture(script_match, new_script_body)
+
+        new_body = SCRIPT_BLOCK_RE.sub(repl_script, body)
+        return _sub_capture(desc_match, new_body)
+
+    new_src = DESCRIPTION_ELEMENT_RE.sub(repl_description, src)
+    return new_src, fixed
 
 
 def fix_actionscript_cdata(src):

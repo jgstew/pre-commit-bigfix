@@ -1739,3 +1739,173 @@ def test_w217_marker_opts_out(tmp_path):
     content = task(title="Something Else", marker="filename-ok")
     got = _codes_with_filename(tmp_path, content, name="x.bes")
     assert "W217" not in got
+
+
+# --- E221 `//` JavaScript comments inside a Description <script> block -----
+
+
+def task_with_script(js, cdata=True, escaped=False, marker=None):
+    """A Task whose Description holds `<script>{js}</script>`.
+
+    `cdata` (the default) wraps the whole Description body in CDATA, the
+    common real-world shape; `escaped` entity-escapes `<`/`>`/`&` instead (no
+    CDATA) to exercise the "checker unescapes before scanning" path -- the two
+    are mutually exclusive. Plain (`cdata=False, escaped=False`) leaves
+    `<script>` as literal, valid XML child markup, which BES.xsd tolerates
+    when the script body itself contains no `<`/`>`/`&`.
+    """
+    script = f"<script>{js}</script>"
+    if escaped:
+        body = script.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    elif cdata:
+        body = f"<![CDATA[{script}]]>"
+    else:
+        body = script
+    content = task(description="PLACEHOLDER", marker=marker)
+    return content.replace(
+        "<Description><![CDATA[PLACEHOLDER]]></Description>",
+        f"<Description>{body}</Description>",
+    )
+
+
+def test_e221_line_comment_in_cdata_script_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var x = 1; // note"))
+    assert "E221" in got
+
+
+def test_e221_line_comment_in_plain_script_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var x = 1; // note", cdata=False))
+    assert "E221" in got
+
+
+def test_e221_line_comment_in_entity_escaped_script_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var x = 1; // note", escaped=True))
+    assert "E221" in got
+
+
+def test_e221_bare_double_slash_flagged(tmp_path):
+    assert "E221" in codes(tmp_path, task_with_script("var x = 1;\n//\nvar y = 2;"))
+
+
+def test_e221_url_string_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script('var u = "https://example.com";'))
+    assert "E221" not in got
+
+
+def test_e221_single_quoted_string_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var u = 'a // b';"))
+    assert "E221" not in got
+
+
+def test_e221_template_literal_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var u = `x // y`;"))
+    assert "E221" not in got
+
+
+def test_e221_block_comment_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("/* a // b */"))
+    assert "E221" not in got
+
+
+def test_e221_regex_literal_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script(r"var re = /a\/\/b/;"))
+    assert "E221" not in got
+
+
+def test_e221_division_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script("var q = a / b / c;"))
+    assert "E221" not in got
+
+
+def test_e221_escaped_quote_in_string_not_flagged(tmp_path):
+    got = codes(tmp_path, task_with_script('var u = "he said \\" // x";'))
+    assert "E221" not in got
+
+
+def test_e221_legacy_html_comment_hiding_not_flagged(tmp_path):
+    js = "<!--\nvar x = 1;\n//-->"
+    assert "E221" not in codes(tmp_path, task_with_script(js))
+
+
+def test_e221_no_script_block_not_flagged(tmp_path):
+    # a plain http:// URL in Description prose, no <script> at all
+    content = task(description="See http://example.com for details.")
+    assert "E221" not in codes(tmp_path, content)
+
+
+def test_e221_actionscript_double_slash_not_flagged(tmp_path):
+    # // is ordinary ActionScript comment syntax and must not be flagged there
+    assert "E221" not in codes(tmp_path, task(body="\n// a comment\necho hi\n"))
+
+
+def test_e221_good_task_baseline_unaffected(tmp_path):
+    assert codes(tmp_path, task()) == []
+
+
+def test_e221_reported_line_is_real_file_line(tmp_path):
+    content = task_with_script("var x = 1;\nvar y = 2; // note")
+    path = write(tmp_path, "x.bes", content)
+    issues, _ = checker.check_file(path)
+    e221 = [item for item in issues if item[1] == "E221"]
+    assert len(e221) == 1
+    lineno, _, _ = e221[0]
+    file_lines = content.replace("\r\n", "\n").split("\n")
+    assert "// note" in file_lines[lineno - 1]
+
+
+def test_e221_marker_opts_out(tmp_path):
+    content = task_with_script("var x = 1; // note", marker="script-comment-ok")
+    assert "E221" not in codes(tmp_path, content)
+
+
+def test_e221_disable_flag_opts_out(tmp_path):
+    content = task_with_script("var x = 1; // note")
+    assert "E221" not in codes(tmp_path, content, disabled=frozenset(["E221"]))
+
+
+def test_e221_autofix_rewrites_line_comment(tmp_path):
+    out, fixed = autofix(tmp_path, task_with_script("var x = 1; // note"))
+    assert "<script>var x = 1; /* note */</script>" in out
+    assert any(code == "E221" for _, code, _ in fixed)
+    assert "E221" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_e221_autofix_trims_trailing_whitespace(tmp_path):
+    out, fixed = autofix(tmp_path, task_with_script("var x = 1; // note   "))
+    assert "<script>var x = 1; /* note */</script>" in out
+    assert any(code == "E221" for _, code, _ in fixed)
+
+
+def test_e221_autofix_bare_double_slash(tmp_path):
+    out, fixed = autofix(tmp_path, task_with_script("var x = 1; //"))
+    assert "<script>var x = 1; /* */</script>" in out
+    assert any(code == "E221" for _, code, _ in fixed)
+
+
+def test_e221_autofix_skips_comment_containing_close_marker(tmp_path):
+    # "// a */ b" cannot be wrapped in a single /* ... */ block -- left as E221
+    out, fixed = autofix(tmp_path, task_with_script("var x = 1; // a */ b"))
+    assert "// a */ b" in out
+    assert not any(code == "E221" for _, code, _ in fixed)
+    assert "E221" in codes(tmp_path, out, name="after.bes")
+
+
+def test_e221_autofix_no_comment_is_untouched(tmp_path):
+    content = task_with_script("var x = 1;")
+    out, fixed = autofix(tmp_path, content)
+    assert "<script>var x = 1;</script>" in out
+    assert not any(code == "E221" for _, code, _ in fixed)
+
+
+def test_e221_autofix_is_not_strict_gated(tmp_path):
+    content = task_with_script("var x = 1; // note")
+    out, fixed = autofix(tmp_path, content, strict=False)
+    assert any(code == "E221" for _, code, _ in fixed)
+    assert "<script>var x = 1; /* note */</script>" in out
+
+
+def test_e221_main_exit_code_after_autofix(tmp_path, capsys):
+    content = task_with_script("var x = 1; // note")
+    path = write(tmp_path, "x.bes", content)
+    rc = checker.main([path])
+    assert rc == 1

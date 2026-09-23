@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+`bes-conventions-check` picks up `E221`: a `// comment` style JavaScript
+comment inside a `<Description>`'s `<script>` block. When a `.bes` file is
+converted to FXF (the path Prop-tool / Git-based sites take), newlines inside
+the Description are collapsed onto one line, so everything after a `//` on
+that collapsed line - including real code that follows it - is silently
+swallowed as part of the comment. Auto-fixed by default (not `--strict`-gated,
+like `E207`) by rewriting the comment as `/* comment */`, which survives the
+collapse; a comment whose text itself contains `*/` cannot be wrapped in a
+single block comment and is left as an unfixed error. Only `//` outside a
+string/template literal, regex literal, and existing `/* */` block comment is
+flagged, so a `//` in an ordinary `http://` URL or a protocol-relative href
+is not touched, and the legacy `<!-- ... //-->` HTML-comment-hiding idiom is
+recognized and left alone. Opt out with the `script-comment-ok` marker.
+Closes [#17](https://github.com/jgstew/pre-commit-bigfix/issues/17).
+
 ### Changed
 
 `bes-relevance-lint` picks up two rules added in `bigfix-relevance-analyzer`
