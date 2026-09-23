@@ -20,6 +20,19 @@ cannot work either way), and `E609`, a statement mixing inspectors that exist
 only in client relevance with inspectors that exist only in session relevance,
 which no engine can answer. Requires `bigfix-relevance-analyzer >= 1.11.0`.
 
+`bes-actionscript-lint-schclass`'s `E300` now quotes the whole offending line
+instead of its first whitespace-delimited run, and adds a "did you mean"
+naming the nearest known command verbs: `action log commands` suggests
+`action log command`, a bare `action log` suggests `action log all` and
+`action log command`, and a bare `action launch preference` suggests its two
+priorities. The verbs come from the merged schclass grammar, so the
+suggestions track the vendored file with no list to maintain, and a line
+whose first word begins no known command (`badverb y`) still gets no
+suggestion. The plural and bare forms remain `E300` -- they are not valid
+ActionScript; `action log all` and `action log command` were already
+accepted. Closes
+[#15](https://github.com/jgstew/pre-commit-bigfix/issues/15).
+
 ## v1.2.1
 
 ### Added
