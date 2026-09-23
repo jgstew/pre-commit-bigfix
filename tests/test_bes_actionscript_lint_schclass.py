@@ -115,12 +115,101 @@ def test_blank_and_comment_only_body_is_clean():
 def test_unknown_verb_e300():
     issues = linter.lint_actionscript("run x\nbadverb y\n")
     assert [(lineno, code) for lineno, code, _msg in issues] == [(2, "E300")]
-    assert "badverb" in issues[0][2]
+    assert '"badverb y"' in issues[0][2]
+    assert "did you mean" not in issues[0][2]
 
 
 def test_e300_line_starting_with_string():
     issues = linter.lint_actionscript('"quoted" is not a verb\n')
     assert issues[0][1] == "E300"
+    assert '"quoted" is not a verb' in issues[0][2]
+    assert "did you mean" not in issues[0][2]
+
+
+def test_e300_quotes_the_whole_line_not_just_the_first_word():
+    issues = linter.lint_actionscript("action log commands\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(1, "E300")]
+    assert '"action log commands"' in issues[0][2]
+
+
+def test_e300_quoted_line_is_stripped():
+    issues = linter.lint_actionscript("\t action log commands  \n")
+    assert '"action log commands"' in issues[0][2]
+
+
+def test_e300_quoted_line_is_truncated_with_an_elision_marker():
+    issues = linter.lint_actionscript("badverb " + "x" * 80 + "\n")
+    assert '"badverb ' + "x" * 32 + '..."' in issues[0][2]
+
+
+def test_e300_message_is_exact():
+    issues = linter.lint_actionscript("action log commands\n")
+    assert issues[0][2] == (
+        "line does not start with a known ActionScript command, // comment, "
+        'or {...} substitution: "action log commands"; did you mean '
+        "`action log command` or `action log all`?; add "
+        "`actionscript-verb-ok` if intentional"
+    )
+
+
+def test_e300_suggests_completions_for_a_bare_verb_prefix():
+    issues = linter.lint_actionscript("action log\n")
+    assert "did you mean `action log all` or `action log command`?" in issues[0][2]
+
+
+def test_e300_suggests_completions_for_a_bare_three_word_prefix():
+    issues = linter.lint_actionscript("action launch preference\n")
+    assert (
+        "did you mean `action launch preference low-priority` or "
+        "`action launch preference normal-priority`?"
+    ) in issues[0][2]
+
+
+def test_e300_suggests_the_verb_family_for_an_unknown_tail():
+    issues = linter.lint_actionscript("action log none\n")
+    assert "did you mean `action log all` or `action log command`?" in issues[0][2]
+
+
+def test_e300_suggests_both_override_verbs():
+    issues = linter.lint_actionscript("override\nrun x\n")
+    assert [(lineno, code) for lineno, code, _msg in issues] == [(1, "E300")]
+    assert "did you mean `override run` or `override wait`?" in issues[0][2]
+
+
+def test_e300_suggests_at_most_three_verbs():
+    # `module add` / `module commit` / `module delete` are the whole family
+    issues = linter.lint_actionscript("module\n")
+    assert (
+        "did you mean `module add`, `module commit`, or `module delete`?"
+    ) in issues[0][2]
+
+
+def test_e300_has_no_suggestion_when_the_verb_family_is_too_wide():
+    # many verbs start with `action`, and none is a close spelling of this line
+    issues = linter.lint_actionscript("action foo\n")
+    assert issues[0][1] == "E300"
+    assert "did you mean" not in issues[0][2]
+
+
+def test_e300_suggests_a_close_spelling_from_a_wide_family():
+    issues = linter.lint_actionscript("action logs all\n")
+    assert "did you mean `action log all`?" in issues[0][2]
+
+
+def test_e300_does_not_suggest_a_verb_the_line_already_spells():
+    # a line that exactly spells a verb never reaches E300 (the tokenizer
+    # matches it), so this guard is exercised directly against the helper:
+    # "setting" is itself a verb, and must not be offered back as a
+    # "suggestion" alongside its sibling "setting delete".
+    verbs = linter._default_verbs()
+    assert linter._verb_suggestions("setting", verbs) == ["setting delete"]
+
+
+def test_e300_suggestions_come_from_the_grammar_and_are_cached():
+    verbs = linter._default_verbs()
+    assert verbs is linter._default_verbs()
+    assert verbs == tuple(sorted(verbs))
+    assert "action log all" in verbs and "action log command" in verbs
 
 
 def test_uppercase_verb_w302_not_e300():

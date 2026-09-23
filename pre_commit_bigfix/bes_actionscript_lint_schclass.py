@@ -39,7 +39,11 @@ bes-conventions-check).
 
 Checks:
     E300  a line's first token is not a known command verb, a // comment, a
-          {...} substitution, a continuation, or blank
+          {...} substitution, a continuation, or blank. The message quotes
+          the offending line (not just its first token) and, when the
+          grammar narrows it to at most three known commands or to one close
+          spelling of them, names them as a `did you mean` suggestion --
+          e.g. `action log commands` suggests `action log command`
     E301  a {...} relevance substitution has no closing } before line end
     E302  a `createfile until <MARKER>` block never reaches its marker line
     E303  an `override run` / `override wait` option line is wrong: an unknown
@@ -91,7 +95,12 @@ does not match -- the console colorizer behaves the same way); a line of a
 multi-line string that happens to start with `createfile until` is mistaken
 for a heredoc opener. A dynamic `download` line is lexically VALID here while
 still advisory-warned (W211) in bes-conventions-check -- different altitudes,
-both intentional.
+both intentional. The E300 `did you mean` suggestion is word-based, so a
+first word glued to punctuation (`run"x"`) gets none; a plural or bare
+`action log`/`action launch` line stays E300 by design -- `action log all`,
+`action log command`, and the two `action launch preference` forms are the
+only variants the grammar and the BigFix documentation carry
+(jgstew/pre-commit-bigfix#15).
 
 Exit codes:
     0  no E-code issues (and, without --strict, regardless of warnings)
@@ -99,6 +108,7 @@ Exit codes:
 """
 
 import argparse
+import difflib
 import os
 import re
 import sys
@@ -192,7 +202,22 @@ OVERRIDE_OPTION_RE = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)\Z")
 # tests/test_bes_actionscript_validate_script.py.
 MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
 
+# E300's message quotes the offending LINE, not the first token: a `default`
+# token is one contiguous non-whitespace run (see flush_default in
+# schclass_tokenizer.py), so quoting the token alone turned `action log
+# commands` into a useless `"action"` (jgstew/pre-commit-bigfix#15).
+LINE_QUOTE_LIMIT = 40
+
+# E300's "did you mean" suggestion. SUGGEST_LIMIT is both the cap and the
+# relevance gate: a family the grammar has already narrowed to this many
+# commands is named in full (it is a fact about the grammar, not a guess); a
+# wider family is filtered by spelling similarity first and usually stays
+# silent -- see _verb_suggestions.
+SUGGEST_LIMIT = 3
+SUGGEST_CUTOFF = 0.85
+
 _TOKENIZER = None
+_VERBS = None
 
 
 def _default_tokenizer():
@@ -205,6 +230,26 @@ def _default_tokenizer():
             relaxed_bol=True,
         )
     return _TOKENIZER
+
+
+def _grammar_verbs(tokenizer):
+    """Return a tokenizer's command verbs, sorted (cached for the default).
+
+    Derived from the merged schema the same way _TOKENIZER is, so new BigFix
+    verbs arrive with the vendored schclass and there is no list to maintain
+    here. A caller-supplied tokenizer (a test path) is not cached.
+    """
+    global _VERBS
+    if tokenizer is not _TOKENIZER:
+        return tuple(sorted(tokenizer.schema.all_token_tags()))
+    if _VERBS is None:
+        _VERBS = tuple(sorted(tokenizer.schema.all_token_tags()))
+    return _VERBS
+
+
+def _default_verbs():
+    """Return the default grammar's command verbs, sorted (lazy)."""
+    return _grammar_verbs(_default_tokenizer())
 
 
 def _mask_heredocs(lines):
@@ -251,6 +296,84 @@ def _mask_heredocs(lines):
         masked[end] = ""  # the marker line itself is the terminator, not a verb
         index = end + 1
     return masked, issues
+
+
+def _quote(value, limit=LINE_QUOTE_LIMIT):
+    """`value` shortened for use in a message, with an elision marker if cut."""
+    value = value.strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "..."
+
+
+def _verb_ratio(words, verb):
+    """Similarity of the line's leading words to `verb`, word-count aligned.
+
+    The line is truncated to the candidate's own word count first, so a
+    verb's trailing arguments (`action log commands --now`) do not dilute
+    the score.
+    """
+    lowered = verb.lower()
+    head = " ".join(words[: len(lowered.split())])
+    return difflib.SequenceMatcher(None, head, lowered).ratio()
+
+
+def _verb_suggestions(line, verbs):
+    """Return the known verbs a bad line most likely meant, best first.
+
+    The candidates are the verbs sharing the LONGEST leading-word prefix
+    with the line: `action log commands` and a bare `action log` both land
+    on {`action log all`, `action log command`}. A line whose first word
+    begins no verb at all (`badverb y`, a "quoted" string) gets nothing --
+    that gate is what keeps the suggestion from being noise. A family the
+    grammar has already narrowed to SUGGEST_LIMIT or fewer is returned
+    whole; a wider one is a guess and is filtered to close spellings only.
+    A verb the line already spells exactly (at its own word count) is
+    dropped -- suggesting back what was already written is not a suggestion.
+    """
+    words = line.strip().lower().split()
+    if not words:
+        return []
+    family = []
+    depth = 0
+    for verb in verbs:
+        verb_words = verb.lower().split()
+        shared = 0
+        while (
+            shared < len(verb_words)
+            and shared < len(words)
+            and verb_words[shared] == words[shared]
+        ):
+            shared += 1
+        if shared == 0:
+            continue
+        if shared > depth:
+            family, depth = [verb], shared
+        elif shared == depth:
+            family.append(verb)
+    family = [
+        verb for verb in family if " ".join(words[: len(verb.split())]) != verb.lower()
+    ]
+    if not family:
+        return []
+    ranked = sorted(family, key=lambda verb: (-_verb_ratio(words, verb), verb))
+    if len(family) > SUGGEST_LIMIT:
+        ranked = [v for v in ranked if _verb_ratio(words, v) >= SUGGEST_CUTOFF]
+    return ranked[:SUGGEST_LIMIT]
+
+
+def _did_you_mean(suggestions):
+    """Render suggested verbs as a message clause, or "" when there are none."""
+    quoted = [f"`{verb}`" for verb in suggestions]
+    if not quoted:
+        return ""
+    if len(quoted) == 1:
+        body = quoted[0]
+    elif len(quoted) == 2:
+        body = " or ".join(quoted)
+    else:
+        body = ", ".join(quoted[:-1]) + ", or " + quoted[-1]
+    return f"did you mean {body}?; "
 
 
 def _override_value(raw):
@@ -422,14 +545,15 @@ def lint_actionscript(body, tokenizer=None):
                     )
                 )
                 continue
+        suggestion = _did_you_mean(_verb_suggestions(line, _grammar_verbs(tokenizer)))
         issues.append(
             (
                 lineno,
                 "E300",
                 (
                     "line does not start with a known ActionScript command, "
-                    f'// comment, or {{...}} substitution: "{token.text[:40]}"; '
-                    f"add `{VERB_MARKER}` if intentional"
+                    f'// comment, or {{...}} substitution: "{_quote(line)}"; '
+                    f"{suggestion}add `{VERB_MARKER}` if intentional"
                 ),
             )
         )

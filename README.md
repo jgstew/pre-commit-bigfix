@@ -82,7 +82,10 @@ of validation corrections the display grammar needs.
 
 The rule: the first token of every line must be a known command verb, a `//`
 comment, a `{...}` relevance substitution, a continuation, or the line must be
-blank (E300). A `{...}` substitution must close before line end (E301), and a
+blank (E300; the message quotes the whole offending line and, when the
+grammar narrows it to a handful of known commands, offers a `did you mean` --
+e.g. `action log commands` suggests `action log command`). A `{...}`
+substitution must close before line end (E301), and a
 `createfile until <MARKER>` block must reach its bare marker line (E302; the
 block's raw content is excluded from linting). An `override run` / `override
 wait` line opens a block whose following `keyword=value` lines are options
