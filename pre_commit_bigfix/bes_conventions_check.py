@@ -454,10 +454,14 @@ CHILD_ELEMENT_RE = re.compile(r"<[A-Za-z]")
 
 # a <Description> element (content-object or action), used to scope E221 to
 # Description bodies only -- Relevance/ActionScript are not scanned for it
-DESCRIPTION_ELEMENT_RE = re.compile(r"<Description\b[^>]*>(.*?)</Description>", re.DOTALL)
+DESCRIPTION_ELEMENT_RE = re.compile(
+    r"<Description\b[^>]*>(.*?)</Description>", re.DOTALL
+)
 # a <script> block within a (possibly CDATA-wrapped, possibly entity-escaped)
 # Description body
-SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+SCRIPT_BLOCK_RE = re.compile(
+    r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL
+)
 SCRIPT_OPEN_RE = re.compile(r"<script\b", re.IGNORECASE)
 
 ACTIONSCRIPT_OPEN_RE = re.compile(r"<ActionScript\b([^>]*)>")
@@ -2117,8 +2121,10 @@ def fix_script_comments(src):
                     (
                         _lineno(src, script_abs_start + offset),
                         "E221",
-                        "rewrote a `//` comment as `/* ... */` in a Description "
-                        "<script> block",
+                        (
+                            "rewrote a `//` comment as `/* ... */` in a Description "
+                            "<script> block"
+                        ),
                     )
                 )
             return _sub_capture(script_match, new_script_body)
