@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+`bes-relevance-lint` picks up one more rule added in `bigfix-relevance-analyzer`
+1.12.4: `W605`, an ordinary ActionScript `{...}` substitution whose value is an
+opaque object with no text form (the `bes *` family, `dmi *`/`smbios *`
+structs, `xml dom *`, `active directory *` objects, `sqlite *`, and bare
+objects like `dictionary`, `registry`, `process`, `socket`, `connection`) --
+unlike `E608`'s hard error on a plural value, nobody has confirmed one of
+these actually fails at runtime, so it is a warning. Requires
+`bigfix-relevance-analyzer >= 1.12.4`.
+
 ### Added
 
 `bes-conventions-check` picks up `E221`: a `// comment` style JavaScript

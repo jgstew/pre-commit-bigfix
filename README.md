@@ -403,6 +403,7 @@ of the file.
 | `W602` | a `whose` filter written on a singular spelling, where the plural reads safer |
 | `W603` | two version-looking strings compared as strings, not as versions |
 | `W604` | a version comparison that truncates to the shorter operand's components |
+| `W605` | an ordinary ActionScript substitution's value is an opaque object with no text form |
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard

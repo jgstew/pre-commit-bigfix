@@ -112,6 +112,7 @@ CODES = {
     "plural-preferred": "W602",
     "version-like-string-compare": "W603",
     "version-truncating-compare": "W604",
+    "non-renderable-substitution": "W605",
 }
 
 KNOWN_CODES = frozenset(CODES.values())
