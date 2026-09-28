@@ -1009,6 +1009,48 @@ def test_parameter_never_assigned_in_script_is_not_flagged():
     assert validator.check_actionscript(body) == []
 
 
+def test_action_parameter_query_defines_the_parameter():
+    """The query prompts for the value when the action is taken, so it is set
+    from the first line on -- a later `parameter` line does not make an.
+
+    earlier reference an ordering bug.
+    """
+    body = (
+        'action parameter query "homePage" with description "Home Page" '
+        'with default value "https://example.com"\n'
+        'if {parameter "homePage" = ""}\n'
+        'parameter "homePage" = "about:blank"\n'
+        "endif"
+    )
+    assert "E517" not in codes(validator.check_actionscript(body))
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        'if {not exists parameter "DriveLetter"}',
+        'if {not (exists parameter "DriveLetter")}',
+        'if {exists parameter "DriveLetter" and true}',
+    ],
+)
+def test_exists_parameter_guard_is_not_a_premature_reference(guard):
+    """Testing whether a parameter was supplied from outside the script is
+    the supported way to give it a default, not a use before assignment.
+    """
+    body = f'{guard}\n\tparameter "DriveLetter" = "C"\nendif'
+    assert validator.check_actionscript(body) == []
+
+
+def test_value_use_inside_an_exists_guard_line_is_still_e517():
+    """Only the `exists parameter` test itself is exempt, not a value read."""
+    body = (
+        'if {exists parameter "a" and parameter "a" = "x"}\n'
+        'parameter "a" = "1"\n'
+        "endif"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E517"]
+
+
 # --- E518: continue if / pause while condition must be a substitution -----------
 
 
@@ -1846,3 +1888,45 @@ def test_main_discovers_bes_files(tmp_path, monkeypatch):
     write(tmp_path, "bad.bes", bes("wait cmd /c echo a\nendif"))
     monkeypatch.chdir(tmp_path)
     assert validator.main([]) == 1
+
+
+# --- line numbers quoted inside messages are file lines ------------------------
+
+
+@pytest.mark.parametrize(
+    "code, body, referenced_body_line",
+    [
+        (
+            "E512",
+            "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+            "prefetch a.exe sha1:y size:1 http://x/b.exe\n"
+            "wait __Download\\a.exe",
+            1,
+        ),
+        ("E516", 'parameter "a" = "1"\nparameter "a" = "2"', 1),
+        ("E517", 'wait cmd /c echo {parameter "a"}\nparameter "a" = "1"', 2),
+        ("E522", "override wait\nhidden=true\nrun cmd /c echo a", 3),
+        ("E522", "override wait\noverride run\nrun cmd /c echo a", 2),
+        ("W501", "exit 0\nwait cmd /c echo a", 1),
+        ("W502", 'wait cmd /c echo a\naction parameter query "p"', 1),
+    ],
+)
+def test_line_numbers_in_messages_are_file_lines(
+    tmp_path, code, body, referenced_body_line
+):
+    """A message that points at another line must use the same numbering as
+    the issue's own line -- the file's -- not a count from the start of the.
+
+    ActionScript body (which begins several lines into the file).
+    """
+    content = bes(body)
+    body_start = (
+        content.split("\n").index(
+            next(line for line in content.split("\n") if "<ActionScript" in line)
+        )
+        + 1
+    )
+    expected = body_start + referenced_body_line - 1
+    messages = [msg for _, found, msg in issues_for(tmp_path, content) if found == code]
+    assert messages, f"expected {code}"
+    assert f"line {expected}" in messages[0], messages[0]

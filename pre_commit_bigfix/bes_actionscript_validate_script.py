@@ -442,6 +442,14 @@ _REDIRECT_TARGET_RE = re.compile(
 )
 _TERMINATOR_RE = re.compile(r"^(?:exit|restart|shutdown)\b", re.IGNORECASE)
 _ACTION_PARAMETER_QUERY_RE = re.compile(r"^action\s+parameter\s+query\b", re.IGNORECASE)
+# the name an `action parameter query "name" ...` line prompts for
+_ACTION_PARAMETER_QUERY_NAME_RE = re.compile(
+    r'^action\s+parameter\s+query\s+"([^"]+)"', re.IGNORECASE
+)
+# text ending in `exists` (optionally `exists (`) right before a `parameter
+# "name"` reference: testing whether the parameter was supplied from outside
+# the script, not reading its value
+_EXISTS_BEFORE_RE = re.compile(r"\bexists\s*\(?\s*$", re.IGNORECASE)
 _PARAMETER_RE = re.compile(r"^parameter\b", re.IGNORECASE)
 # a `parameter "name" = ...` assignment; the value is everything after `=`
 _PARAMETER_ASSIGN_RE = re.compile(r'^parameter\s+"([^"]+)"\s*=', re.IGNORECASE)
@@ -688,7 +696,7 @@ def _download_is_destination(line):
     return bool(before) and tail.strip(" \t\"'") == ""
 
 
-def _check_download_names(lines):
+def _check_download_names(lines, first_line=1):
     """Check prefetch/download producer names against `__Download\\` consumers.
 
     Returns E512 issues for a duplicate producer name that can co-execute
@@ -756,7 +764,7 @@ def _check_download_names(lines):
                     "E512",
                     (
                         f'duplicate download name "{name}" (first '
-                        f"declared on line {existing_lineno}, and both "
+                        f"declared on line {existing_lineno + first_line - 1}, and both "
                         "can run in the same execution); the second "
                         "declaration silently overwrites the first; add "
                         f"`{DOWNLOAD_MARKER}` if intentional"
@@ -899,7 +907,7 @@ def _check_download_names(lines):
     return issues
 
 
-def _check_parameters(lines):
+def _check_parameters(lines, first_line=1):
     """Check `parameter "name" = ...` assignments and references.
 
     Returns E516 issues for a second assignment to a name that can
@@ -913,7 +921,10 @@ def _check_parameters(lines):
     ordering bug, since the substitution evaluates to empty at that point.
     A name never assigned anywhere in the body is not flagged: it may be
     supplied from outside the script (a secure parameter, say), which this
-    hook cannot see.
+    hook cannot see. For the same reason an `exists parameter "name"` test
+    is not a reference -- it asks whether the value was supplied, the
+    supported way to give a parameter a default -- and a name prompted for
+    by `action parameter query "name"` is defined from the first line on.
     """
     issues = []
     if_stack = []  # each entry: [if_id, branch_index], mirrors _check_download_names
@@ -925,12 +936,18 @@ def _check_parameters(lines):
     def current_path():
         return {if_id: branch for if_id, branch in if_stack}
 
+    # names an `action parameter query` prompts for: set before line 1 runs
+    queried = set()
     # first pass: record every assignment (for E516 and to know where each
     # name is first assigned), in source order
     for index, raw_line in enumerate(lines):
         lineno = index + 1
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("//"):
+            continue
+        match = _ACTION_PARAMETER_QUERY_NAME_RE.match(stripped)
+        if match:
+            queried.add(match.group(1).lower())
             continue
 
         if _IF_RE.match(stripped):
@@ -962,7 +979,7 @@ def _check_parameters(lines):
                             "E516",
                             (
                                 f'duplicate assignment to parameter "{name}" '
-                                f"(first assigned on line {existing_lineno}, "
+                                f"(first assigned on line {existing_lineno + first_line - 1}, "
                                 "and both can run in the same execution); "
                                 "action parameters are write-once and the "
                                 "second assignment silently overwrites the "
@@ -985,10 +1002,14 @@ def _check_parameters(lines):
         assign_match = _PARAMETER_ASSIGN_RE.match(stripped)
         scan_from = assign_match.end() if assign_match else 0
         for match in _PARAMETER_REF_RE.finditer(stripped, scan_from):
+            if _EXISTS_BEFORE_RE.search(stripped[: match.start()]):
+                continue  # `exists parameter "x"`: a presence test, not a read
             deferred_refs.append((lineno, match.group(1)))
 
     for lineno, name in deferred_refs:
         key = name.lower()
+        if key in queried:
+            continue
         assign_lineno = first_assign_lineno.get(key)
         if assign_lineno is not None and lineno < assign_lineno:
             issues.append(
@@ -997,7 +1018,7 @@ def _check_parameters(lines):
                     "E517",
                     (
                         f'`parameter "{name}"` is referenced here but not '
-                        f"assigned until line {assign_lineno}; the "
+                        f"assigned until line {assign_lineno + first_line - 1}; the "
                         "substitution evaluates to empty at this point; add "
                         f"`{PARAMETER_MARKER}` if intentional"
                     ),
@@ -1442,7 +1463,7 @@ def _check_condition_shapes(lines):
     return issues
 
 
-def _check_override_blocks(lines):
+def _check_override_blocks(lines, first_line=1):
     """Check `override wait` / `override run` block termination.
 
     `bes_actionscript_lint_schclass.py` validates the keyword=value option
@@ -1477,7 +1498,7 @@ def _check_override_blocks(lines):
                         "E522",
                         (
                             f"`override {open_verb}` is reopened by another "
-                            f"`override` on line {lineno} before any "
+                            f"`override` on line {lineno + first_line - 1} before any "
                             f"command runs; add `{OVERRIDE_BLOCK_MARKER}` if "
                             "intentional"
                         ),
@@ -1507,7 +1528,7 @@ def _check_override_blocks(lines):
                     "E522",
                     (
                         f"`override {open_verb}` is terminated by `{command_verb}` "
-                        f"on line {lineno}, not `{open_verb}`; add "
+                        f"on line {lineno + first_line - 1}, not `{open_verb}`; add "
                         f"`{OVERRIDE_BLOCK_MARKER}` if intentional"
                     ),
                 )
@@ -1529,25 +1550,28 @@ def _check_override_blocks(lines):
     return issues
 
 
-def check_actionscript(body):
+def check_actionscript(body, first_line=1):
     """Check a single ActionScript body for balanced blocks and substitutions.
 
     Walks `if`/`endif` and `begin`/`end prefetch block` pairing across lines,
     and `{...}` relevance-substitution braces within each line.
 
     Returns a sorted list of (lineno, code, message), lineno 1-based into
-    `body`. `_mask_heredocs` blanks out `createfile until` block content
+    `body`. `first_line` is the file line the body starts on; it is used only
+    for the line numbers a message quotes about *other* lines ("first
+    declared on line N"), so they match the file numbering the caller gives
+    the issue itself. `_mask_heredocs` blanks out `createfile until` block content
     first, so lines that only look like commands inside one are ignored (its
     own E302 belongs to the sibling schclass hook, not here).
     """
     lines, _createfile_issues = _mask_heredocs(body.split("\n"))
-    issues = _check_download_names(lines)  # E512 / W507
-    issues.extend(_check_parameters(lines))  # E516 / E517
+    issues = _check_download_names(lines, first_line)  # E512 / W507
+    issues.extend(_check_parameters(lines, first_line))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
     issues.extend(_check_scratch_destinations(lines))  # W506
     issues.extend(_check_command_shapes(lines))  # E520 / E521 / E523 / W504 / W505
     issues.extend(_check_condition_shapes(lines))  # E518
-    issues.extend(_check_override_blocks(lines))  # E522
+    issues.extend(_check_override_blocks(lines, first_line))  # E522
     if_stack = []  # each entry: [lineno, seen_else]
     prefetch_stack = []  # each entry: [lineno, if_depth_at_open]
     preamble_over = False  # True once anything a prefetch block may not follow
@@ -1582,7 +1606,7 @@ def check_actionscript(body):
                     "W501",
                     (
                         "unreachable: the unconditional "
-                        f"exit/restart/shutdown on line {terminated_lineno} "
+                        f"exit/restart/shutdown on line {terminated_lineno + first_line - 1} "
                         "means this line can never run; add "
                         f"`{UNREACHABLE_MARKER}` if intentional"
                     ),
@@ -1597,7 +1621,7 @@ def check_actionscript(body):
                         "W502",
                         (
                             "`action parameter query` after execution began "
-                            f"on line {first_execution_lineno}; these are "
+                            f"on line {first_execution_lineno + first_line - 1}; these are "
                             "console-time prompts and belong at the top; add "
                             f"`{PARAMETER_QUERY_MARKER}` if intentional"
                         ),
@@ -1862,7 +1886,7 @@ def _validate_bes_xml(raw):
         return [(1, "W500", f"not parseable BES XML ({err}); skipping")]
     issues = []
     for sourceline, body in bodies:
-        for lineno, code, message in check_actionscript(body):
+        for lineno, code, message in check_actionscript(body, sourceline):
             issues.append((sourceline + lineno - 1, code, message))
     return issues
 
