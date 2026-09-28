@@ -71,12 +71,30 @@ def test_string_basic():
     assert tokens[1].end_kind == "tag"
 
 
-def test_string_escaped_quote_stays_inside():
-    tokens, errors = tokenize('run "a\\"b"\n')
+def test_vendored_display_grammar_escapes_a_quote_with_backslash():
+    """The console's own grammar (byte-exact, unmodified) still treats `\\"`
+    as an escaped quote -- it is the default grammar's override that drops.
+
+    it, since ActionScript itself has no escape character (#16).
+    """
+    vendored = schclass.load_schclass_files([schclass.DEFAULT_SCHCLASS_FILES[0]])
+    tokens, errors = Tokenizer(vendored).tokenize('run "a\\"b"\n')
     assert errors == []
     string = tokens[1]
     assert string.class_name == "string"
     assert string.text == '"a\\"b"'
+    assert string.end_kind == "tag"
+
+
+def test_string_backslash_does_not_escape_the_quote_in_the_default_grammar():
+    """The overrides drop the display grammar's `\\"` escape: ActionScript
+    has none, so `"C:\\Bes\\"` ends at its final quote (#16).
+    """
+    tokens, errors = tokenize('folder create "C:\\Bes\\"\n')
+    assert errors == []
+    string = tokens[-1]
+    assert string.class_name == "string"
+    assert string.text == '"C:\\Bes\\"'
     assert string.end_kind == "tag"
 
 

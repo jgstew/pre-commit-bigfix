@@ -8,6 +8,8 @@ non-.bes file linting, the skip/opt-out markers, --disable, W300 on
 unparsable XML, the mustache-template skip, and main()'s exit codes.
 """
 
+import pytest
+
 from pre_commit_bigfix import bes_actionscript_lint_schclass as linter
 
 WINDOWS_SHELL = "application/x-Fixlet-Windows-Shell"
@@ -391,6 +393,93 @@ def test_substitution_at_line_start_ok():
 def test_unterminated_string_w301():
     issues = linter.lint_actionscript('run "abc\n')
     assert [(lineno, code) for lineno, code, _msg in issues] == [(1, "W301")]
+
+
+# --- W301: ActionScript has no escape character (jgstew/pre-commit-bigfix#16) --
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'folder create "C:\\Bes\\"',
+        'parameter "baseFolder" =  "__Download\\"',
+        'parameter "sep"="\\"',
+        'parameter "p" = "{pathname of parent folder of client}\\BPS-Scans\\"',
+        'run "a\\" b "c"',  # two strings, each closed
+    ],
+)
+def test_trailing_backslash_does_not_escape_the_closing_quote(line):
+    """The console's display grammar treats `\\"` as an escaped quote, but
+    ActionScript has no escape character: `"C:\\Bes\\"` is closed.
+    """
+    assert linter.lint_actionscript(line + "\n") == []
+
+
+def test_backslash_quote_mid_line_closes_the_string():
+    """`"a\\"b"` is the string `"a\\"`, then `b`, then an unclosed `"`."""
+    issues = linter.lint_actionscript('run "a\\"b"\n')
+    assert [code for _, code, _ in issues] == ["W301"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'folder create "{parameter "root_dir"}',  # closing quote forgotten
+        'copy "{parameter "f"}" "{parameter "f"}.bak',
+    ],
+)
+def test_genuinely_unclosed_string_is_still_w301(line):
+    issues = linter.lint_actionscript(line + "\n")
+    assert [code for _, code, _ in issues] == ["W301"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'appendfile He said "hi',
+        'appendfile objStartFolder = "C:\\dir\\" & subFolder',
+        'appendfile FOR /F "skip=3" %%I IN (\'powershell.exe "Get-DiskImage """x',
+        'appendfile Set objShell = CreateObject("WScript.Shell"',
+    ],
+)
+def test_appendfile_content_quotes_are_not_w301(line):
+    """Everything after `appendfile` is one line of raw file content (a
+    batch file, a VBScript, JSON...), not ActionScript quoting.
+    """
+    assert linter.lint_actionscript(line + "\n") == []
+
+
+@pytest.mark.parametrize("verb", ["regset", "regset64"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        # from real content: .reg syntax escapes the quotes inside a value
+        '"Shell"="cmd.exe /c \\"cd /d \\"%USERPROFILE%\\" & start cmd.exe /k '
+        'runonce.exe /AlternateShellStartup"',
+        '"Path"="C:\\\\Program Files\\\\"',  # an escaped trailing backslash
+        '"Name"="plain"',
+    ],
+)
+def test_regset_value_uses_reg_file_escapes(verb, value):
+    """A regset value is written in .reg-file syntax, where `\\"` is an
+    escaped quote and `\\\\` an escaped backslash -- unlike the rest of.
+
+    ActionScript.
+    """
+    line = f'{verb} "[HKEY_LOCAL_MACHINE\\SOFTWARE\\X]" {value}\n'
+    assert linter.lint_actionscript(line) == []
+
+
+def test_regset_value_left_open_is_still_w301():
+    line = 'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\X]" "Name"="unclosed\n'
+    issues = linter.lint_actionscript(line)
+    assert [code for _, code, _ in issues] == ["W301"]
+
+
+def test_appendfile_exemption_does_not_leak_to_other_lines():
+    body = 'appendfile echo "x\nrun "abc\n'
+    issues = linter.lint_actionscript(body)
+    assert [(lineno, code) for lineno, code, _ in issues] == [(2, "W301")]
 
 
 def test_heredoc_masks_content():

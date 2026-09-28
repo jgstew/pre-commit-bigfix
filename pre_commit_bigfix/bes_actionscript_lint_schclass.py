@@ -53,7 +53,10 @@ Checks:
     W300  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W301  a "..." string has no closing " before line end (often benign in
-          ActionScript arguments, so a warning)
+          ActionScript arguments, so a warning). ActionScript has no escape
+          character, so `"C:\\Bes\\"` is closed -- except in a `regset`/
+          `regset64` value, written in .reg-file syntax, where `\\"` and `\\\\`
+          are escapes. `appendfile` content lines are raw file text and exempt
     W302  a matched command verb is not lowercase (e.g. `RUN`; valid but
           unconventional)
     W303  an override option keyword or value is not lowercase (e.g. `RunAs`;
@@ -108,6 +111,7 @@ Exit codes:
 """
 
 import argparse
+import dataclasses
 import difflib
 import os
 import re
@@ -191,6 +195,12 @@ OVERRIDE_OPTIONS = {
 # 0 is the documented default (meaning "no timeout"), so it must be writable
 OVERRIDE_INTEGER_OPTIONS = frozenset(["timeout_seconds"])
 INTEGER_RE = re.compile(r"[0-9]+\Z")
+# an `appendfile <content>` line: the content is raw file text (W301-exempt)
+_APPENDFILE_RE = re.compile(r"[ \t]*appendfile\b", re.IGNORECASE)
+# a `regset`/`regset64` line: its value is written in .reg-file syntax, where
+# `\"` IS an escaped quote and `\\` an escaped backslash (W301 scans it with
+# _regset_tokenizer, unlike the rest of ActionScript, which has no escapes)
+_REGSET_RE = re.compile(r"[ \t]*regset(?:64)?\b", re.IGNORECASE)
 
 OVERRIDE_OPTION_RE = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)\Z")
 
@@ -222,6 +232,7 @@ SUGGEST_LIMIT = 3
 SUGGEST_CUTOFF = 0.85
 
 _TOKENIZER = None
+_REGSET_TOKENIZER = None
 _VERBS = None
 
 
@@ -235,6 +246,34 @@ def _default_tokenizer():
             relaxed_bol=True,
         )
     return _TOKENIZER
+
+
+def _regset_tokenizer():
+    """Return a Tokenizer whose strings honor .reg-file escapes (lazy).
+
+    The default grammar deliberately has no string escapes (ActionScript has
+    none, see bigfix_overrides.schclass); a regset value is the exception, so
+    `\\\\` and `\\"` are added back for it. Longest match wins, so at `\\\\"`
+    the escaped backslash is consumed and the quote then closes the string.
+    """
+    global _REGSET_TOKENIZER
+    if _REGSET_TOKENIZER is None:
+        schema = schclass.load_default_actionscript_schema()
+        string = schema.classes["string"]
+        schema.classes["string"] = dataclasses.replace(
+            string, skip_tags=("\\\\", '\\"') + tuple(string.skip_tags)
+        )
+        _REGSET_TOKENIZER = Tokenizer(schema, case_insensitive=True, relaxed_bol=True)
+    return _REGSET_TOKENIZER
+
+
+def _regset_line_has_open_string(line):
+    """True if a regset `line` leaves a "..." string open, per .reg escapes."""
+    tokens, _errors = _regset_tokenizer().tokenize(line)
+    return any(
+        token.class_name == "string" and token.end_kind in ("eol", "eof")
+        for token in tokens
+    )
 
 
 def _grammar_verbs(tokenizer):
@@ -481,6 +520,12 @@ def _check_override_option(lineno, keyword, raw_value):
     return issues
 
 
+_UNBALANCED_STRING_MESSAGE = (
+    'unbalanced " -- the string has no closing quote before '
+    f"the end of the line; add `{STRING_MARKER}` if intentional"
+)
+
+
 def lint_actionscript(body, tokenizer=None):
     """Lint one ActionScript body; return sorted [(lineno, code, message)].
 
@@ -497,6 +542,18 @@ def lint_actionscript(body, tokenizer=None):
         if raw != now
     }
     tokens, _errors = tokenizer.tokenize("\n".join(masked_lines))
+    # everything after `appendfile` is one line of raw file content (a batch
+    # file, a VBScript, JSON...), so its quotes are not ActionScript strings
+    appendfile_lines = {
+        lineno
+        for lineno, line in enumerate(masked_lines, start=1)
+        if _APPENDFILE_RE.match(line)
+    }
+    regset_lines = {
+        lineno
+        for lineno, line in enumerate(masked_lines, start=1)
+        if _REGSET_RE.match(line) and lineno not in masked
+    }
 
     first_on_line = {}
     continuation = set()
@@ -577,17 +634,16 @@ def lint_actionscript(body, tokenizer=None):
                     ),
                 )
             )
-        if token.class_name == "string" and token.end_kind in ("eol", "eof"):
-            issues.append(
-                (
-                    token.line,
-                    "W301",
-                    (
-                        'unbalanced " -- the string has no closing quote before '
-                        f"the end of the line; add `{STRING_MARKER}` if intentional"
-                    ),
-                )
-            )
+        if (
+            token.class_name == "string"
+            and token.end_kind in ("eol", "eof")
+            and token.line not in appendfile_lines
+            and token.line not in regset_lines
+        ):
+            issues.append((token.line, "W301", _UNBALANCED_STRING_MESSAGE))
+    for lineno in sorted(regset_lines):
+        if _regset_line_has_open_string(masked_lines[lineno - 1]):
+            issues.append((lineno, "W301", _UNBALANCED_STRING_MESSAGE))
     return sorted(issues)
 
 

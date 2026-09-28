@@ -27,6 +27,14 @@ lexClass:
 	name		= keywords
 	token:tag	= 'surrender device id'
 
+// ActionScript has no escape character: the base string class's '\\"' skip
+// (a display-grammar convenience) made a closed string like "C:\Bes\" or
+// "__Download\" look unterminated (W301). Drop it and keep the
+// backslash-newline continuations. See jgstew/pre-commit-bigfix#16.
+lexClass:
+	name		= string
+	skip:Tag	= '\\\r\n', '\\\n\r', '\\\n', '\\\r'
+
 // `override run` / `override wait` option lines (`hidden=true`) are NOT added
 // here as token:tags. Their values may be {...} relevance substitutions, and
 // they are only legal inside an override block -- neither is expressible in a

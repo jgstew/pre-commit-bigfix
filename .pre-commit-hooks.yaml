@@ -83,7 +83,8 @@
     relevance substitution and accepted unchecked. Verbs match
     case-insensitively, but a non-lowercase verb warns (W302); an override
     option keyword or value that is not lowercase warns (W303); an unbalanced
-    " warns (W301). Only application/x-Fixlet-Windows-Shell (or missing
+    " warns (W301) -- a backslash does not escape it, except in a regset value's
+    .reg-file syntax, and appendfile content is not checked. Only application/x-Fixlet-Windows-Shell (or missing
     MIMEType) bodies are BigFix ActionScript and are linted. Bodies are
     extracted with lxml, so entities are decoded, CDATA sections merged, and
     line numbers map back to the file. Unparsable files are skipped

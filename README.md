@@ -97,7 +97,10 @@ rather than commands, checked against the
 (E303) -- a value in `{...}` is a relevance substitution and is accepted
 unchecked. Verbs match case-insensitively but a non-lowercase verb warns
 (W302), an override option keyword or value that is not lowercase warns (W303),
-and an unbalanced `"` warns (W301).
+and an unbalanced `"` warns (W301). ActionScript has no escape character, so
+`"C:\Bes\"` is a closed string; only a `regset`/`regset64` value, which uses
+`.reg`-file syntax, treats `\"` as an escaped quote, and `appendfile` content
+is raw file text that is not checked.
 Only `application/x-Fixlet-Windows-Shell` (or missing-MIMEType) bodies are
 BigFix ActionScript and are linted; `x-sh`, `x-AppleScript`,
 `x-Fixlet-Windows-PowerShell`, and `text/x-uri` bodies are other languages and
