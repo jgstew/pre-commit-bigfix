@@ -418,6 +418,16 @@ _FOLDER_DELETE_RE = re.compile(r"^folder\s+delete\s+(.+?)\s*$", re.IGNORECASE)
 _SCRATCH_MOVE_RE = re.compile(
     r'^(move|copy)\s+"?(__createfile|__appendfile)"?\s+(.+?)\s*$', re.IGNORECASE
 )
+# `move <source> <target>` with the argument text captured, for W506: moving
+# a destination away (to back it up) clears it just as a delete does
+_MOVE_ARGS_RE = re.compile(r"^move\s+(.+?)\s*$", re.IGNORECASE)
+# `{parameter "X" of action}` names the same parameter as `{parameter "X"}`
+_PARAMETER_OF_ACTION_RE = re.compile(
+    r'(\bparameter\s+"[^"]*")\s+of\s+action\b', re.IGNORECASE
+)
+# a Windows-style path (drive letter or a backslash): its filesystem is
+# case-insensitive, so W506 compares it case-blind
+_WINDOWS_PATH_RE = re.compile(r'^"?[A-Za-z]:|\\')
 # the action's own download folder is action-scoped, not a persistent location
 _DOWNLOAD_DEST_RE = re.compile(r"__download|download path", re.IGNORECASE)
 # `copy`/`move` lines can themselves populate `__Download`, either from a
@@ -1002,9 +1012,39 @@ def _normalize_path(text):
     Comparison is textual -- two spellings of the same path that differ by
     quoting, separator or a trailing slash are treated as equal, but a
     `{...}` substitution is compared verbatim (its value is unknowable here,
-    so only an identical substitution counts as the same path).
+    so only an identical substitution counts as the same path), except that
+    `{parameter "X" of action}` and `{parameter "X"}` are the same parameter.
+    A Windows-style path (drive letter or backslash) is case-folded, its
+    filesystem being case-insensitive; any other path keeps its case, since
+    on a Linux/macOS agent `App.conf` and `app.conf` are two files.
     """
-    return text.strip().strip('"').replace("\\", "/").rstrip("/")
+    text = text.strip().strip('"')
+    windows = bool(_WINDOWS_PATH_RE.search(text))
+    text = _PARAMETER_OF_ACTION_RE.sub(r"\1", text).replace("\\", "/").rstrip("/")
+    return text.lower() if windows else text
+
+
+def _split_arguments(text):
+    """Split a command's argument text on whitespace, keeping quoted runs and
+    `{...}` substitutions (which may contain quotes and spaces) whole.
+    """
+    args, current, depth, quoted = [], [], 0, False
+    for char in text:
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+        elif char == '"' and not depth:
+            quoted = not quoted
+        elif char.isspace() and not depth and not quoted:
+            if current:
+                args.append("".join(current))
+                current = []
+            continue
+        current.append(char)
+    if current:
+        args.append("".join(current))
+    return args
 
 
 def _clears_destination(line, destination):
@@ -1019,7 +1059,15 @@ def _clears_destination(line, destination):
         tail = folder.split("}")[-1].strip("/")
         return bool(tail) and "/" + tail + "/" in "/" + destination
     match = _FILE_DELETE_RE.match(stripped)
-    return bool(match) and _normalize_path(match.group(1)) == destination
+    if match:
+        return _normalize_path(match.group(1)) == destination
+    # `move <destination> <elsewhere>` -- backing the old file up -- leaves
+    # the destination empty (a `copy` does not: its source stays in place)
+    match = _MOVE_ARGS_RE.match(stripped)
+    if match and not _SCRATCH_MOVE_RE.match(stripped):
+        args = _split_arguments(match.group(1))
+        return len(args) == 2 and _normalize_path(args[0]) == destination
+    return False
 
 
 def _check_scratch_destinations(lines):

@@ -1503,6 +1503,72 @@ def test_disable_w506_silences_it(tmp_path):
     assert issues_for(tmp_path, content, disabled={"W506"}) == []
 
 
+def test_parameter_of_action_matches_the_bare_parameter():
+    """`{parameter "X" of action}` and `{parameter "X"}` name one parameter."""
+    body = (
+        "createfile until _EOF_\nx\n_EOF_\n"
+        'delete "{parameter "Dir" of action}\\Bin\\Baseline.ps1"\n'
+        'copy __createfile "{parameter "Dir"}\\Bin\\Baseline.ps1"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_moving_the_destination_away_clears_it():
+    """Backing the old file up with `move` leaves the destination empty."""
+    body = (
+        "appendfile new content\n"
+        'delete "{parameter "server"}.bak"\n'
+        'move "{parameter "server"}" "{parameter "server"}.bak"\n'
+        'move __appendfile "{parameter "server"}"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_copying_the_destination_elsewhere_does_not_clear_it():
+    """A `copy` leaves its source in place, so the destination still exists."""
+    body = (
+        "appendfile new content\n"
+        'copy "{parameter "server"}" "{parameter "server"}.bak"\n'
+        'move __appendfile "{parameter "server"}"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+def test_moving_a_different_file_away_does_not_clear_it():
+    body = (
+        "appendfile new content\n"
+        'move "C:\\app\\server.conf" "C:\\app\\server.conf.bak"\n'
+        'move __appendfile "C:\\app\\web.conf"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+def test_windows_path_delete_matches_case_insensitively():
+    """A drive-letter / backslash path is on a case-insensitive filesystem."""
+    body = (
+        "createfile until _EOF_\nx\n_EOF_\n"
+        'delete "C:\\Windows\\Temp\\Applocker.xml"\n'
+        'move __createfile "c:\\windows\\temp\\applocker.xml"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+@pytest.mark.parametrize(
+    "deleted, destination",
+    [
+        ("applocker.xml", "Applocker.xml"),  # bare name: platform unknown
+        ("/etc/App.conf", "/etc/app.conf"),  # POSIX: case-sensitive
+    ],
+)
+def test_non_windows_path_case_mismatch_is_still_w506(deleted, destination):
+    """On a case-sensitive filesystem these are two different files."""
+    body = (
+        "createfile until _EOF_\nx\n_EOF_\n"
+        f"delete {deleted}\nmove __createfile {destination}"
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
 # --- E522: override wait/run block termination -------------------------------------
 
 
