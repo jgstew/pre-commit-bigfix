@@ -2139,14 +2139,20 @@ def fix_script_comments(src):
 def fix_actionscript_cdata(src):
     """W204: wrap an un-wrapped ActionScript body in <![CDATA[ ... ]]>.
 
-    Skips a body that already contains a `]]>` sequence, which cannot be placed
-    inside a CDATA section without splitting -- that one is left to warn.
+    The body is XML-unescaped before wrapping: inside CDATA an entity is
+    literal text, so wrapping `&quot;x&quot;` as-is would hand the agent
+    `&quot;x&quot;` instead of `"x"`. Skips a body whose unescaped text
+    contains a `]]>` sequence, which cannot be placed inside a CDATA section
+    without splitting -- that one is left to warn.
     """
     fixed = []
 
     def repl(match):
         attrs, body = match.group(1), match.group(2)
-        if "<![CDATA[" in body or "]]>" in body:
+        if "<![CDATA[" in body:
+            return match.group(0)
+        body = _xml_unescape(body)
+        if "]]>" in body:
             return match.group(0)
         fixed.append(
             (

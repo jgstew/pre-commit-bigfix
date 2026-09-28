@@ -463,6 +463,35 @@ def test_w204_autofix_wraps_under_strict(tmp_path):
     assert any(code == "W204" for _, code, _ in fixed)
 
 
+@pytest.mark.parametrize(
+    "escaped, literal",
+    [
+        (
+            "echo &quot;/Library/App Support/x.app&quot;",
+            'echo "/Library/App Support/x.app"',
+        ),
+        ("echo &apos;hi&apos;", "echo 'hi'"),
+        ("echo &#39;hi&#39; &#x22;x&#x22;", "echo 'hi' \"x\""),
+    ],
+)
+def test_w204_autofix_unescapes_before_wrapping(tmp_path, escaped, literal):
+    """Inside CDATA an entity is literal text, so wrapping an entity-escaped
+    body without decoding it would hand the agent `&quot;` instead of `"`.
+    """
+    out, fixed = autofix(tmp_path, task(body=escaped, cdata=False), strict=True)
+    assert f"<![CDATA[{literal}]]>" in out
+    assert any(code == "W204" for _, code, _ in fixed)
+    assert "W204" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w204_autofix_skips_body_whose_unescaped_text_has_cdata_close(tmp_path):
+    """`]]&gt;` decodes to `]]>`, which cannot sit inside a CDATA section."""
+    content = task(body="echo a]]&gt;b &quot;x&quot;", cdata=False)
+    out, fixed = autofix(tmp_path, content, strict=True)
+    assert "<![CDATA[" not in out.split("<ActionScript")[1].split("</ActionScript>")[0]
+    assert not any(code in ("W204", "E207") for _, code, _ in fixed)
+
+
 # --- E207 CDATA-required (entity-escaped special chars) -------------------
 
 
