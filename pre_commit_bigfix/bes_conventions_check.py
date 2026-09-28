@@ -90,7 +90,9 @@ Checks:
           (fixable -> collapsed to one)
     W206  a prefetch / "add prefetch item" line does not match the expected
           shape; a prefetch statement's sha1 is optional when it has a sha256
-          (current BigFix clients accept a sha256-only statement)
+          (current BigFix clients accept a sha256-only statement). The URL
+          scheme must be one of http/https/SWDProtocol/RedHatProtocol
+          (case-insensitive) -- override with --prefetch-url-schemes
     W207  a prefetch / "add prefetch item" URL is not https
     W208  an <ActionScript> body is empty (only blank lines and //-comments)
     W209  a <Title> has leading/trailing whitespace/newlines, embedded tabs,
@@ -108,8 +110,10 @@ Checks:
     W215  a Task/Fixlet <Description> is empty or missing (distinct from
           E204's boilerplate-placeholder check)
     W216  a non-empty <SourceSeverity> is not one of Low/Moderate/Important/
-          High/Critical/Unspecified (exact case) -- override with
-          --severity-values
+          High/Critical (exact case) -- override with --severity-values.
+          `Unspecified` (any case, or the console's bracketed
+          `<Unspecified>`) carries no information (fixable -> emptied),
+          unless --severity-values lists it
     W217  (only with --check-filename) a file's basename does not match its
           first content object's <Title>, sanitized for filename-illegal
           characters (/, backslash, :, *, ?, ", <, >, | -> _)
@@ -176,7 +180,8 @@ auto-fixed file fails the hook so the change is reviewed and re-staged.
 Usage:
     bes_conventions_check.py [--strict] [--errors-only] [--auto-fix=yes|no]
         [--disable E200,W201] [--check-filename]
-        [--severity-values Low,Moderate,Important,High,Critical,Unspecified]
+        [--severity-values Low,Moderate,Important,High,Critical]
+        [--prefetch-url-schemes http,https,RedHatProtocol,SWDProtocol]
         [file.bes ...]
 
 --check-filename is OFF by default: it enables W217 (a file's basename must
@@ -185,11 +190,16 @@ characters). It is opt-in because many repos deliberately version or
 otherwise diverge a Title from its filename.
 
 --severity-values overrides the vocabulary W216 accepts for a non-empty
-<SourceSeverity> (default: Low, Moderate, Important, High, Critical,
-Unspecified, matched exact-case). Pass a comma-separated list of the values
+<SourceSeverity> (default: Low, Moderate, Important, High, Critical, matched
+exact-case). Pass a comma-separated list of the values
 this repo considers valid, e.g. --severity-values "low,medium,high,critical";
 an empty value in the list is ignored, and an empty <SourceSeverity> is always
 allowed regardless of this setting.
+
+--prefetch-url-schemes overrides the URL schemes W206 accepts in a prefetch
+statement or `add prefetch item` line (default: http, https, RedHatProtocol,
+SWDProtocol, matched case-insensitively). It replaces the default rather than
+extending it, like --severity-values.
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. --disable takes a comma-separated list of check IDs to skip entirely.
@@ -362,11 +372,39 @@ VALUE_QUOTE_LIMIT = 120
 # BigFix clients accept a sha256-only statement (bes-actionscript-validate-
 # prefetch's W405 is the same judgement); a block item's sha1 is unaffected
 # here, that is W402's business in the sibling hook, not a shape issue.
-PREFETCH_OK_RE = re.compile(
-    r"(^prefetch \S+ (sha1:\S{40} )?size:\d+ https*:\/\/\S+ sha256:\S{64}$"
-    r"|^\s+add prefetch item name=\S+ sha1=\S{40} size=\d+ url=https*:\/\/\S+"
-    r" sha256=\S{64}$)"
+# The URL schemes a well-formed prefetch may use (case-insensitive, like URL
+# schemes themselves); override with --prefetch-url-schemes. SWDProtocol is
+# the console's own upload scheme (`SWDProtocol://127.0.0.1:52311/Uploads/...`)
+# and RedHatProtocol the RHEL patching plug-in's -- both common in real
+# content. http stays allowed here; W207 separately nudges it toward https.
+DEFAULT_PREFETCH_URL_SCHEMES = frozenset(
+    ["http", "https", "SWDProtocol", "RedHatProtocol"]
 )
+
+
+# compiled W206 shapes, keyed by frozenset of schemes (a plain dict rather
+# than functools.cache, which needs Python 3.9+)
+_PREFETCH_OK_RES = {}
+
+
+def _prefetch_ok_re(schemes):
+    """Compile the W206 prefetch-line shape for a frozenset of URL schemes.
+
+    An empty set matches no URL at all (`(?!)`), rather than an empty
+    alternation that would accept a scheme-less `://host/x`.
+    """
+    if schemes in _PREFETCH_OK_RES:
+        return _PREFETCH_OK_RES[schemes]
+    alternatives = "|".join(re.escape(item) for item in sorted(schemes, key=str.lower))
+    scheme = f"(?i:{alternatives})" if alternatives else "(?!)"
+    _PREFETCH_OK_RES[schemes] = re.compile(
+        rf"(^prefetch \S+ (sha1:\S{{40}} )?size:\d+ {scheme}:\/\/\S+ sha256:\S{{64}}$"
+        rf"|^\s+add prefetch item name=\S+ sha1=\S{{40}} size=\d+ url={scheme}:\/\/\S+"
+        r" sha256=\S{64}$)"
+    )
+    return _PREFETCH_OK_RES[schemes]
+
+
 DOWNLOAD_KEYWORD_RE = re.compile(r"prefetch|download|add prefetch item", re.IGNORECASE)
 
 # a line whose first non-whitespace token is the `download` action verb (a
@@ -423,9 +461,7 @@ SOURCE_SEVERITY_RE = re.compile(r"<SourceSeverity>(.*?)</SourceSeverity>", re.DO
 # the canonical, exact-case severity vocabulary; empty is always allowed
 # "High" is here for third-party application content (Mozilla, Adobe, Zoom,
 # ...), which rates that way rather than on the Microsoft patch scale.
-CANONICAL_SEVERITIES = frozenset(
-    ["Low", "Moderate", "Important", "High", "Critical", "Unspecified"]
-)
+CANONICAL_SEVERITIES = frozenset(["Low", "Moderate", "Important", "High", "Critical"])
 
 # characters not allowed in a filename on common filesystems -- used to derive
 # the expected filename stem from a content object's Title (W217)
@@ -505,7 +541,12 @@ CONTENT_OBJECT_SPAN_RE = re.compile(
 # around arbitrary content and must not be mistaken for a template.
 # Kept identical in all four hooks -- see the lockstep test in
 # tests/test_bes_actionscript_validate_script.py.
-MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
+# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
+# literal `{` in front of an MSI product code.
+MUSTACHE_RE = re.compile(
+    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
+    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
+)
 CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 # 2+ blank lines immediately before a </ActionScript> close (an optional CDATA
 # terminator may sit between the blank lines and the close tag)
@@ -849,8 +890,12 @@ def check_action_ui_metadata(src):
     for match in NAMED_MIMEFIELD_RE.finditer(src):
         if match.group(1).strip() != "action-ui-metadata":
             continue
-        value = _strip_cdata(match.group(2))
-        if not _valid_action_ui_metadata(value):
+        raw = match.group(2)
+        value = _strip_cdata(raw)
+        # outside CDATA the JSON's quotes are written as `&quot;`; parse the
+        # decoded text the agent actually reads (inside CDATA it is literal)
+        decoded = value if CDATA_RE.match(raw.strip()) else _xml_unescape(value)
+        if not _valid_action_ui_metadata(decoded):
             issues.append(
                 (
                     _lineno(src, match.start()),
@@ -1126,8 +1171,13 @@ def check_cdata_close(src):
     return issues
 
 
-def check_prefetch_lines(src):
-    """W206: a prefetch / add-prefetch-item line must match the expected shape."""
+def check_prefetch_lines(src, schemes=DEFAULT_PREFETCH_URL_SCHEMES):
+    """W206: a prefetch / add-prefetch-item line must match the expected shape.
+
+    `schemes` is the set of URL schemes the URL may use (see
+    --prefetch-url-schemes); matched case-insensitively.
+    """
+    prefetch_ok_re = _prefetch_ok_re(frozenset(schemes))
     issues = []
     for match in ACTIONSCRIPT_FULL_RE.finditer(src):
         body = match.group(2)
@@ -1139,7 +1189,7 @@ def check_prefetch_lines(src):
             is_add = "add prefetch item" in stripped
             if not (is_prefetch or is_add):
                 continue
-            if PREFETCH_OK_RE.fullmatch(line) or PREFETCH_OK_RE.fullmatch(stripped):
+            if prefetch_ok_re.fullmatch(line) or prefetch_ok_re.fullmatch(stripped):
                 continue
             issues.append(
                 (
@@ -1479,16 +1529,47 @@ def check_evaluation_period(src):
     return issues
 
 
+def _is_unspecified_severity(inner):
+    """True if a <SourceSeverity>'s raw text is `Unspecified` in any spelling.
+
+    Matches case-insensitively, CDATA-wrapped or not, and in the console's
+    bracketed `<Unspecified>` form (entity-escaped outside CDATA).
+    """
+    value = _strip_cdata(inner)
+    if not CDATA_RE.match(inner.strip()):
+        value = _xml_unescape(value)
+    value = value.strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    return value.lower() == "unspecified"
+
+
 def check_source_severity(src, allowed=CANONICAL_SEVERITIES):
     """W216: a non-empty <SourceSeverity> must be in the allowed vocabulary.
 
     `allowed` defaults to CANONICAL_SEVERITIES but can be overridden (see
     --severity-values) to whatever exact-case values a repo wants to permit.
+    `Unspecified` (any case, bracketed or not) says nothing an empty
+    SourceSeverity does not, so unless `allowed` lists it, it is reported as
+    auto-fixable to empty (see fix_source_severity).
     """
     issues = []
     for match in SOURCE_SEVERITY_RE.finditer(src):
         value = _strip_cdata(match.group(1)).strip()
         if value == "" or value in allowed:
+            continue
+        if _is_unspecified_severity(match.group(1)):
+            issues.append(
+                (
+                    _lineno(src, match.start()),
+                    "W216",
+                    (
+                        f'SourceSeverity "{value}" carries no information; '
+                        "leave it empty instead (auto-fixable); add "
+                        f"`{SEVERITY_MARKER}` if intentional"
+                    ),
+                )
+            )
             continue
         issues.append(
             (
@@ -1793,36 +1874,43 @@ PRESENCE_MARKERS = (
 )
 
 
-def _value_checks(severities=None):
-    """Return VALUE_CHECKS, with check_source_severity bound to `severities`.
+def _value_checks(severities=None, prefetch_url_schemes=None):
+    """Return VALUE_CHECKS with the configurable checks bound to their options.
 
-    `severities` is None (the default -- use CANONICAL_SEVERITIES) unless
-    --severity-values overrides it; only check_source_severity takes this
-    parameter, so every other entry is passed through unchanged.
+    `severities` (check_source_severity, see --severity-values) and
+    `prefetch_url_schemes` (check_prefetch_lines, see --prefetch-url-schemes)
+    are None for the built-in default; every other entry is passed through
+    unchanged.
     """
-    if severities is None:
+    bound = {}
+    if severities is not None:
+        bound[check_source_severity] = {"allowed": severities}
+    if prefetch_url_schemes is not None:
+        bound[check_prefetch_lines] = {"schemes": prefetch_url_schemes}
+    if not bound:
         return VALUE_CHECKS
     return tuple(
         (
-            (codes, marker, functools.partial(check, allowed=severities))
-            if check is check_source_severity
+            (codes, marker, functools.partial(check, **bound[check]))
+            if check in bound
             else (codes, marker, check)
         )
         for codes, marker, check in VALUE_CHECKS
     )
 
 
-def _run_checks(src, root, disabled, severities=None):
+def _run_checks(src, root, disabled, severities=None, prefetch_url_schemes=None):
     """Run every check on each content object independently; return sorted issues.
 
     Each block's checks see only that block's text, and a marker governs a block
     only if it sits inside it or outside all objects (file-level). Local line
     numbers from the per-block scans are offset back to the file's line numbers.
-    `severities` overrides the W216 vocabulary (see --severity-values).
+    `severities` overrides the W216 vocabulary (see --severity-values), and
+    `prefetch_url_schemes` the W206 URL schemes (see --prefetch-url-schemes).
     """
     blocks = _content_object_blocks(root, src)
     outside = _outside_text(src, blocks)
-    value_checks = _value_checks(severities)
+    value_checks = _value_checks(severities, prefetch_url_schemes)
     issues = []
     for start, _end, element in blocks:
         block = src[start:_end]
@@ -1847,12 +1935,18 @@ def _run_checks(src, root, disabled, severities=None):
     return sorted(issues)
 
 
-def _fix_block(block, marker_text, disabled, strict, now):
+def _fix_block(block, marker_text, disabled, strict, now, severities=None):
     """Apply the auto-fixers to one content-object block; return (new, fixed).
 
     Marker gating is the same per-block scoping used by the checks.
+    `severities` overrides the W216 vocabulary (see --severity-values).
     """
     fixed = []
+    if "W216" not in disabled and SEVERITY_MARKER not in marker_text:
+        block, got = fix_source_severity(
+            block, CANONICAL_SEVERITIES if severities is None else severities
+        )
+        fixed += got
     if "E203" not in disabled and DOWNLOAD_SIZE_MARKER not in marker_text:
         block, got = fix_download_size(block)
         fixed += got
@@ -1890,7 +1984,7 @@ def _fix_block(block, marker_text, disabled, strict, now):
     return block, fixed
 
 
-def _autofix(src, root, disabled, strict, now):
+def _autofix(src, root, disabled, strict, now, severities=None):
     """Rewrite each content object independently; return (new_src, fixed).
 
     Text outside the content objects is left untouched. Fixed line numbers are
@@ -1906,7 +2000,7 @@ def _autofix(src, root, disabled, strict, now):
         block = src[start:end]
         start_line = _lineno(src, start)
         new_block, block_fixed = _fix_block(
-            block, block + outside, disabled, strict, now
+            block, block + outside, disabled, strict, now, severities
         )
         fixed += [
             (start_line + lineno - 1, code, message)
@@ -1941,6 +2035,32 @@ def fix_download_size(src):
         return match.group(0)
 
     return DOWNLOAD_SIZE_TAG_RE.sub(repl, src), fixed
+
+
+def fix_source_severity(src, allowed=CANONICAL_SEVERITIES):
+    """W216: rewrite an `Unspecified` <SourceSeverity> to an empty one.
+
+    Only the `Unspecified` spellings check_source_severity reports as
+    auto-fixable are touched; a value listed in `allowed` (a repo that opts
+    `Unspecified` back in via --severity-values) and any other out-of-
+    vocabulary value are left for a human.
+    """
+    fixed = []
+
+    def repl(match):
+        value = _strip_cdata(match.group(1)).strip()
+        if value in allowed or not _is_unspecified_severity(match.group(1)):
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "W216",
+                f'cleared SourceSeverity "{value}" to empty',
+            )
+        )
+        return "<SourceSeverity></SourceSeverity>"
+
+    return SOURCE_SEVERITY_RE.sub(repl, src), fixed
 
 
 def fix_title(src):
@@ -2343,6 +2463,7 @@ def check_file(
     now=None,
     check_filename=False,
     severities=None,
+    prefetch_url_schemes=None,
 ):
     """Check one BES file; return (issues, fixed).
 
@@ -2358,7 +2479,9 @@ def check_file(
     error. The file is read as raw bytes and normalized to LF in memory so the
     checks are line-ending agnostic. `check_filename` enables W217 (off by
     default, matching --check-filename). `severities`, if given, overrides
-    W216's allowed SourceSeverity vocabulary (see --severity-values).
+    W216's allowed SourceSeverity vocabulary (see --severity-values), and
+    `prefetch_url_schemes` W206's allowed URL schemes (see
+    --prefetch-url-schemes).
     """
     if not os.path.isfile(path):
         return [(1, "W200", "file not found; skipping")], []
@@ -2386,7 +2509,7 @@ def check_file(
 
     fixed = []
     if auto_fix:
-        new_src, fixed = _autofix(src, root, disabled, strict, now)
+        new_src, fixed = _autofix(src, root, disabled, strict, now, severities)
         # file-level fixers run on the whole document (after the per-block ones):
         # strip trailing whitespace, then ensure the XML declaration.
         if "W210" not in disabled and TRAILING_WS_MARKER not in src:
@@ -2413,7 +2536,13 @@ def check_file(
         except ElementTree.ParseError as err:
             return [(1, "W200", f"not parseable BES XML after fixes ({err})")], fixed
 
-    issues = _run_checks(src, root, disabled, severities=severities)
+    issues = _run_checks(
+        src,
+        root,
+        disabled,
+        severities=severities,
+        prefetch_url_schemes=prefetch_url_schemes,
+    )
     # file-level checks on the final src (after any fixes); in auto-fix mode
     # these come back clean unless the specific fix was disabled.
     if "E214" not in disabled and XML_DECL_MARKER not in src:
@@ -2450,6 +2579,7 @@ def check_files(
     auto_fix=False,
     check_filename=False,
     severities=None,
+    prefetch_url_schemes=None,
 ):
     """Check several BES files; return a list of (path, issues, fixed) tuples.
 
@@ -2467,6 +2597,7 @@ def check_files(
             auto_fix=auto_fix,
             check_filename=check_filename,
             severities=severities,
+            prefetch_url_schemes=prefetch_url_schemes,
         )
         issues = [item for item in issues if item[1] not in disabled]
         fixed = [item for item in fixed if item[1] not in disabled]
@@ -2549,6 +2680,16 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--prefetch-url-schemes",
+        default=None,
+        metavar="SCHEMES",
+        help=(
+            "comma-separated URL schemes a W206 prefetch line may use "
+            "(case-insensitive), overriding the default: "
+            f"{','.join(sorted(DEFAULT_PREFETCH_URL_SCHEMES, key=str.lower))}"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help=(
@@ -2572,6 +2713,13 @@ def main(argv=None):
         severities = frozenset(
             value.strip() for value in args.severity_values.split(",") if value.strip()
         )
+    prefetch_url_schemes = None
+    if args.prefetch_url_schemes is not None:
+        prefetch_url_schemes = frozenset(
+            value.strip()
+            for value in args.prefetch_url_schemes.split(",")
+            if value.strip()
+        )
 
     # auto-fix defaults to yes for explicit files, no when auto-discovering; an
     # explicit --auto-fix always wins.
@@ -2592,6 +2740,7 @@ def main(argv=None):
         auto_fix=auto_fix,
         check_filename=args.check_filename,
         severities=severities,
+        prefetch_url_schemes=prefetch_url_schemes,
     ):
         for lineno, check_id, message in fixed:
             fix_count += 1

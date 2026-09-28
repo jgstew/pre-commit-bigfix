@@ -398,6 +398,15 @@ def test_mustache_pattern_matches_every_hook():
     assert validator.MUSTACHE_RE.search("delete {{ name }}.lnk")
     assert not validator.MUSTACHE_RE.search('{{\n  "key": "value"\n}}')
     assert not validator.MUSTACHE_RE.search("condition:\n{{\n  $re1 = /x/\n}}")
+    # `{{` escaping a literal `{` before an MSI product code (`msiexec
+    # /x{{{GUID}}`) is ActionScript, not a template -- found in real content
+    guid = "CD95F661-A5C4-44F5-A6AA-ECDD91C240E1"
+    assert not validator.MUSTACHE_RE.search(
+        f"waithidden msiexec.exe /x{{{{{{{guid}}}}} /qn"
+    )
+    assert not validator.MUSTACHE_RE.search(f"{{{{{guid.lower()}}}}}")
+    # a triple-mustache placeholder is still a template
+    assert validator.MUSTACHE_RE.search("<Title>{{{DisplayName}}}</Title>")
 
 
 # --- E510 / E511: prefetch-block-only commands outside a block ----------------

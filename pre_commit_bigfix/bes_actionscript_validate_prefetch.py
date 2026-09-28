@@ -201,7 +201,12 @@ STATEMENT_PREFETCH = "prefetch "
 # around arbitrary content and must not be mistaken for a template.
 # Kept identical in all four hooks -- see the lockstep test in
 # tests/test_bes_actionscript_validate_script.py.
-MUSTACHE_RE = re.compile(r"\{\{\s*[#/^!&>]?\s*[\w.-]+\s*\}\}")
+# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
+# literal `{` in front of an MSI product code.
+MUSTACHE_RE = re.compile(
+    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
+    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
+)
 
 
 def find_prefetch_lines(body):

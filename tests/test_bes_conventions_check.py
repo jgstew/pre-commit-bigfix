@@ -417,6 +417,33 @@ def test_e206_valid_metadata(tmp_path, good):
     )
 
 
+def test_e206_entity_escaped_metadata_is_decoded_first(tmp_path):
+    """Outside CDATA the console writes the JSON's quotes as `&quot;`; the
+    value the agent reads is the decoded text, so that is what gets parsed.
+    """
+    escaped = (
+        "{ &quot;version&quot;:&quot;14.38.33130.0&quot;,&quot;size&quot;:13846856 }"
+    )
+    assert "E206" not in codes(
+        tmp_path, task(extra_mimefields=[("action-ui-metadata", escaped)])
+    )
+
+
+def test_e206_entities_inside_cdata_are_literal_text(tmp_path):
+    """Inside CDATA `&quot;` is not a quote, so this is not valid JSON."""
+    literal = "<![CDATA[{ &quot;version&quot;:&quot;1.0&quot;,&quot;size&quot;:1 }]]>"
+    assert "E206" in codes(
+        tmp_path, task(extra_mimefields=[("action-ui-metadata", literal)])
+    )
+
+
+def test_e206_entity_escaped_malformed_metadata_still_flagged(tmp_path):
+    escaped = "{ &quot;version&quot;:&quot;14.0&quot; }"  # no size
+    assert "E206" in codes(
+        tmp_path, task(extra_mimefields=[("action-ui-metadata", escaped)])
+    )
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -666,6 +693,81 @@ def test_w206_marker_opts_out(tmp_path):
     )
 
 
+def _prefetch_statement(url):
+    return "\nprefetch x.rpm sha1:{} size:10 {} sha256:{}\n".format(
+        "a" * 40, url, "b" * 64
+    )
+
+
+def _prefetch_item(url):
+    return "\n\tadd prefetch item name=x.rpm sha1={} size=10 url={} sha256={}\n".format(
+        "a" * 40, url, "b" * 64
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://e/x.rpm",
+        "SWDProtocol://127.0.0.1:52311/Uploads/abc/x.tmp",
+        "RedHatProtocol://bash-4.1.2-15.el6_5.2.x86_64.rpm",
+        "swdprotocol://127.0.0.1:52311/Uploads/abc/x.tmp",  # scheme is case-blind
+    ],
+)
+@pytest.mark.parametrize("shape", [_prefetch_statement, _prefetch_item])
+def test_w206_default_schemes_accepted(tmp_path, url, shape):
+    """The console's upload (SWDProtocol) and RHEL plug-in (RedHatProtocol)
+    download schemes are real prefetch URLs, not malformed ones.
+    """
+    body = shape(url)
+    assert "W206" not in codes(tmp_path, task(download_size="10", body=body))
+
+
+@pytest.mark.parametrize("shape", [_prefetch_statement, _prefetch_item])
+def test_w206_unlisted_scheme_flagged(tmp_path, shape):
+    body = shape("ftp://e/x.rpm")
+    assert "W206" in codes(tmp_path, task(download_size="10", body=body))
+
+
+def test_w206_missing_sha256_flagged_for_any_scheme(tmp_path):
+    body = "\nprefetch x sha1:%s size:10 SWDProtocol://h/x\n" % ("a" * 40)
+    assert "W206" in codes(tmp_path, task(download_size="10", body=body))
+
+
+def _codes_with_schemes(tmp_path, content, schemes, name="x.bes"):
+    path = write(tmp_path, name, content)
+    issues, _ = checker.check_file(path, prefetch_url_schemes=schemes)
+    return sorted({item[1] for item in issues})
+
+
+def test_prefetch_url_schemes_replaces_default(tmp_path):
+    content = task(download_size="10", body=_prefetch_statement("ftp://e/x"))
+    assert "W206" not in _codes_with_schemes(tmp_path, content, frozenset({"ftp"}))
+    content = task(download_size="10", body=_prefetch_statement("https://e/x"))
+    assert "W206" in _codes_with_schemes(tmp_path, content, frozenset({"ftp"}))
+
+
+def test_prefetch_url_schemes_empty_accepts_no_scheme(tmp_path):
+    """An empty list must not degrade into accepting a scheme-less `://x`."""
+    content = task(download_size="10", body=_prefetch_statement("://e/x"))
+    assert "W206" in _codes_with_schemes(tmp_path, content, frozenset())
+    content = task(download_size="10", body=_prefetch_statement("https://e/x"))
+    assert "W206" in _codes_with_schemes(tmp_path, content, frozenset())
+
+
+def test_main_prefetch_url_schemes_cli_flag(tmp_path, capsys):
+    body = _prefetch_statement("ftp://e/x")
+    path = write(tmp_path, "x.bes", task(download_size="10", body=body))
+    assert checker.main(["--strict", "--auto-fix=no", path]) == 1
+    assert "W206" in capsys.readouterr().out
+    rc = checker.main(
+        ["--strict", "--auto-fix=no", "--prefetch-url-schemes", "https, ftp", path]
+    )
+    out = capsys.readouterr().out
+    assert "W206" not in out
+    assert rc == 0, out
+
+
 # --- W201 / W202 presence + auto-insert -----------------------------------
 
 
@@ -872,6 +974,12 @@ def test_literal_double_braces_in_a_heredoc_are_not_a_mustache_template(tmp_path
         relevance="true",
     )
     assert codes(tmp_path, content) == ["E212"]
+
+
+def test_escaped_brace_before_msi_guid_is_not_a_mustache_template(tmp_path):
+    """`msiexec /x{{{GUID}}` is real content; checks must still run on it."""
+    body = "\nwaithidden msiexec.exe /x{{{CD95F661-A5C4-44F5-A6AA-ECDD91C240E1}} /qn\n"
+    assert codes(tmp_path, task(body=body, relevance="true")) == ["E212"]
 
 
 def test_unparsable_xml_is_w200_only(tmp_path):
@@ -1642,7 +1750,7 @@ def test_w216_bad_severity_flagged(tmp_path, bad):
 
 @pytest.mark.parametrize(
     "good",
-    ["", "Low", "Moderate", "Important", "High", "Critical", "Unspecified"],
+    ["", "Low", "Moderate", "Important", "High", "Critical"],
 )
 def test_w216_good_severity_clean(tmp_path, good):
     content = task().replace(
@@ -1650,6 +1758,60 @@ def test_w216_good_severity_clean(tmp_path, good):
         f"<Source>test</Source>\n\t\t<SourceSeverity>{good}</SourceSeverity>",
     )
     assert "W216" not in codes(tmp_path, content)
+
+
+@pytest.mark.parametrize(
+    "unspecified",
+    ["Unspecified", "&lt;Unspecified&gt;", "unspecified", " Unspecified "],
+)
+def test_w216_unspecified_flagged_as_fixable(tmp_path, unspecified):
+    """`Unspecified` (and the console's bracketed `<Unspecified>`) says nothing
+    an empty SourceSeverity does not; it is flagged and fixed to empty.
+    """
+    path = write(tmp_path, "x.bes", _severity_content(unspecified))
+    issues, _ = checker.check_file(path)
+    messages = [msg for _, code, msg in issues if code == "W216"]
+    assert len(messages) == 1 and "auto-fix" in messages[0]
+
+
+@pytest.mark.parametrize(
+    "unspecified",
+    ["Unspecified", "&lt;Unspecified&gt;", "<![CDATA[<Unspecified>]]>"],
+)
+def test_w216_autofix_clears_unspecified(tmp_path, unspecified):
+    out, fixed = autofix(tmp_path, _severity_content(unspecified))
+    assert "<SourceSeverity></SourceSeverity>" in out
+    assert any(code == "W216" for _, code, _ in fixed)
+    assert "W216" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w216_autofix_leaves_other_bad_values_alone(tmp_path):
+    out, fixed = autofix(tmp_path, _severity_content("N/A"))
+    assert "<SourceSeverity>N/A</SourceSeverity>" in out
+    assert not any(code == "W216" for _, code, _ in fixed)
+    assert "W216" in codes(tmp_path, out, name="after.bes")
+
+
+def test_w216_autofix_respects_marker_and_disable(tmp_path):
+    content = _severity_content("Unspecified")
+    marked = content.replace("<Task>", "<Task>\n\t\t<!-- severity-ok -->")
+    out, fixed = autofix(tmp_path, marked)
+    assert "<SourceSeverity>Unspecified</SourceSeverity>" in out
+    path = write(tmp_path, "d.bes", content)
+    _, fixed = checker.check_file(path, {"W216"}, auto_fix=True, now=FIXED_NOW)
+    assert not any(code == "W216" for _, code, _ in fixed)
+    assert "Unspecified" in (tmp_path / "d.bes").read_text(encoding="utf-8")
+
+
+def test_w216_unspecified_kept_when_listed_in_severity_values(tmp_path):
+    """A repo that lists Unspecified in --severity-values keeps it."""
+    allowed = frozenset({"High", "Unspecified"})
+    path = write(tmp_path, "x.bes", _severity_content("Unspecified"))
+    issues, fixed = checker.check_file(
+        path, auto_fix=True, now=FIXED_NOW, severities=allowed
+    )
+    assert "W216" not in {code for _, code, _ in issues + fixed}
+    assert "Unspecified" in (tmp_path / "x.bes").read_text(encoding="utf-8")
 
 
 def test_w216_marker_opts_out(tmp_path):
