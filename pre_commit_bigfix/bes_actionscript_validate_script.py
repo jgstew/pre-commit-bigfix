@@ -355,6 +355,11 @@ _NAME_KV_RE = re.compile(r"\bname\s*=\s*(\S+)", re.IGNORECASE)
 # `__Download\<name>` (or forward slash) on a command line; the name stops at
 # whitespace, a quote, or another path separator
 _DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
+# the same reference, also capturing a path separator right after the name --
+# present when the name is a subdirectory (`__Download\dir\file`), not a file
+_DOWNLOAD_REF_NESTED_RE = re.compile(
+    r'__Download[\\/]([^\s"\'\\/]+)([\\/])?', re.IGNORECASE
+)
 # a shell glob wildcard (`*` or `?`) in a __Download\ consumer reference --
 # e.g. `__Download\mysql*rpm` to match a versioned filename the script
 # author cannot spell out literally. The shell expands it at runtime, not
@@ -633,13 +638,15 @@ def _check_download_names(lines):
     `_MOVE_COPY_RE`/`_REDIRECT_TARGET_RE` below -- so they are also treated
     as producers where the destination name is determinable.
 
-    `copy`/`move` and shell-redirection (`>`, `>>`) lines can themselves
-    create a file under `__Download`, not just consume one -- see
-    `_MOVE_COPY_RE`/`_REDIRECT_TARGET_RE` below -- so they are also treated
-    as producers where the destination name is determinable.
+    A `copy`/`move` destination nested below a subdirectory
+    (`__Download\\dir\\file`) produces the subdirectory, not a file named
+    after it: several files moved into one directory do not overwrite each
+    other, so the directory name satisfies W507 consumers but is never an
+    E512 duplicate.
     """
     issues = []
     producers = {}  # lowercased name -> [(lineno, if-branch path, fingerprint), ...]
+    directories = set()  # lowercased __Download subdirectories copy/move fill
     knowable = True
     if_stack = []  # each entry: [if_id, branch_index]
     next_if_id = 0
@@ -734,7 +741,14 @@ def _check_download_names(lines):
         if _MOVE_COPY_RE.match(stripped):
             refs = _DOWNLOAD_REF_RE.findall(stripped)
             has_createfile_source = bool(_CREATEFILE_SOURCE_RE.search(stripped))
-            if has_createfile_source and refs:
+            nested = _DOWNLOAD_REF_NESTED_RE.findall(stripped)
+            if nested and nested[-1][1] and (has_createfile_source or len(refs) >= 2):
+                # destination is `__Download\<dir>\...` -- a file inside a
+                # subdirectory, not a download named <dir>; record the
+                # directory for consumers, but never as an E512 duplicate
+                if "{" not in nested[-1][0]:
+                    directories.add(nested[-1][0].lower())
+            elif has_createfile_source and refs:
                 # source is __createfile/__appendfile, not a __Download ref;
                 # the one __Download ref on the line is the destination
                 produce(lineno, refs[-1])
@@ -776,7 +790,7 @@ def _check_download_names(lines):
                     # a versioned filename) matches by shell glob at
                     # runtime, not by literal name; skip it
                     continue
-                if name.lower() not in producers:
+                if name.lower() not in producers and name.lower() not in directories:
                     issues.append(
                         (
                             lineno,

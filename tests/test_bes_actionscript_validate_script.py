@@ -541,6 +541,34 @@ def test_unconditional_duplicate_inside_and_outside_an_if_is_not_e512():
     assert validator.check_actionscript(body) == []
 
 
+def test_moves_into_the_same_download_subdirectory_are_not_e512():
+    """Several files moved into `__Download\\<dir>\\...` share a directory,
+    not a download name -- none overwrites another (issue #21).
+    """
+    body = (
+        "prefetch Setup.exe sha1:a size:1 http://x/Setup.exe\n"
+        "prefetch Upd1.msp sha1:b size:1 http://x/Upd1.msp\n"
+        "prefetch Upd2.msp sha1:c size:1 http://x/Upd2.msp\n"
+        'wait __Download\\Setup.exe /x /d "{(pathname of client folder of '
+        'current site)}\\__Download\\AcrobatPro"\n'
+        'move __Download\\Upd1.msp "__Download\\AcrobatPro\\Adobe Acrobat XI\\Upd1.msp"\n'
+        'move __Download\\Upd2.msp "__Download\\AcrobatPro\\Adobe Acrobat XI\\Upd2.msp"\n'
+        'wait msiexec /p "__Download\\AcrobatPro\\Adobe Acrobat XI\\Upd2.msp"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_to_a_top_level_download_name_twice_is_still_e512():
+    body = (
+        "prefetch a.exe sha1:a size:1 http://x/a.exe\n"
+        "prefetch b.exe sha1:b size:1 http://x/b.exe\n"
+        "move __Download\\a.exe __Download\\c.exe\n"
+        "move __Download\\b.exe __Download\\c.exe\n"
+        "wait __Download\\c.exe"
+    )
+    assert codes(validator.check_actionscript(body)) == ["E512"]
+
+
 # --- W507: __Download reference with no producer -------------------------------
 
 

@@ -30,6 +30,17 @@ is not touched, and the legacy `<!-- ... //-->` HTML-comment-hiding idiom is
 recognized and left alone. Opt out with the `script-comment-ok` marker.
 Closes [#17](https://github.com/jgstew/pre-commit-bigfix/issues/17).
 
+### Fixed
+
+`bes-actionscript-validate-script` no longer reports a false `E512` duplicate
+download name when several files are moved or copied into the same
+`__Download` subdirectory (`move __Download\a.msp "__Download\Dir\Sub\a.msp"`).
+The destination's first path segment was read as a download named `Dir`, so
+each move looked like another write of the same file. A nested destination
+now counts as a subdirectory: it still satisfies `W507` for later
+`__Download\Dir\...` references, but is never compared for `E512`.
+Fixes [#21](https://github.com/jgstew/pre-commit-bigfix/issues/21).
+
 ### Changed
 
 `bes-relevance-lint` picks up two rules added in `bigfix-relevance-analyzer`
