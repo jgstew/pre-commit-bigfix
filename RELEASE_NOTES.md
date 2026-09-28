@@ -13,6 +13,13 @@ unlike `E608`'s hard error on a plural value, nobody has confirmed one of
 these actually fails at runtime, so it is a warning. Requires
 `bigfix-relevance-analyzer >= 1.12.4`.
 
+`bes-conventions-check`'s `W216` no longer accepts `Unspecified` as a
+`<SourceSeverity>`: it carries no information an empty SourceSeverity does
+not, so `Unspecified` (any case, CDATA-wrapped or not) and the console's
+bracketed `&lt;Unspecified&gt;` are now auto-fixed to an empty element. A repo
+that wants to keep it can list `Unspecified` in `--severity-values`. In
+bigfix/CommunityContent this affects about 1,600 files.
+
 ### Added
 
 `bes-conventions-check` picks up `E221`: a `// comment` style JavaScript
@@ -30,6 +37,20 @@ is not touched, and the legacy `<!-- ... //-->` HTML-comment-hiding idiom is
 recognized and left alone. Opt out with the `script-comment-ok` marker.
 Closes [#17](https://github.com/jgstew/pre-commit-bigfix/issues/17).
 
+`bes-actionscript-validate-script` picks up `E524`: `else if` written as two
+words instead of `elseif`. It matched neither `else` nor `elseif`, so it was
+silently read as an unrelated command and nothing was reported, although the
+branch logic was not what the author wrote. It is now tracked as the `elseif`
+it was meant to be, so the rest of the `if`/`endif` pairing does not cascade,
+and belongs to the `actionscript-if-ok` family. (`E513` is not reused: it was
+retired when it became `W507`.)
+
+`bes-conventions-check` picks up `--prefetch-url-schemes`: the URL schemes a
+`W206` prefetch line may use, comma-separated and case-insensitive. The
+default is `http,https,SWDProtocol,RedHatProtocol`. The shape check used to
+hard-code `https?://`, so console uploads (`SWDProtocol://127.0.0.1:52311/...`)
+and RHEL plug-in URLs (`RedHatProtocol://...`) were reported as malformed.
+
 ### Fixed
 
 `bes-actionscript-validate-script` no longer reports a false `E512` duplicate
@@ -40,6 +61,54 @@ each move looked like another write of the same file. A nested destination
 now counts as a subdirectory: it still satisfies `W507` for later
 `__Download\Dir\...` references, but is never compared for `E512`.
 Fixes [#21](https://github.com/jgstew/pre-commit-bigfix/issues/21).
+
+The following were found by running every hook in `--strict` mode over
+[bigfix/CommunityContent](https://github.com/bigfix/CommunityContent) (9,719
+`.bes` files):
+
+- **`bes-conventions-check` `W204` auto-fix corrupted ActionScript.** Under
+  `--strict --auto-fix`, an un-wrapped body was wrapped in CDATA without being
+  XML-unescaped first. Inside CDATA an entity is literal text, so a body using
+  `&quot;`, `&apos;` or a numeric reference was rewritten so the agent received
+  `&quot;` instead of `"`. That covers about 8,000 of CommunityContent's
+  un-wrapped bodies. The body is now unescaped before wrapping, and a body
+  whose decoded text contains `]]>` is left unwrapped.
+- **`bes-conventions-check` `E206`** parsed an `action-ui-metadata` value
+  without decoding it, so every value written outside CDATA
+  (`{&quot;version&quot;:...}`) was reported malformed. CDATA content is
+  still taken literally.
+- **Files silently skipped by all four hooks.** The mustache-template
+  detector matched `msiexec /x{{{GUID}}` (an escaped `{` before an MSI
+  product code), so the whole file was skipped as an unrendered template.
+  GUID-shaped contents no longer count as placeholders.
+- **`bes-actionscript-validate-script` `W507`** now recognizes four more ways
+  a file gets into `__Download`: `folder create "__Download\<dir>"`; an
+  archive extractor (`unzip`, `7z`/`7za`/`7zr`, `expand`, `tar`) run against
+  `__Download`, whose output names are unknowable, like `extract`;
+  `move <elsewhere> __Download\X`; and it no longer reads
+  `__Global\__Download\...` (the client's shared download cache) as this
+  action's download folder.
+- **`bes-actionscript-validate-script` `W506`** counts `move <destination>
+  <backup>` as clearing the destination, as a `delete` does (a `copy` does
+  not), treats `{parameter "X" of action}` and `{parameter "X"}` as the same
+  path, and compares Windows-style paths (drive letter or backslash)
+  case-insensitively. Bare names and POSIX paths stay case-sensitive.
+- **`bes-actionscript-validate-script` `E517`** no longer reports a parameter
+  defined by `action parameter query`, or tested with `exists parameter "X"`
+  (the supported way to give a parameter a default), as used before it is
+  assigned.
+- **`bes-actionscript-validate-script` messages that quote another line**
+  (`E512`, `E516`, `E517`, `E522`, `W501`, `W502`) counted from the start of
+  the ActionScript body, while the issue itself used a file line. Both now
+  use file lines.
+- **`bes-actionscript-lint-schclass` `W301`**: ActionScript has no escape
+  character, but the console display grammar treats `\"` as an escaped quote,
+  so a closed string ending in a backslash (`folder create "C:\Bes\"`,
+  `"__Download\"`) was reported as unterminated. The override grammar drops
+  the escape. A `regset`/`regset64` value, which is `.reg`-file syntax where
+  `\"` and `\\` are escapes, is still scanned with them, and `appendfile`
+  content (raw file text) is exempt.
+  Fixes [#16](https://github.com/jgstew/pre-commit-bigfix/issues/16).
 
 ### Changed
 
