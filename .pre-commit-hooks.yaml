@@ -185,7 +185,8 @@
     producer's names are unknowable -- extract, a `download` with no `as`, or
     a `{...}` in a name; `delete`/`folder delete` are cleanup, and
     `copy`/`move` destinations and `>` redirection targets are producers); an `if`/`elseif`
-    whose condition is not a `{...}` substitution is E514; and a
+    whose condition is not a `{...}` substitution is E514; `else if` as
+    two words (use `elseif`) is E524; and a
     `begin prefetch block` not at the top of the script (only comments,
     blank lines, `action parameter query`, and `parameter` assignments may
     precede it) is E515 -- plain `prefetch` statements are legal anywhere
@@ -243,7 +244,7 @@
     are W500 (bes-schema-validate owns validity). A file opts out of every
     check here with `pre-commit-skip: bes-actionscript-validate-script`
     anywhere in it, or out of one family with `actionscript-if-ok` (E500,
-    E501, E505, E506, E514, E518), `actionscript-prefetch-block-ok` (E502,
+    E501, E505, E506, E514, E518, E524), `actionscript-prefetch-block-ok` (E502,
     E503, E504), `actionscript-block-nesting-ok` (E507),
     `actionscript-substitution-ok` (E508, E509 -- the marker
     bes-actionscript-lint-schclass also uses for its E301),

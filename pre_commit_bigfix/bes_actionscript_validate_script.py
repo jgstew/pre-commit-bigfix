@@ -94,6 +94,9 @@ Checks:
           express
     E523  an `action uses wow64 redirection` argument that is not `true`,
           `false`, or a `{...}` relevance substitution
+    E524  `else if` (two words) instead of `elseif`: the agent does not read
+          it as a chained branch. It is tracked as the `elseif` it was meant
+          to be, so the rest of the if/endif pairing does not cascade
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -176,7 +179,7 @@ text.
 A file can opt out of all checks with a comment anywhere in it:
     <!-- pre-commit-skip: bes-actionscript-validate-script -->
 or out of a single check family with the matching marker anywhere in the file:
-    actionscript-if-ok             (E500, E501, E505, E506, E514, E518)
+    actionscript-if-ok             (E500, E501, E505, E506, E514, E518, E524)
     actionscript-prefetch-block-ok (E502, E503, E504)
     actionscript-block-nesting-ok  (E507)
     actionscript-substitution-ok   (E508, E509)
@@ -277,6 +280,7 @@ CHECK_MARKERS = {
     "E521": COMMAND_SHAPE_MARKER,
     "E522": OVERRIDE_BLOCK_MARKER,
     "E523": COMMAND_SHAPE_MARKER,
+    "E524": IF_MARKER,
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
     "W503": SCRATCH_MARKER,
@@ -311,6 +315,7 @@ KNOWN_CODES = frozenset(
         "E521",
         "E522",
         "E523",
+        "E524",
         "W500",
         "W501",
         "W502",
@@ -342,7 +347,10 @@ MUSTACHE_RE = re.compile(
 # relevance substitution or argument merely containing one of these words does
 # not match (e.g. `continue if {...}` is not an `if` opener)
 _IF_RE = re.compile(r"^if\b", re.IGNORECASE)
-_ELSEIF_RE = re.compile(r"^elseif\b", re.IGNORECASE)
+# `else if` (E524) is matched too, so every if/endif pairing pass treats it
+# as the elseif it was meant to be rather than as an unrelated command
+_ELSEIF_RE = re.compile(r"^else\s*if\b", re.IGNORECASE)
+_ELSE_IF_TWO_WORDS_RE = re.compile(r"^else\s+if\b", re.IGNORECASE)
 _ELSE_RE = re.compile(r"^else\s*$", re.IGNORECASE)
 _ENDIF_RE = re.compile(r"^endif\s*$", re.IGNORECASE)
 _BEGIN_PREFETCH_BLOCK_RE = re.compile(r"^begin\s+prefetch\s+block\s*$", re.IGNORECASE)
@@ -1758,6 +1766,18 @@ def check_actionscript(body, first_line=1):
             continue
 
         if _ELSEIF_RE.match(stripped):
+            if _ELSE_IF_TWO_WORDS_RE.match(stripped):
+                issues.append(
+                    (
+                        lineno,
+                        "E524",
+                        (
+                            "`else if` is not a chained branch -- write "
+                            "`elseif` (one word); add "
+                            f"`{IF_MARKER}` if intentional"
+                        ),
+                    )
+                )
             condition = stripped[_ELSEIF_RE.match(stripped).end() :].lstrip()
             if not condition.startswith("{"):
                 issues.append(

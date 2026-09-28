@@ -273,7 +273,8 @@ consumption, and never counts as a reference. A script can create files under
 `__createfile`) and shell redirection targets (`... > __Download\<name>`)
 count as producers. An
 `if`/`elseif` whose condition is not a `{...}` relevance substitution is
-`E514`. A `begin prefetch block` that is not at the top of the script is
+`E514`, and `else if` written as two words (not a chained branch; use
+`elseif`) is `E524`. A `begin prefetch block` that is not at the top of the script is
 `E515`: only blank lines, `//` comments, `action parameter query` lines, and
 `parameter` assignments may precede it - plain `prefetch` statements are legal
 anywhere in a script and are not placement-checked.
@@ -351,7 +352,7 @@ owns validity).
 A file opts out of every check here with
 `<!-- pre-commit-skip: bes-actionscript-validate-script -->` anywhere in it,
 or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
-`E506`, `E514`, `E518`), `actionscript-prefetch-block-ok` (`E502`, `E503`,
+`E506`, `E514`, `E518`, `E524`), `actionscript-prefetch-block-ok` (`E502`, `E503`,
 `E504`), `actionscript-block-nesting-ok` (`E507`), `actionscript-substitution-ok`
 (`E508`, `E509` - the same marker `bes-actionscript-lint-schclass` uses for
 its `E301`, so one marker covers both hooks),

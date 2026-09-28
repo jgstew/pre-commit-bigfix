@@ -222,6 +222,59 @@ def test_second_else_is_e506():
     assert issues[0][0] == 5
 
 
+# --- E524: `else if` instead of `elseif` ---------------------------------------
+
+
+@pytest.mark.parametrize("spelling", ["else if", "Else If", "ELSE  IF"])
+def test_else_if_is_e524(spelling):
+    """ActionScript's chained branch is one word, `elseif`; `else if` is not
+    recognized as an else or an elseif, so the branch logic is not what the.
+
+    author wrote.
+    """
+    body = (
+        "if {windows of operating system}\nwait cmd /c echo a\n"
+        f"{spelling} {{mac of operating system}}\nwait /bin/echo b\nendif"
+    )
+    issues = validator.check_actionscript(body)
+    assert codes(issues) == ["E524"]
+    assert issues[0][0] == 3
+    assert "elseif" in issues[0][2] and validator.IF_MARKER in issues[0][2]
+
+
+def test_else_if_is_tracked_as_an_elseif_so_nothing_cascades():
+    """Treated as the elseif it was meant to be: a later `else` is still the
+    first else, and the block still closes.
+    """
+    body = (
+        "if {a}\nwait x\nelse if {b}\nwait y\nelse\nwait z\nendif\n"
+        'parameter "p" = "1"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["E524"]
+
+
+def test_else_if_without_a_substitution_also_reports_e514():
+    body = "if {a}\nwait x\nelse if true\nwait y\nendif"
+    assert codes(validator.check_actionscript(body)) == ["E514", "E524"]
+
+
+def test_elseif_and_plain_else_are_not_e524():
+    body = "if {a}\nwait x\nelseif {b}\nwait y\nelse\nwait z\nendif"
+    assert validator.check_actionscript(body) == []
+
+
+def test_if_marker_silences_e524(tmp_path):
+    content = bes(
+        "if {a}\nwait x\nelse if {b}\nwait y\nendif", marker=validator.IF_MARKER
+    )
+    assert issues_for(tmp_path, content) == []
+
+
+def test_disable_e524_silences_it(tmp_path):
+    content = bes("if {a}\nwait x\nelse if {b}\nwait y\nendif")
+    assert issues_for(tmp_path, content, disabled={"E524"}) == []
+
+
 # --- E507: if left open across a prefetch block boundary ----------------------
 
 
