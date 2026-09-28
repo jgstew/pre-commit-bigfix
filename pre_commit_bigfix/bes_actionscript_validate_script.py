@@ -358,12 +358,30 @@ _DOWNLOAD_AS_RE = re.compile(r"^download(?:\s+now)?\s+as\s+(\S+)", re.IGNORECASE
 _DOWNLOAD_RE = re.compile(r"^download(?:\s+now)?\s+(\S+)\s*$", re.IGNORECASE)
 _NAME_KV_RE = re.compile(r"\bname\s*=\s*(\S+)", re.IGNORECASE)
 # `__Download\<name>` (or forward slash) on a command line; the name stops at
-# whitespace, a quote, or another path separator
-_DOWNLOAD_REF_RE = re.compile(r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE)
+# whitespace, a quote, or another path separator. `__Global\__Download` is
+# the client's shared download cache, not this action's download folder, so a
+# `__Download` right after `__Global\` is not a reference to it.
+_NOT_GLOBAL = r"(?<!__Global\\)(?<!__Global/)"
+_DOWNLOAD_REF_RE = re.compile(
+    _NOT_GLOBAL + r'__Download[\\/]([^\s"\'\\/]+)', re.IGNORECASE
+)
 # the same reference, also capturing a path separator right after the name --
 # present when the name is a subdirectory (`__Download\dir\file`), not a file
 _DOWNLOAD_REF_NESTED_RE = re.compile(
-    r'__Download[\\/]([^\s"\'\\/]+)([\\/])?', re.IGNORECASE
+    _NOT_GLOBAL + r'__Download[\\/]([^\s"\'\\/]+)([\\/])?', re.IGNORECASE
+)
+# `folder create "__Download\<dir>"` makes a subfolder later lines fill
+_FOLDER_CREATE_RE = re.compile(r"^folder\s+create\b", re.IGNORECASE)
+# a launching verb whose program is an archive extractor; run against
+# `__Download` it writes files the script never names, like `extract` does.
+# The executable is matched by basename, bare or quoted inside a relevance
+# substitution (`{ pathname of file "7z.exe" of folder ... }`).
+_LAUNCH_PREFIX_RE = re.compile(
+    r"^(?:wait|waithidden|run|runhidden|dos)\s+(.*)$", re.IGNORECASE
+)
+_EXTRACTOR_RE = re.compile(
+    r'(?:^|[\\/"\s])(?:unzip|7z|7za|7zr|expand|tar)(?:\.exe)?(?=$|["\s])',
+    re.IGNORECASE,
 )
 # a shell glob wildcard (`*` or `?`) in a __Download\ consumer reference --
 # e.g. `__Download\mysql*rpm` to match a versioned filename the script
@@ -616,6 +634,50 @@ def _co_executable(path_a, path_b):
     return path_a == path_b
 
 
+def _is_extractor_run(line):
+    """True if `line` launches an archive extractor against `__Download`.
+
+    Only the program itself is inspected -- the leading `{...}` substitution
+    when the executable is looked up by relevance, else the leading token --
+    so an extractor merely named in the arguments does not count.
+    """
+    match = _LAUNCH_PREFIX_RE.match(line)
+    if not match or "__download" not in line.lower():
+        return False
+    rest = match.group(1).lstrip()
+    unquoted = rest.lstrip('"')
+    if unquoted.startswith("{"):
+        end = unquoted.find("}")
+        program = unquoted[: end + 1] if end != -1 else unquoted
+    else:
+        program = _leading_token(rest)[0]
+    return bool(_EXTRACTOR_RE.search(program))
+
+
+def _download_is_destination(line):
+    """True if a copy/move `line` ends with its only `__Download` ref.
+
+    That ref is then the destination -- a file being put into `__Download`
+    from somewhere else (`move {parameter "Temp"}\\x.png __Download\\x.png`) --
+    rather than a download being consumed. Something must precede it besides
+    the verb, so a bare `copy __Download\\x` is not mistaken for one.
+    """
+    matches = list(_DOWNLOAD_REF_NESTED_RE.finditer(line))
+    if len(matches) != 1:
+        return False
+    match = matches[0]
+    start = match.start()
+    # widen to the full path token: back to the whitespace or quote before it
+    while start > 0 and not line[start - 1].isspace() and line[start - 1] != '"':
+        start -= 1
+    tail = line[match.end() :]
+    if match.group(2):
+        # nested: the path continues to the end of its token
+        tail = re.sub(r'^[^\s"]*', "", tail)
+    before = _MOVE_COPY_RE.sub("", line[:start], count=1).strip(" \t\"'")
+    return bool(before) and tail.strip(" \t\"'") == ""
+
+
 def _check_download_names(lines):
     """Check prefetch/download producer names against `__Download\\` consumers.
 
@@ -743,11 +805,27 @@ def _check_download_names(lines):
             knowable = False
             continue
 
+        if _FOLDER_CREATE_RE.match(stripped):
+            match = None
+            for match in _DOWNLOAD_REF_NESTED_RE.finditer(stripped):
+                pass
+            if match and "{" not in match.group(1):
+                directories.add(match.group(1).lower())
+            continue
+        if _is_extractor_run(stripped):
+            knowable = False
+            continue
+
         if _MOVE_COPY_RE.match(stripped):
             refs = _DOWNLOAD_REF_RE.findall(stripped)
             has_createfile_source = bool(_CREATEFILE_SOURCE_RE.search(stripped))
             nested = _DOWNLOAD_REF_NESTED_RE.findall(stripped)
-            if nested and nested[-1][1] and (has_createfile_source or len(refs) >= 2):
+            into_download = _download_is_destination(stripped)
+            if (
+                nested
+                and nested[-1][1]
+                and (has_createfile_source or len(refs) >= 2 or into_download)
+            ):
                 # destination is `__Download\<dir>\...` -- a file inside a
                 # subdirectory, not a download named <dir>; record the
                 # directory for consumers, but never as an E512 duplicate
@@ -761,9 +839,10 @@ def _check_download_names(lines):
                 # `move __createfile "{download path "X"}"` -- a substituted
                 # destination with no literal __Download ref to read back
                 knowable = False
-            elif not has_createfile_source and len(refs) >= 2:
-                # renaming one download to another; the last ref is the new
-                # name, earlier refs are ordinary consumer references
+            elif not has_createfile_source and (len(refs) >= 2 or into_download):
+                # renaming one download to another, or moving a file into
+                # __Download from elsewhere; the last ref is the new name,
+                # earlier refs are ordinary consumer references
                 produce(lineno, refs[-1])
             # a single __Download ref with no __createfile source is left
             # alone here -- it is an ordinary consumer reference (e.g.

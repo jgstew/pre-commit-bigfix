@@ -17,6 +17,8 @@ file checking, createfile-heredoc masking, the skip/opt-out markers,
 exit codes.
 """
 
+import pytest
+
 from pre_commit_bigfix import bes_actionscript_validate_script as validator
 
 WINDOWS_SHELL = "application/x-Fixlet-Windows-Shell"
@@ -736,6 +738,94 @@ def test_redirection_into_download_registers_the_target():
 def test_double_redirect_append_into_download_registers_the_target():
     body = "wait cmd /c echo hi >> __Download\\log.txt\n" "wait __Download\\log.txt"
     assert validator.check_actionscript(body) == []
+
+
+def test_folder_create_under_download_is_not_a_reference():
+    """`folder create "__Download\\7z"` makes a folder -- it is a producer,
+    not a reference to a download nothing provides.
+    """
+    assert validator.check_actionscript('folder create "__Download\\7z"') == []
+
+
+def test_folder_create_registers_the_folder_for_later_references():
+    body = 'folder create "__Download\\7z"\nwait "__Download\\7z\\x.exe"'
+    assert validator.check_actionscript(body) == []
+
+
+def test_reference_into_an_uncreated_download_subfolder_is_still_w507():
+    body = 'folder create "__Download\\7z"\nwait "__Download\\8z\\x.exe"'
+    assert codes(validator.check_actionscript(body)) == ["W507"]
+
+
+def test_global_download_folder_is_not_the_action_download_folder():
+    """`__Global\\__Download\\actionsite\\...` is the client's shared
+    download cache, not this action's `__Download` folder.
+    """
+    body = (
+        'parameter "backup" = "{(data folder of client as string) & '
+        '"\\__Global\\__Download\\actionsite\\_listbackup.txt"}"\n'
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        "wait __Download\\a.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_substituted_download_folder_reference_is_still_checked():
+    """`& "\\__Download\\x"` inside a substitution is a real reference."""
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        'wait __Download\\a.exe /b="{(client folder of current site as string) '
+        '& "\\__Download\\E5450A19.exe"}"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W507"]
+
+
+@pytest.mark.parametrize(
+    "extract_line",
+    [
+        # sysinternals-style zip unpacked with a prefetched unzip.exe
+        'waithidden __Download\\unzip.exe -o "{pathname of file "a.zip" of '
+        'folder "__Download" of client folder of current site}" -d '
+        '"{pathname of folder "__Download" of client folder of current site}"',
+        # 7-Zip, with the executable itself found by a relevance substitution
+        'waithidden "{ (pathname of file "7z.exe" of folder "7z" of folder '
+        '"__Download" of client folder of current site) }" e -y -o"{pathname '
+        'of folder "__Download" of client folder of current site}" "x.exe"',
+        "waithidden __Download\\7za.exe x __Download\\a.7z -o__Download",
+        # Windows' own cabinet expander, pulling files out of a .diagcab
+        'waithidden expand -i "__Download\\O14-CTRRemove.diagcab" '
+        '-f:OffScrub*.vbs "__Download"',
+    ],
+)
+def test_archive_extractor_run_makes_download_names_unknowable(extract_line):
+    """An unzip/7-Zip/expand run writes files whose names the script never
+    spells out, exactly like an `extract` line -- so W507 is skipped.
+    """
+    body = (
+        "prefetch a.zip sha1:x size:1 http://x/a.zip\n"
+        f"{extract_line}\n"
+        'wait "__Download\\setup_from_archive.exe"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_non_extractor_run_keeps_w507():
+    body = "wait __Download\\setup.exe /S\nwait __Download\\other.exe"
+    assert codes(validator.check_actionscript(body)) == ["W507", "W507"]
+
+
+def test_move_into_download_from_elsewhere_registers_the_destination():
+    """The one __Download ref is the destination -- the file is being put there."""
+    body = (
+        'move {parameter "Temp"}\\ScreenShot.png __Download\\ScreenShot.png\n'
+        "copy __Download\\ScreenShot.png C:\\out.png"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_move_out_of_download_with_one_ref_is_still_a_reference():
+    body = 'copy "__Download\\user.png" "C:\\ProgramData\\user.png"'
+    assert codes(validator.check_actionscript(body)) == ["W507"]
 
 
 # --- E514: if/elseif condition must be a substitution ---------------------------
