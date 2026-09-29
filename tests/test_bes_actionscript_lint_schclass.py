@@ -650,13 +650,13 @@ def test_main_exit_0_on_clean(tmp_path):
 
 def test_main_warning_only_exit_0(tmp_path, capsys):
     path = write(tmp_path, "x.bes", bes("\nRUN x\n"))
-    assert linter.main([path]) == 0
+    assert linter.main(["--auto-fix=no", path]) == 0
     assert "W302" in capsys.readouterr().out
 
 
 def test_main_warning_strict_exit_1(tmp_path):
     path = write(tmp_path, "x.bes", bes("\nRUN x\n"))
-    assert linter.main(["--strict", path]) == 1
+    assert linter.main(["--auto-fix=no", "--strict", path]) == 1
 
 
 def test_main_disable_flag(tmp_path):
@@ -701,3 +701,101 @@ def test_real_unclosed_substitution_is_still_e301():
 def test_unclosed_substitution_after_an_escape_is_still_e301():
     issues = linter.lint_actionscript("wait cmd /c echo {{ {name of computer\n")
     assert [code for _, code, _ in issues] == ["E301"]
+
+
+# --- W302 / W303 auto-fix -----------------------------------------------------
+
+
+def _texts(path):
+    from lxml import etree
+
+    with open(path, "rb") as handle:
+        return [el.text for el in etree.fromstring(handle.read()).iter("ActionScript")]
+
+
+def test_w302_auto_fix_lowercases_verbs(tmp_path):
+    body = '\nRUN x\n  Add Prefetch Item name=a sha1=b size=1 url=https://e/a\nWaitHidden cmd /c "A B"\n'
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = linter.check_file(path, auto_fix=True)
+    assert [code for _l, code, _m in fixed] == ["W302", "W302", "W302"]
+    assert "W302" not in {code for _l, code, _m in issues}
+    assert _texts(path) == [
+        '\nrun x\n  add prefetch item name=a sha1=b size=1 url=https://e/a\nwaithidden cmd /c "A B"\n'
+    ]
+
+
+def test_w302_auto_fix_keeps_the_arguments_case(tmp_path):
+    path = write(tmp_path, "x.bes", bes("\nRUN RUN.EXE\n"))
+    linter.check_file(path, auto_fix=True)
+    assert _texts(path) == ["\nrun RUN.EXE\n"]
+
+
+def test_w303_auto_fix_lowercases_keyword_and_value(tmp_path):
+    body = "\noverride wait\nRunAs=currentuser\nhidden=TRUE\nCompletion={x}\nwait x\n"
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = linter.check_file(path, auto_fix=True)
+    assert [code for _l, code, _m in fixed] == ["W303", "W303", "W303"]
+    assert not issues
+    assert _texts(path) == [
+        "\noverride wait\nrunas=currentuser\nhidden=true\ncompletion={x}\nwait x\n"
+    ]
+
+
+def test_w303_auto_fix_leaves_substitution_values(tmp_path):
+    body = "\noverride wait\nhidden={TRUE}\nwait x\n"
+    path = write(tmp_path, "x.bes", bes(body))
+    _issues, fixed = linter.check_file(path, auto_fix=True)
+    assert fixed == [] and _texts(path) == [body]
+
+
+def test_auto_fix_preserves_crlf_and_is_idempotent(tmp_path):
+    path = write(tmp_path, "x.bes", bes("\nRUN x\n"))
+    linter.check_file(path, auto_fix=True)
+    first = open(path, "rb").read()
+    assert b"\r\n" in first and b"\n" not in first.replace(b"\r\n", b"")
+    _issues, fixed = linter.check_file(path, auto_fix=True)
+    assert fixed == [] and open(path, "rb").read() == first
+
+
+def test_auto_fix_respects_disable_and_markers(tmp_path):
+    body = "\nRUN x\noverride wait\nHidden=true\nwait x\n"
+    path = write(tmp_path, "d.bes", bes(body))
+    _issues, fixed = linter.check_file(path, {"W302", "W303"}, auto_fix=True)
+    assert fixed == []
+    for marker, code in (
+        (linter.CASE_MARKER, "W302"),
+        (linter.OVERRIDE_CASE_MARKER, "W303"),
+    ):
+        path = write(tmp_path, "m.bes", bes(body, marker=marker))
+        _issues, fixed = linter.check_file(path, auto_fix=True)
+        assert code not in {c for _l, c, _m in fixed} and fixed
+
+
+def test_auto_fix_raw_actionscript_file(tmp_path):
+    path = tmp_path / "x.txt"
+    path.write_text("RUN x\n", encoding="utf-8")
+    _issues, fixed = linter.check_file(str(path), auto_fix=True)
+    assert [c for _l, c, _m in fixed] == ["W302"]
+    assert path.read_text(encoding="utf-8") == "run x\n"
+
+
+def test_main_auto_fixes_by_default_and_exits_1(tmp_path, capsys):
+    path = write(tmp_path, "x.bes", bes("\nRUN x\n"))
+    assert linter.main([path]) == 1
+    assert "auto-fixed" in capsys.readouterr().out
+    assert _texts(path) == ["\nrun x\n"]
+
+
+def test_main_does_not_auto_fix_when_discovering(tmp_path, monkeypatch):
+    path = write(tmp_path, "x.bes", bes("\nRUN x\n"))
+    monkeypatch.chdir(tmp_path)
+    assert linter.main([]) == 0
+    assert _texts(path) == ["\nRUN x\n"]
+
+
+def test_w302_auto_fix_on_the_tag_line(tmp_path):
+    content = bes("x").replace("<![CDATA[x]]>", "<![CDATA[Wait x]]>")
+    path = write(tmp_path, "x.bes", content)
+    _issues, fixed = linter.check_file(path, auto_fix=True)
+    assert [c for _l, c, _m in fixed] == ["W302"]
+    assert "<![CDATA[wait x]]>" in open(path, encoding="utf-8").read()

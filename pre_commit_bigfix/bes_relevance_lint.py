@@ -41,6 +41,14 @@ Checks:
     W603  two version-looking strings compared as strings, not as versions
     W604  a version comparison that truncates to the shorter operand's
           components
+    W605  an ordinary ActionScript `{...}` substitution (in a `run`, `wait`,
+          `parameter`, ...) whose value is an opaque object with no text form
+          -- a `bes *`, `dmi *`, `smbios *`, `xml dom *`, `active directory *`
+          or `sqlite *` object, or a bare `registry`, `process`, `wmi
+          object`, ... -- so there is nothing to embed in the command line.
+          A warning rather than an E608 error because which types cannot
+          render is the analyzer's curated inference, not a confirmed engine
+          fact
 
 E-codes fail the hook; warnings fail only under --strict.
 

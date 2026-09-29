@@ -42,8 +42,13 @@
     release date later than the modification time), DownloadSize against the
     prefetches' total (W220), a Relevance waiting for a setting value the
     action never sets (W221), and download actions.
-    Auto-fixes the fixable ones in place (DownloadSize -> 0, missing dates ->
-    now, blank-line collapse, Title trim, Relevance whitespace trim,
+    Auto-fixes the fixable ones in place (DownloadSize -> 0, or to the
+    prefetches' knowable total (W220), missing dates -> now, a missing
+    ActionScript MIMEType -> the Windows-Shell default and an allowed one's
+    case (E200), unambiguous SourceReleaseDate / timestamp / evaluation-period
+    formatting (E201, E202, E216, E219 -- a wrong day-of-week is dropped), a
+    lowercase `cve-` prefix (E209), a case-only SourceSeverity mismatch (W216),
+    blank-line collapse, Title trim, Relevance whitespace trim,
     trailing-whitespace strip, XML-declaration insert/normalize, Description
     `//` comments rewritten as `/* ... */`, SourceSeverity `Unspecified`
     emptied; and, under --strict, CDATA
@@ -94,9 +99,13 @@
     (bes-schema-validate owns validity). Scope is limited to what the grammar
     can decide -- lexical validity per line -- plus the two block constructs it
     cannot express (createfile heredocs, override option blocks); argument
-    shapes, if/endif pairing, the closing-tag whitespace trap, and auto-fixes
-    belong in a sibling ActionScript hook. E-codes fail the hook; pass --strict to also fail on
-    warnings. Widen `files` to lint raw ActionScript text files too.
+    shapes, if/endif pairing, the closing-tag whitespace trap, and
+    content-changing auto-fixes belong in a sibling ActionScript hook. Its one
+    auto-fix is case only: with --auto-fix (the default when files are given,
+    as pre-commit does) a non-lowercase verb (W302) or override option
+    keyword/value (W303) is lowercased in place, and an auto-fixed file fails
+    the hook so the change is reviewed and re-staged. E-codes fail the hook;
+    pass --strict to also fail on warnings. Widen `files` to lint raw ActionScript text files too.
   language: python
   pass_filenames: True
   entry: bes-actionscript-lint-schclass
@@ -129,7 +138,10 @@
     sha256 alone. A declared name whose extension differs from the URL
     file's (`<sha1>.msi` from `ccsetup531.exe`) warns W406, and text the
     prefetch syntax does not define (a stray token, `sha2:` for `sha256:`, an
-    unencoded space in the URL) is E403. An `add nohash prefetch item` line is reported rather
+    unencoded space in the URL) is E403 -- `sha2:` before a 64-hex value and
+    a space directly after the URL are auto-fixed offline (to `sha256:` and
+    `%20`), any other stray text is left for a human. An
+    `add nohash prefetch item` line is reported rather
     than validated (W403) since it is hashless by definition -- on the old
     URL it is reported but not rewritten, since a hashed prefetch would
     change what the line does. --auto-fix-network, OFF by default, adds the
@@ -139,7 +151,12 @@
     prefetch in the same spelling, keeping the line's own download name; each
     URL is fetched at most once per run, each download gives up after 60
     seconds, and a download that fails or does not match is W404, leaving the
-    line and its E401 alone. It is opt-in because it reaches out to whatever
+    line and its E401 alone. The same flag switches an http prefetch URL to
+    https (bes-conventions-check's W207) once the https copy is proven the
+    same file: a HEAD must report a Content-Length equal to the line's size,
+    checked before anything is downloaded, and must stay on https; then the
+    download's size and every hash on the line must match. Otherwise it is
+    W407 and the line stays on http. It is opt-in because it reaches out to whatever
     URLs the content names. A file whose
     prefetches knowingly do not meet these rules opts out of the whole hook
     with `prefetch-ok` anywhere in it -- the same marker that opts out of
@@ -152,8 +169,9 @@
     application/x-Fixlet-Windows-Shell (or missing MIMEType) bodies are
     checked; bodies are extracted with lxml, so entities are decoded, CDATA
     sections merged, and line numbers map back to the file. Unparsable files
-    are skipped (bes-schema-validate owns validity). E402 and (with
-    --auto-fix-network) E401 are the only auto-fixes: E400 depends on the size
+    are skipped (bes-schema-validate owns validity). E402, the E403 shapes
+    above, and (with --auto-fix-network) E401 and W207 are the only
+    auto-fixes: E400 depends on the size
     and hashes of the real file, and a hook has no way to know which file was
     meant. E-codes and any auto-fix fail the hook; pass --strict to also fail
     on warnings.
@@ -213,15 +231,14 @@
     reapplied, with the same `delete`/`folder delete` cleanup exemption);
     any `__Download`, `__createfile`, or `__appendfile` reference whose case
     does not match exactly warns W503, since Windows tolerates the mismatch
-    but a case-sensitive Linux/macOS filesystem does not -- this hook's one
-    auto-fix (see below). A `setting` line
+    but a case-sensitive Linux/macOS filesystem does not -- auto-fixed (see
+    below). A `setting` line
     that is not the documented
     `setting "name"="value" on "{...}" for client|user|action` shape is
     E520; a `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a
     quoted, bracketed `"[HKEY_...]..."` keyname is E521; an
     `action uses wow64 redirection` argument that is not `true`, `false`, or
-    a `{...}` substitution is E523; the deprecated
-    `dos` verb warns W504 (use `waithidden cmd.exe /c ...` instead). A
+    a `{...}` substitution is E523. A
     `wait`/`run` of cmd.exe that passes a command line but no `/c` warns
     W505 -- without the switch cmd.exe opens a shell and never runs the
     command. `/k` is likewise flagged: it runs the command but leaves the
@@ -237,15 +254,19 @@
     pairing check that hook's state machine cannot express. A command after
     an unconditional exit/restart/shutdown is unreachable and warns W501; an
     `action parameter query` after execution began warns W502. E-codes
-    fail the hook. --auto-fix (W503, W506), on by default when files are given
-    (as pre-commit does) and off when auto-discovering, rewrites every
-    wrong-case scratch reference to its canonical spelling and inserts a
-    `delete` before each W506 move/copy and quotes each unquoted `folder
-    create|delete` path (E525), in place; an auto-fixed file fails
-    the hook so the change is reviewed and re-staged. No other check here
-    has an auto-fix, since a hook has no way to know
-    where a missing `endif` or `end prefetch block` was meant to go, and
-    guessing could silently change what the action does. Only
+    fail the hook. --auto-fix (W503, W506, E525, E524, W505, E521), on by
+    default when files are given (as pre-commit does) and off when
+    auto-discovering, rewrites every wrong-case scratch reference to its
+    canonical spelling, inserts a `delete` before each W506 move/copy, quotes
+    each unquoted `folder create|delete` path (E525), joins `else if` into
+    `elseif` (E524, unless a stray `endif` shows a real nested `if`), turns a
+    waiting cmd.exe's `/k` into `/c` or inserts a missing `/c` after its
+    leading switches (W505), and quotes a bracketed-but-unquoted registry key
+    (E521), in place; an auto-fixed file fails the hook so the change is
+    reviewed and re-staged. No other check here has an auto-fix, since a
+    hook has no way to know where a missing `endif` or `end prefetch block`
+    was meant to go, and guessing could silently change what the action
+    does. Only
     application/x-Fixlet-Windows-Shell (matched case-insensitively) or
     missing-MIMEType bodies are checked; bodies are extracted with lxml, so
     entities are decoded, CDATA sections merged, and line numbers map back to
@@ -263,7 +284,7 @@
     `actionscript-download-ok` (E512, W507), `actionscript-parameter-ok`
     (E516, E517, W508), `actionscript-scratch-ok` (E519, W503),
     `actionscript-scratch-dest-ok` (W506),
-    `actionscript-command-shape-ok` (E520, E521, E523, E525, W504),
+    `actionscript-command-shape-ok` (E520, E521, E523, E525),
     `actionscript-cmd-ok` (W505),
     `actionscript-override-ok` (E522 -- shared with
     bes-actionscript-lint-schclass's E303), `actionscript-unreachable-ok`
@@ -294,7 +315,9 @@
     defines; W601 a singular property over a possibly-plural object; W602 a
     `whose` filter written on a singular spelling where the plural reads
     safer; W603 two version-looking strings compared as strings; W604 a
-    version comparison that truncates to the shorter operand. W601 is disabled
+    version comparison that truncates to the shorter operand; W605 an ordinary
+    ActionScript `{...}` substitution whose value is an opaque object with no
+    text form (a `bes *` object, a bare `registry`, ...). W601 is disabled
     by default here -- it fires several times per file across real content --
     and `--enable W601` switches it back on. Unparsable XML is skipped
     (bes-schema-validate owns validity), so a clean run says the relevance

@@ -84,7 +84,9 @@ Checks:
           `setting delete "name" on "{...}" for client|user|action` shape
           -- a missing effective-date clause fails at runtime
     E521  a `regset`/`regset64`/`regdelete`/`regdelete64` key is not a
-          quoted, bracketed `"[HKEY_...]..."` keyname
+          quoted, bracketed `"[HKEY_...]..."` keyname (fixable only when the
+          key is bracketed but unquoted -> the quotes are added; a key with
+          no brackets is left alone)
     E522  an `override wait` / `override run` block is not terminated by its
           matching verb -- it hits end of body, is terminated by the *other*
           override verb's command, or is immediately reopened by another
@@ -105,6 +107,8 @@ Checks:
     E524  `else if` (two words) instead of `elseif`: the agent does not read
           it as a chained branch. It is tracked as the `elseif` it was meant
           to be, so the rest of the if/endif pairing does not cascade
+          (fixable -> joined into `elseif`, unless the body has a stray
+          `endif` (E501), which means an `if` really was nested in the `else`)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -116,11 +120,13 @@ Checks:
           exactly that case (e.g. `__download\\x.exe`) -- Windows tolerates
           this, but a Linux/macOS agent's case-sensitive filesystem does not.
           Auto-fixable: see AUTO-FIXES below
-    W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
     W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (cmd.exe
           opens a shell and never runs the command), or uses `/k` instead (the
           command runs but the shell never exits, so an action that waits for it
-          hangs -- `run`/`runhidden` do not wait, so `/k` there is fine)
+          hangs -- `run`/`runhidden` do not wait, so `/k` there is fine).
+          Fixable -> a leading `/k` becomes `/c`, and a missing `/c` is
+          inserted after cmd's own leading switches (`/q`, `/d`, `/e:on`, ...);
+          a line with `/r` or an unknown leading switch is left alone
     W506  a `move`/`copy` (of any source: a scratch file, a download, ...)
           onto a destination that is not cleared earlier in the body -- by a
           `delete` (also one that looks the same file up by relevance), a
@@ -159,13 +165,13 @@ this hook cannot see, and flagging every such reference would be pure noise.
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given.
 
-AUTO-FIXES. There is exactly one, and it is the only check here that is safe
-to auto-fix: every other issue is a missing/misplaced piece of block
+AUTO-FIXES. Only a few checks here are safe to auto-fix, each with exactly
+one right rewrite: every other issue is a missing/misplaced piece of block
 structure (an `endif`, an `end prefetch block`, ...) a hook has no way to
 know the right place for, and guessing could silently change what the action
 does.
 
---auto-fix (W503, W506, E525), on by default (yes when files are given, as
+--auto-fix (W503, W506, E525, E524, W505, E521), on by default (yes when files are given, as
 pre-commit does; no when auto-discovering). Every wrong-case `__download`,
 `__createfile`, or `__appendfile` reference is rewritten in place to its
 canonical spelling -- purely a case correction of a reference this hook
@@ -173,8 +179,10 @@ already resolved to a known scratch-file token, so there is nothing to
 guess -- and a `delete <destination>` line (same indentation, same XML
 escaping as the body) is inserted before each W506 move/copy, the
 documented pattern -- and an unquoted `folder create|delete` path is
-wrapped in quotes (E525). An auto-fixed file fails the hook so the change
-is reviewed and re-staged.
+wrapped in quotes (E525); an `else if` is joined into `elseif` (E524); a
+cmd.exe `/k` becomes `/c` or a missing `/c` is inserted (W505); and a
+bracketed-but-unquoted registry key is quoted (E521). An auto-fixed file
+fails the hook so the change is reviewed and re-staged.
 
 Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (matched case-insensitively; a mixed-case MIMEType is still valid BigFix
@@ -209,7 +217,7 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-parameter-ok      (E516, E517, W508)
     actionscript-scratch-ok        (E519, W503)
     actionscript-scratch-dest-ok   (W506)
-    actionscript-command-shape-ok  (E520, E521, E523, E525, W504)
+    actionscript-command-shape-ok  (E520, E521, E523, E525)
     actionscript-cmd-ok            (W505)
     actionscript-override-ok       (E522 -- shared with bes-actionscript-lint-schclass's E303)
     actionscript-unreachable-ok    (W501)
@@ -269,7 +277,7 @@ PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, 
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, W507
 PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517, W508
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
-COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, E525, W504
+COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, E525
 CMD_MARKER = "actionscript-cmd-ok"  # W505
 SCRATCH_DEST_MARKER = "actionscript-scratch-dest-ok"  # W506
 # shared with the sibling schclass hook's E303 on purpose: one marker turns
@@ -307,7 +315,6 @@ CHECK_MARKERS = {
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
     "W503": SCRATCH_MARKER,
-    "W504": COMMAND_SHAPE_MARKER,
     "W505": CMD_MARKER,
     "W506": SCRATCH_DEST_MARKER,
     "W507": DOWNLOAD_MARKER,
@@ -345,7 +352,6 @@ KNOWN_CODES = frozenset(
         "W501",
         "W502",
         "W503",
-        "W504",
         "W505",
         "W506",
         "W507",
@@ -541,7 +547,6 @@ _REGSET_RE = re.compile(
     r"^(regset64|regset|regdelete64|regdelete)\s+(.*)$", re.IGNORECASE
 )
 _REGSET_KEY_RE = re.compile(r'^"\[', re.IGNORECASE)
-_DOS_VERB_RE = re.compile(r"^dos\b", re.IGNORECASE)
 _WOW64_RE = re.compile(r"^action\s+uses\s+wow64\s+redirection\b(.*)$", re.IGNORECASE)
 # the agent accepts a boolean literal (any case) or a `{...}` substitution
 _WOW64_ARG_RE = re.compile(r"^(?:true|false|\{.*\})$", re.IGNORECASE | re.DOTALL)
@@ -1540,6 +1545,133 @@ def _is_cmd_shell(executable):
     return basename in ("cmd", "cmd.exe")
 
 
+# W505 fix: the cmd.exe switches that may precede `/c` without being taken as
+# the command itself (`cmd /q /c dir`); anything else starting with `/` there
+# -- `/r`, cmd's own synonym for `/c`, or an unknown switch -- is not guessed at
+_CMD_LEADING_SWITCH_RE = re.compile(
+    r"^/(?:[qdaus]|[efv]:(?:on|off)|t:[0-9a-f]{1,2})$", re.IGNORECASE
+)
+_CMD_K_SWITCH_RE = re.compile(r"^/k$", re.IGNORECASE)
+# E521 fix: a bracketed registry key written without its quotes, closed by a
+# `]` that ends the key token
+_UNQUOTED_BRACKET_KEY_RE = re.compile(r'^\[[^"\]]*\](?=\s|$)')
+
+
+def _cmd_switch_rewrite(verb, arguments):
+    """Return `arguments` with `/c` put right, or None if that is unclear.
+
+    A leading `/k` becomes `/c` on a verb that waits (`run` does not hang on
+    it, and W505 does not report it there); a command line with no `/c` gets
+    one inserted after cmd's leading switches, where cmd expects it.
+    """
+    if _CMD_RUN_SWITCH_RE.search(arguments):
+        return None
+    tokens = arguments.split(" ")
+    for index, token in enumerate(tokens):
+        if not token or _CMD_LEADING_SWITCH_RE.match(token):
+            continue
+        if _CMD_K_SWITCH_RE.match(token):
+            if verb.lower().startswith("run"):
+                return None
+            return " ".join(tokens[:index] + ["/c"] + tokens[index + 1 :])
+        if token.startswith("/") or _CMD_PERSIST_SWITCH_RE.search(arguments):
+            return None
+        return " ".join(tokens[:index] + ["/c"] + tokens[index:])
+    return None
+
+
+def _line_rewrite(stripped, codes):
+    """Return (code, old, new) for a fixable E521/W505 line, or None.
+
+    `old` is a leading slice of the stripped line and `new` its replacement,
+    so the rewrite lands on the file line without rebuilding it.
+    """
+    if "W505" in codes:
+        match = _LAUNCH_VERB_RE.match(stripped)
+        if match:
+            executable, arguments = _leading_token(match.group(2))
+            if _is_cmd_shell(executable) and arguments and stripped.endswith(arguments):
+                rewritten = _cmd_switch_rewrite(match.group(1), arguments)
+                if rewritten is not None:
+                    prefix = stripped[: len(stripped) - len(arguments)]
+                    return "W505", stripped, prefix + rewritten
+    if "E521" in codes:
+        match = _REGSET_RE.match(stripped)
+        if match:
+            rest = match.group(2).strip()
+            key = _UNQUOTED_BRACKET_KEY_RE.match(rest)
+            if key and not _REGSET_KEY_RE.match(rest):
+                prefix = stripped[: len(stripped) - len(rest)]
+                return "E521", prefix + key.group(0), f'{prefix}"{key.group(0)}"'
+    return None
+
+
+def _line_fix_targets(raw, src, is_bes, codes):
+    """Yield (file_lineno, code, old, new) for every E524/W505/E521 fix target.
+
+    Lines are heredoc-masked the way the checks see them. An `else if` is
+    joined only in a body with no stray `endif` (E501): a second `endif`
+    means the author really did nest an `if` inside the `else`.
+    """
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return
+    else:
+        bodies = [(1, src)]
+    for sourceline, body in bodies:
+        join_else_if = "E524" in codes and "E501" not in {
+            code for _lineno, code, _message in check_actionscript(body)
+        }
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        for index, masked_line in enumerate(masked_lines):
+            stripped = masked_line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            else_if = _ELSE_IF_TWO_WORDS_RE.match(stripped)
+            if else_if:
+                if join_else_if:
+                    yield sourceline + index, "E524", else_if.group(0), "elseif"
+                continue
+            rewrite = _line_rewrite(stripped, codes)
+            if rewrite:
+                yield (sourceline + index,) + rewrite
+
+
+_LINE_FIX_MESSAGES = {
+    "E524": "joined `else if` into `elseif`",
+    "W505": "put `/c` on the cmd.exe command line",
+    "E521": "quoted the bracketed registry key",
+}
+
+
+def _escape_like(raw_line, text):
+    """`text` escaped the way an entity-escaped (non-CDATA) `raw_line` is."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return text.replace('"', "&quot;") if "&quot;" in raw_line else text
+
+
+def fix_line_rewrites(src, targets):
+    """E524/W505/E521: apply `_line_fix_targets`' rewrites in place.
+
+    Each `old` slice is replaced once on its file line -- as written (a CDATA
+    body), or escaped to match an entity-escaped body. A target whose text is
+    not found is left alone rather than guessed at. Returns (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    for lineno, code, old, new in targets:
+        if not 1 <= lineno <= len(lines):
+            continue
+        raw_line = lines[lineno - 1]
+        if old not in raw_line and _ENTITY_RE.search(raw_line):
+            old, new = _escape_like(raw_line, old), _escape_like(raw_line, new)
+        if _replace_on_line(lines, lineno, old, new):
+            fixed.append((lineno, code, _LINE_FIX_MESSAGES[code]))
+    return "\n".join(lines), fixed
+
+
 def _check_command_shapes(lines):
     """Check per-line command shapes independent of block structure.
 
@@ -1548,9 +1680,7 @@ def _check_command_shapes(lines):
     `setting delete "name" on "{...}" for client|user|action` shape (a
     missing effective-date `on` clause fails at runtime); E521 for a
     `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
-    bracketed `"[HKEY_...]..."` keyname; W504 for the deprecated `dos`
-    verb (`waithidden cmd.exe /c ...` is the documented replacement); and
-    W505 for a `wait`/`run` of cmd.exe that passes a command line without `/c`
+    bracketed `"[HKEY_...]..."` keyname; and W505 for a `wait`/`run` of cmd.exe that passes a command line without `/c`
     (cmd.exe needs it to execute the command), or that uses `/k` instead
     (cmd.exe runs the command but the shell never exits, so the action hangs).
     """
@@ -1639,19 +1769,6 @@ def _check_command_shapes(lines):
                             ),
                         )
                     )
-
-        if _DOS_VERB_RE.match(stripped):
-            issues.append(
-                (
-                    lineno,
-                    "W504",
-                    (
-                        "`dos` is deprecated; use `waithidden cmd.exe /c "
-                        "...` instead; add "
-                        f"`{COMMAND_SHAPE_MARKER}` if intentional"
-                    ),
-                )
-            )
     return issues
 
 
@@ -1945,7 +2062,7 @@ def check_actionscript(body, first_line=1):
     issues.extend(_check_parameters(lines, first_line))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
     issues.extend(_check_scratch_destinations(lines))  # W506
-    issues.extend(_check_command_shapes(lines))  # E520 / E521 / E523 / W504 / W505
+    issues.extend(_check_command_shapes(lines))  # E520 / E521 / E523 / W505
     issues.extend(_check_condition_shapes(lines))  # E518
     issues.extend(_check_override_blocks(lines, first_line))  # E522
     issues.extend(_check_folder_quoting(lines))  # E525
@@ -2350,9 +2467,12 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     spelling, unless "W503" is in `disabled` or the file opts out with the
     `actionscript-scratch-ok` marker; and a `delete <destination>` is
     inserted before each W506 move/copy, unless "W506" is disabled or the
-    `actionscript-scratch-dest-ok` marker is present. The file's line
-    endings are preserved (CRLF in, CRLF out). No other check has an
-    auto-fix.
+    `actionscript-scratch-dest-ok` marker is present; each unquoted
+    `folder create|delete` path is quoted (E525); an `else if` is joined
+    (E524), a cmd.exe `/k` or missing `/c` is put right (W505), and a
+    bracketed registry key is quoted (E521) -- each unless its code is
+    disabled or its family marker is present. The file's line endings are
+    preserved (CRLF in, CRLF out). No other check has an auto-fix.
     """
     if not os.path.isfile(path):
         return [(1, "W500", "file not found; skipping")], []
@@ -2386,6 +2506,17 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     if auto_fix and "E525" not in disabled and COMMAND_SHAPE_MARKER not in src:
         src, got = fix_folder_quoting(
             src, list(_folder_quote_targets(raw, src, is_bes))
+        )
+        fixed += got
+        raw = _encode(src, was_crlf)
+    line_fix_codes = {
+        code
+        for code in ("E524", "W505", "E521")
+        if auto_fix and code not in disabled and CHECK_MARKERS[code] not in src
+    }
+    if line_fix_codes:
+        src, got = fix_line_rewrites(
+            src, list(_line_fix_targets(raw, src, is_bes, line_fix_codes))
         )
         fixed += got
         raw = _encode(src, was_crlf)
@@ -2480,7 +2611,9 @@ def main(argv=None):
             "rewrite wrong-case __download/__createfile/__appendfile "
             "references (W503) to their canonical spelling and insert a "
             "`delete` before each uncleared move/copy (W506) and quote "
-            "folder create/delete paths (E525), in place "
+            "folder create/delete paths (E525), join `else if` (E524), put "
+            "cmd.exe's `/c` right (W505), and quote bracketed registry keys "
+            "(E521), in place "
             "(default: yes when files are given, no when auto-discovering)"
         ),
     )

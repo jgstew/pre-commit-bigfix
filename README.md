@@ -62,7 +62,16 @@ that total is knowable), and a Relevance that waits for a client setting value
 the action never sets (`W221`).
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
-the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`
+the change is reviewed and re-staged. Only rewrites whose right answer is
+knowable from the file are made: besides the whitespace, CDATA, date-insert
+and XML-declaration fixes, a missing ActionScript MIMEType gets the
+Windows-Shell default (`E200`), an unambiguous year-first SourceReleaseDate
+or a loosely-formatted timestamp is respelled (`E201`/`E202`/`E216` - a wrong
+day-of-week is dropped, not recomputed), a `cve-` prefix is uppercased
+(`E209`, several `<CVENames>` are not merged), an evaluation period is
+zero-padded (`E219`), a case-only SourceSeverity mismatch is respelled
+(`W216`), and a DownloadSize that disagrees with a knowable prefetch total is
+set to it (`W220`). E-codes fail the hook; pass `--strict`
 to also fail on warnings, or `--errors-only` to leave W-codes out of the report
 entirely (the checks and their auto-fixes still run, unlike `--disable`).
 `--check-filename` (off by default) additionally checks that a file's
@@ -122,9 +131,13 @@ This hook's scope is deliberately limited to what the schclass grammar can
 decide - the lexical validity of each line. ActionScript checks that need
 knowledge the grammar does not carry (per-verb argument shapes, `if`/`endif`
 and prefetch-block pairing, the `]]></ActionScript>` closing-tag whitespace
-trap, http->https escalation, and any auto-fixes) belong in a separate
-ActionScript hook, so this one stays a thin consumer of the grammar files and
-needs no code changes when BigFix ships new command verbs.
+trap, http->https escalation, and any content-changing auto-fixes) belong in
+a separate ActionScript hook, so this one stays a thin consumer of the grammar
+files and needs no code changes when BigFix ships new command verbs. Its one
+auto-fix changes only case: `--auto-fix` (on by default when files are given,
+as pre-commit does) lowercases a `W302` verb or `W303` override option in
+place, and an auto-fixed file fails the hook so it is reviewed and re-staged;
+`args: ["--auto-fix", "no"]` reports them without rewriting.
 
 See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
@@ -170,7 +183,10 @@ way past web filtering) counts as a match. Text the prefetch syntax does not
 define is `E403` - a stray token (an AutoPkg template's
 `vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe`), a misspelt field (`sha2:`), an
 unencoded space splitting the URL - since the reference parser silently
-ignores it; a space-separated trailing `// comment` is fine. An
+ignores it; a space-separated trailing `// comment` is fine. The two shapes
+with one meaning each are auto-fixed offline: `sha2:` before a 64-hex value
+becomes `sha256:`, and a space directly after the URL becomes `%20`; any
+other stray text is left for a human. An
 `add nohash prefetch item` line is reported rather than validated (`W403`),
 since it is hashless by definition and its download cannot be verified.
 
@@ -184,6 +200,14 @@ does not happen or does not match is `W404`: the line is left alone and its
 `E401` stands. Each URL is fetched at most once per run, and each download
 gives up after 60 seconds.
 
+The same flag switches an `http://` prefetch URL to `https://` (the fix for
+`bes-conventions-check`'s `W207`), but only once the https copy is proven to be
+the same file: a HEAD request must report a `Content-Length` equal to the
+line's size - checked *before* anything is downloaded - and must not redirect
+off https; then the download's size and every hash on the line must match.
+Only the scheme changes. Anything else is `W407` and the line stays on http;
+`--disable W407` turns this part off.
+
 ```yaml
       - id: bes-actionscript-validate-prefetch
         args: ["--auto-fix-network", "yes"]
@@ -194,8 +218,8 @@ never the default - think about it before turning it on for a repo whose
 prefetches point at hosts you do not control.
 
 A prefetch that downloads the retired `unzip-5.52.exe` from the BigFix redist
-folder is `E402` - `unzip-6.0.exe` is the current one - and it is the hook's
-one auto-fix. Auto-fix is on by default; the line is rewritten in place to
+folder is `E402` - `unzip-6.0.exe` is the current one - and it is auto-fixed
+offline. Auto-fix is on by default; the line is rewritten in place to
 
 ```text
 add prefetch item name=unzip.exe sha1=84debf12767785cd9b43811022407de7413beb6f size=204800 url=http://software.bigfix.com/download/redist/unzip-6.0.exe sha256=2122557d350fd1c59fb0ef32125330bde673e9331eb9371b454c2ad2d82091ac
@@ -234,8 +258,9 @@ http-vs-https scheme are `W206`/`W207` in `bes-conventions-check`, and its
 lexical validity is `E300` in `bes-actionscript-lint-schclass`: three
 altitudes on the same line, all intentional.
 
-`E402` and (with `--auto-fix-network`) `E401` are the only auto-fixes, and no
-others are planned - `E400`'s correct size and hashes are properties of the
+`E402`, the two `E403` shapes above, and (with `--auto-fix-network`) `E401`
+and the `W207` https switch are the only auto-fixes, and no others are
+planned - `E400`'s correct size and hashes are properties of the
 real file, and a hook has no way to know which file was meant. E-codes and any
 auto-fix fail the hook; pass `--strict` to also fail on warnings. Unparsable
 files are skipped (`bes-schema-validate` owns validity).
@@ -319,7 +344,7 @@ matching `createfile until` / `appendfile` line anywhere is `E519` - the
 `delete`/`folder delete` cleanup exemption. Any `__Download`, `__createfile`,
 or `__appendfile` reference whose case does not match exactly warns `W503`:
 Windows tolerates the mismatch, a case-sensitive Linux/macOS filesystem does
-not. This is the hook's one auto-fix (see below).
+not. It is auto-fixed (see below).
 
 A `setting` line that is not the documented
 `setting "name"="value" on "{...}" for client|user|action` shape is `E520` -
@@ -327,8 +352,7 @@ a missing effective-date clause fails at runtime. A
 `regset`/`regset64`/`regdelete`/`regdelete64` key that is not a quoted,
 bracketed `"[HKEY_...]..."` keyname is `E521`. An
 `action uses wow64 redirection` argument that is not `true`, `false`, or a
-`{...}` substitution is `E523`. The deprecated `dos` verb
-warns `W504`; use `waithidden cmd.exe /c ...` instead.
+`{...}` substitution is `E523`.
 
 A `wait`/`run` of cmd.exe that passes a command line but no `/c` warns
 `W505`: without the switch cmd.exe opens an interactive shell and never runs
@@ -359,16 +383,19 @@ any `if`) can never run and warns `W501` (first unreachable line only); an
 `action parameter query` after the first execution command warns `W502` -
 these are console-time prompts and belong at the top.
 
-`--auto-fix` (`W503`, `W506`), on by default when files are given (as
+`--auto-fix` (`W503`, `W506`, `E525`, `E524`, `W505`, `E521`), on by default when files are given (as
 pre-commit does) and off when auto-discovering, rewrites every wrong-case
 `__download`/`__createfile`/`__appendfile` reference to its canonical
 spelling, inserts a `delete <destination>` before each `W506` move/copy, and
 quotes each unquoted `folder create`/`folder delete` path (`E525` - quoted even
 when today's value has no spaces, since a user profile or parameter can),
-in place; an auto-fixed file fails the hook so the change is reviewed and
-re-staged. No other check here has an auto-fix: a hook has no
-way to know where a missing `endif` or `end prefetch block` was meant to go,
-and guessing could silently change what the action does.
+joins `else if` into `elseif` (`E524`, unless a stray `endif` shows a real
+nested `if`), turns a waiting cmd.exe's `/k` into `/c` or inserts a missing
+`/c` after its leading switches (`W505`), and quotes a bracketed-but-unquoted
+registry key (`E521`), in place; an auto-fixed file fails the hook so the
+change is reviewed and re-staged. No other check here has an auto-fix: a hook
+has no way to know where a missing `endif` or `end prefetch block` was meant
+to go, and guessing could silently change what the action does.
 
 Only `application/x-Fixlet-Windows-Shell` (matched case-insensitively - it is
 valid BigFix content either way) or missing-MIMEType bodies are checked;
@@ -390,7 +417,7 @@ its `E301`, so one marker covers both hooks),
 `actionscript-download-ok` (`E512`, `W507`), `actionscript-parameter-ok`
 (`E516`, `E517`, `W508`), `actionscript-scratch-ok` (`E519`, `W503`),
 `actionscript-scratch-dest-ok` (`W506`),
-`actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `E525`, `W504`),
+`actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `E525`),
 `actionscript-cmd-ok` (`W505`),
 `actionscript-override-ok` (`E522` - shared with
 `bes-actionscript-lint-schclass`'s `E303`), `actionscript-unreachable-ok`

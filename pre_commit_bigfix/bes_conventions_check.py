@@ -16,11 +16,21 @@ modification time).
 
 Checks:
     E200  an <ActionScript> MIMEType is missing or not one of the allowed set
+          (fixable -> a missing one is added as the default
+          application/x-Fixlet-Windows-Shell, and an allowed one in the
+          wrong case is respelled; any other value is left alone)
     E201  a <SourceReleaseDate> is present but not in YYYY-MM-DD format
+          (fixable only when unambiguous -> a year-first `2026-7-4`,
+          `2026/07/14`, `2026.07.14`, or `2026-07-14T10:20:30Z` is rewritten
+          as YYYY-MM-DD; a month/day-first date is never guessed at)
     E202  an x-fixlet-modification-time value is not a valid RFC 5322 date-time
           (e.g. `Tue, 14 Jul 2026 18:32:35 +0000`, or `14 Jul 2026 18:32:35
           +0000` without the optional day-of-week) -- see "Timestamp fields"
-          below for exactly what that requires
+          below for exactly what that requires (fixable when only the
+          formatting is off -> day/hour zero-padded, month and weekday
+          capitalized or abbreviated, a GMT/UTC/UT/Z zone or `+HH:MM` offset
+          written `+0000`/`+HHMM`, and a day-of-week that is wrong for the
+          date DROPPED, not recomputed; an unparsable value is left alone)
     E203  a <DownloadSize> is not empty and not 0-or-a-positive-integer (fixable
           -> 0)
     E204  a content object's <Description> still contains the boilerplate
@@ -37,7 +47,9 @@ Checks:
           more than one <CVENames> element is present in a single content
           object -- multiple CVE ids in one <CVENames> may be separated by
           commas, semicolons, and/or whitespace, and a lone `Unspecified` is
-          accepted as the "no CVEs" sentinel
+          accepted as the "no CVEs" sentinel (fixable -> a lowercase or
+          mixed-case `cve-` prefix is uppercased; several <CVENames> are NOT
+          merged, and any other bad value is left alone)
     E210  two <MIMEField> entries in one content object share the same <Name>
     E211  a <Title> is a default placeholder ("Custom Fixlet"/"Custom Task"/
           "Custom Baseline"/"Custom Analysis")
@@ -56,14 +68,17 @@ Checks:
           `</ActionScript>`)
     E216  an x-fixlet-first-propagation value is not a valid RFC 5322 date-time
           -- the same rule E202 applies to x-fixlet-modification-time, applied
-          to this separate field (see "Timestamp fields" below)
+          to this separate field (see "Timestamp fields" below; fixable the
+          same way as E202)
     E217  a <SuccessCriteria Option="CustomRelevance"> body is empty or the
           literal `false` (can never succeed), or a non-CustomRelevance
           <SuccessCriteria> has a non-empty body (silently ignored by BigFix)
     E218  two <Action ID="..."> / <DefaultAction ID="..."> in one content
           object share the same ID
     E219  an x-relevance-evaluation-period value is not a valid HH:MM:SS
-          duration (matched case-insensitively; MM and SS must each be 00-59)
+          duration (matched case-insensitively; MM and SS must each be 00-59;
+          fixable -> zero-padded, `6:5:0` -> `06:05:00`, when MM and SS are
+          already below 60)
     E220  two <Property> entries in one <Analysis> share a Name or an ID --
           reporting cannot tell two same-named properties apart, and the API
           addresses a property by its ID
@@ -115,7 +130,8 @@ Checks:
           High/Critical (exact case) -- override with --severity-values.
           `Unspecified` (any case, or the console's bracketed
           `<Unspecified>`) carries no information (fixable -> emptied),
-          unless --severity-values lists it
+          unless --severity-values lists it; a value that differs from an
+          allowed one only in case is fixable too (`HIGH` -> `High`)
     W217  (only with --check-filename) a file's basename does not match its
           first content object's <Title>, sanitized for filename-illegal
           characters (/, backslash, :, *, ?, ", <, >, | -> _)
@@ -134,6 +150,7 @@ Checks:
           often copied from another fixlet. Checked only when the total is
           knowable: one action prefetches, none of its prefetches sits in an
           `if`, every size is a literal, and there is no dynamic `download`
+          (fixable -> set to that total, the unzip utility left out)
     W221  a Relevance that is true *until* a client setting has value V --
           `not exists settings "N" whose ("V" = value of it) of client`, or
           `value of setting "N" of client != "V"` -- while the action sets N
@@ -174,7 +191,14 @@ them. W200 is how the tool stays out of bes-schema-validate's lane: an
 unparsable file is skipped, not failed, here.
 
 --auto-fix rewrites the fixable conventions in place: an invalid/empty
-DownloadSize -> 0 (E203); a missing SourceReleaseDate -> today (W202); a missing
+DownloadSize -> 0 (E203), then a DownloadSize that disagrees with a knowable
+prefetch total -> that total (W220); a missing ActionScript MIMEType -> the
+default, or an allowed one's case (E200); an unambiguous year-first
+SourceReleaseDate -> YYYY-MM-DD (E201); a loosely-formatted modification /
+first-propagation timestamp -> RFC 5322 (E202/E216, a wrong day-of-week
+dropped); a lowercase `cve-` prefix -> `CVE-` (E209); an unpadded evaluation
+period -> HH:MM:SS (E219); a case-only SourceSeverity mismatch -> the allowed
+spelling (W216); a missing SourceReleaseDate -> today (W202); a missing
 x-fixlet-modification-time -> the moment the linter ran (W201); collapsed blank
 lines before </ActionScript> (W205); a Title trimmed with tabs replaced by
 spaces (W209); a Relevance trimmed of leading/trailing whitespace (W213);
@@ -985,26 +1009,10 @@ def check_download_size_total(src):
     out). A stale value -- often copied from another fixlet -- shows the
     wrong download size in the console.
     """
-    size_match = DOWNLOAD_SIZE_TAG_RE.search(src)
-    if not size_match:
+    mismatch = _download_size_mismatch(src)
+    if mismatch is None:
         return []
-    declared = _strip_cdata(size_match.group(1))
-    if not DOWNLOAD_SIZE_RE.match(declared):
-        return []  # E203's business
-    totals = []
-    for match in ACTIONSCRIPT_FULL_RE.finditer(src):
-        body = match.group(2)
-        cdata = CDATA_RE.match(body.strip())
-        body = cdata.group(1) if cdata else _xml_unescape(body)
-        if PREFETCH_LINE_RE.search(body) or any(
-            PREFETCH_LINE_RE.match(line) for line in body.split("\n")
-        ):
-            totals.append(_prefetch_total(body))
-    if len(totals) != 1 or totals[0] is None:
-        return []
-    total, unzip = totals[0]
-    if int(declared) in (total, total - unzip):
-        return []
+    size_match, declared, total, _unzip = mismatch
     return [
         (
             _lineno(src, size_match.start()),
@@ -1015,6 +1023,35 @@ def check_download_size_total(src):
             ),
         )
     ]
+
+
+def _download_size_mismatch(src):
+    """Return (size_match, declared, total, unzip) when W220 applies, else None.
+
+    Shared by check_download_size_total and fix_download_size_total so the
+    fixer rewrites exactly what the check reports.
+    """
+    size_match = DOWNLOAD_SIZE_TAG_RE.search(src)
+    if not size_match:
+        return None
+    declared = _strip_cdata(size_match.group(1))
+    if not DOWNLOAD_SIZE_RE.match(declared):
+        return None  # E203's business
+    totals = []
+    for match in ACTIONSCRIPT_FULL_RE.finditer(src):
+        body = match.group(2)
+        cdata = CDATA_RE.match(body.strip())
+        body = cdata.group(1) if cdata else _xml_unescape(body)
+        if PREFETCH_LINE_RE.search(body) or any(
+            PREFETCH_LINE_RE.match(line) for line in body.split("\n")
+        ):
+            totals.append(_prefetch_total(body))
+    if len(totals) != 1 or totals[0] is None:
+        return None
+    total, unzip = totals[0]
+    if int(declared) in (total, total - unzip):
+        return None
+    return size_match, declared, total, unzip
 
 
 # W221: an action `setting "N"="V" on ...` line, and the two relevance shapes
@@ -2303,6 +2340,34 @@ def _fix_block(block, marker_text, disabled, strict, now, severities=None):
     if "E203" not in disabled and DOWNLOAD_SIZE_MARKER not in marker_text:
         block, got = fix_download_size(block)
         fixed += got
+    # after E203, so an invalid DownloadSize reset to 0 still gets the real total
+    if "W220" not in disabled and DOWNLOAD_SIZE_MARKER not in marker_text:
+        block, got = fix_download_size_total(block)
+        fixed += got
+    if "E200" not in disabled and MIMETYPE_MARKER not in marker_text:
+        block, got = fix_action_mimetypes(block)
+        fixed += got
+    if "E201" not in disabled and SOURCE_RELEASE_DATE_MARKER not in marker_text:
+        block, got = fix_source_release_date_format(block)
+        fixed += got
+    # before fix_missing_dates, which dates an inserted SourceReleaseDate from
+    # a valid modification time
+    if "E202" not in disabled and MODIFICATION_TIME_MARKER not in marker_text:
+        block, got = fix_timestamp_format(
+            block, MODTIME_VALUE_RE, "E202", MODIFICATION_TIME_NAME
+        )
+        fixed += got
+    if "E216" not in disabled and FIRST_PROPAGATION_MARKER not in marker_text:
+        block, got = fix_timestamp_format(
+            block, FIRST_PROP_VALUE_RE, "E216", FIRST_PROPAGATION_NAME
+        )
+        fixed += got
+    if "E209" not in disabled and CVE_NAMES_MARKER not in marker_text:
+        block, got = fix_cve_names(block)
+        fixed += got
+    if "E219" not in disabled and EVALUATION_PERIOD_MARKER not in marker_text:
+        block, got = fix_evaluation_period(block)
+        fixed += got
     if "W209" not in disabled and TITLE_MARKER not in marker_text:
         block, got = fix_title(block)
         fixed += got
@@ -2391,19 +2456,37 @@ def fix_download_size(src):
 
 
 def fix_source_severity(src, allowed=CANONICAL_SEVERITIES):
-    """W216: rewrite an `Unspecified` <SourceSeverity> to an empty one.
+    """W216: rewrite an `Unspecified` <SourceSeverity> to an empty one, and a
+    case-only mismatch (`HIGH`, `critical`) to its allowed spelling.
 
     Only the `Unspecified` spellings check_source_severity reports as
-    auto-fixable are touched; a value listed in `allowed` (a repo that opts
-    `Unspecified` back in via --severity-values) and any other out-of-
-    vocabulary value are left for a human.
+    auto-fixable are cleared; a value listed in `allowed` (a repo that opts
+    `Unspecified` back in via --severity-values) is kept. A value that matches
+    exactly one allowed spelling ignoring case is rewritten to it; any other
+    out-of-vocabulary value (`Medium`, `N/A`) is left for a human.
     """
     fixed = []
+    by_lower = {}
+    for item in allowed:
+        by_lower.setdefault(item.lower(), []).append(item)
 
     def repl(match):
         value = _strip_cdata(match.group(1)).strip()
-        if value in allowed or not _is_unspecified_severity(match.group(1)):
+        if value in allowed:
             return match.group(0)
+        if not _is_unspecified_severity(match.group(1)):
+            # a case-only mismatch (`HIGH`) has exactly one intended spelling
+            spellings = by_lower.get(value.lower(), [])
+            if "<![CDATA[" in match.group(1) or len(spellings) != 1:
+                return match.group(0)
+            fixed.append(
+                (
+                    _lineno(src, match.start()),
+                    "W216",
+                    f'SourceSeverity "{value}" set to "{spellings[0]}"',
+                )
+            )
+            return f"<SourceSeverity>{spellings[0]}</SourceSeverity>"
         fixed.append(
             (
                 _lineno(src, match.start()),
@@ -2414,6 +2497,297 @@ def fix_source_severity(src, allowed=CANONICAL_SEVERITIES):
         return "<SourceSeverity></SourceSeverity>"
 
     return SOURCE_SEVERITY_RE.sub(repl, src), fixed
+
+
+# E200: the MIMEType the ActionScript hooks already assume when none is given
+DEFAULT_MIMETYPE = "application/x-Fixlet-Windows-Shell"
+_MIMETYPES_BY_LOWER = {item.lower(): item for item in ALLOWED_MIMETYPES}
+CDATA_SECTION_RE = re.compile(r"<!\[CDATA\[.*?\]\]>", re.DOTALL)
+
+
+def fix_action_mimetypes(src):
+    """E200: add a missing MIMEType, or fix the case of an allowed one.
+
+    A missing MIMEType becomes DEFAULT_MIMETYPE, which is what every
+    ActionScript hook in this repo already treats a missing one as. A value
+    that differs from an allowed MIMEType only in case is rewritten to the
+    allowed spelling. Any other value is left for a human.
+    """
+    fixed = []
+    # an `<ActionScript ...>` inside a CDATA section is text (e.g. relevance
+    # that generates BES XML), not an element, and must never be edited
+    cdata_spans = [m.span() for m in CDATA_SECTION_RE.finditer(src)]
+
+    def repl(match):
+        if any(start < match.start() < end for start, end in cdata_spans):
+            return match.group(0)
+        attrs = match.group(1)
+        mime_match = MIMETYPE_ATTR_RE.search(attrs)
+        if mime_match is None:
+            new_attrs = f' MIMEType="{DEFAULT_MIMETYPE}"' + attrs
+            message = f"added missing ActionScript MIMEType {DEFAULT_MIMETYPE}"
+        else:
+            value = mime_match.group(1)
+            canonical = _MIMETYPES_BY_LOWER.get(value.lower())
+            if canonical is None or canonical == value:
+                return match.group(0)
+            new_attrs = (
+                attrs[: mime_match.start(1)] + canonical + attrs[mime_match.end(1) :]
+            )
+            message = f'ActionScript MIMEType "{value}" set to "{canonical}"'
+        fixed.append((_lineno(src, match.start()), "E200", message))
+        return f"<ActionScript{new_attrs}>"
+
+    return ACTIONSCRIPT_OPEN_RE.sub(repl, src), fixed
+
+
+# E201: a year-first date whose parts are unambiguous, with `-`, `/`, or `.`
+# separators, unpadded parts, and an optional time part to drop. A
+# month/day-first date (07/14/2026 or 14/07/2026) is never guessed at.
+LOOSE_SRD_RE = re.compile(
+    r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2})?\S*)?$"
+)
+
+
+def fix_source_release_date_format(src):
+    """E201: reformat an unambiguous year-first SourceReleaseDate as YYYY-MM-DD."""
+    fixed = []
+
+    def repl(match):
+        inner = match.group(1)
+        if "<![CDATA[" in inner:
+            return match.group(0)
+        value = inner.strip()
+        loose = LOOSE_SRD_RE.match(value)
+        if not value or _valid_source_release_date(value) or not loose:
+            return match.group(0)
+        year, month, day = (int(part) for part in loose.groups())
+        try:
+            new_value = date(year, month, day).isoformat()
+        except ValueError:
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "E201",
+                f'SourceReleaseDate "{value}" set to {new_value}',
+            )
+        )
+        return f"<SourceReleaseDate>{new_value}</SourceReleaseDate>"
+
+    return SRD_RE.sub(repl, src), fixed
+
+
+# E202/E216: an RFC 5322-ish date-time with fixable formatting -- any case,
+# full or abbreviated day/month names, unpadded day/hour, a UTC zone name, or
+# a `+HH:MM` offset. Only these spellings are rewritten; anything else (a
+# missing field, EST, ISO 8601) is left for a human.
+LOOSE_TIMESTAMP_RE = re.compile(
+    r"^(?:(?P<dow>[A-Za-z]{3,9}),?\s+)?"
+    r"(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,9})\s+(?P<year>\d{4})\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2}):(?P<second>\d{2})\s*"
+    r"(?P<zone>[+-]\d{2}:?\d{2}|GMT|UTC|UT|Z)$",
+    re.IGNORECASE,
+)
+_FULL_WEEKDAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+_FULL_MONTHS = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+_UTC_ZONE_NAMES = frozenset(["gmt", "utc", "ut", "z"])
+
+
+def _abbreviation(word, full_names):
+    """`word` as a title-case 3-letter abbreviation, or None if it is not one.
+
+    Accepts the abbreviation or the full English name in any case.
+    """
+    lowered = word.lower()
+    if len(lowered) == 3 and any(name[:3] == lowered for name in full_names):
+        return lowered.title()
+    if lowered in full_names:
+        return lowered[:3].title()
+    return None
+
+
+def _normalize_timestamp(value):
+    """Return the valid RFC 5322 spelling of a loosely-formatted `value`, or None.
+
+    A day-of-week that is not the date's real one is dropped rather than
+    recomputed: RFC 5322 makes it optional, and the date is what the author
+    wrote down deliberately.
+    """
+    match = LOOSE_TIMESTAMP_RE.match(value)
+    if not match:
+        return None
+    month = _abbreviation(match.group("mon"), _FULL_MONTHS)
+    if month is None:
+        return None
+    zone = match.group("zone")
+    zone = "+0000" if zone.lower() in _UTC_ZONE_NAMES else zone.replace(":", "")
+    rest = (
+        f"{int(match.group('day')):02d} {month} {match.group('year')} "
+        f"{int(match.group('hour')):02d}:{match.group('minute')}:"
+        f"{match.group('second')} {zone}"
+    )
+    parsed = _parse_timestamp(rest)
+    if parsed is None:
+        return None
+    dow = match.group("dow")
+    if dow is not None:
+        abbreviation = _abbreviation(dow, _FULL_WEEKDAYS)
+        if abbreviation is None:
+            return None  # not a weekday at all: something else is wrong
+        if abbreviation == WEEKDAY_ABBREVS[parsed.weekday()]:
+            return f"{abbreviation}, {rest}"
+    return rest
+
+
+def fix_timestamp_format(src, value_re, code, field):
+    """E202/E216: normalize the formatting of a loosely-written timestamp.
+
+    `value_re` is MODTIME_VALUE_RE or FIRST_PROP_VALUE_RE and `code` the code
+    its check reports. A CDATA-wrapped value is left untouched.
+    """
+    fixed = []
+
+    def repl(match):
+        inner = match.group(1)
+        if "<![CDATA[" in inner:
+            return match.group(0)
+        value = inner.strip()
+        if _valid_timestamp(value):
+            return match.group(0)
+        new_value = _normalize_timestamp(value)
+        if new_value is None:
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                code,
+                f'{field} "{value}" set to "{new_value}"',
+            )
+        )
+        return _sub_capture(match, new_value)
+
+    return value_re.sub(repl, src), fixed
+
+
+def fix_cve_names(src):
+    """E209: uppercase a lowercase/mixed-case `cve-` prefix in <CVENames>.
+
+    Only that prefix is touched; several <CVENames> elements are NOT merged
+    into one, and any other malformed value is left for a human.
+    """
+    fixed = []
+
+    def repl(match):
+        inner = match.group(1)
+        new_inner = re.sub(
+            r"(?<![\w-])cve-(?=\d{4}-\d{4,}(?![\w-]))",
+            "CVE-",
+            inner,
+            flags=re.IGNORECASE,
+        )
+        if new_inner == inner:
+            return match.group(0)
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "E209",
+                "uppercased the CVE- prefix of a CVENames value",
+            )
+        )
+        return f"<CVENames>{new_inner}</CVENames>"
+
+    return CVENAMES_TAG_RE.sub(repl, src), fixed
+
+
+# E219: an HH:MM:SS duration missing zero-padding (6:5:0)
+LOOSE_EVALUATION_PERIOD_RE = re.compile(r"^(\d{1,}):(\d{1,2}):(\d{1,2})$")
+
+
+def fix_evaluation_period(src):
+    """E219: zero-pad an x-relevance-evaluation-period (6:00:00 -> 06:00:00).
+
+    Only when the minutes and seconds are already below 60; an out-of-range
+    part is left for a human.
+    """
+    fixed = []
+
+    def repl(match):
+        if match.group(1).strip().lower() != "x-relevance-evaluation-period":
+            return match.group(0)
+        inner = match.group(2)
+        if "<![CDATA[" in inner:
+            return match.group(0)
+        value = inner.strip()
+        loose = LOOSE_EVALUATION_PERIOD_RE.match(value)
+        if EVALUATION_PERIOD_RE.match(value) or not loose:
+            return match.group(0)
+        hours, minutes, seconds = (int(part) for part in loose.groups())
+        if minutes > 59 or seconds > 59:
+            return match.group(0)
+        new_value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        fixed.append(
+            (
+                _lineno(src, match.start()),
+                "E219",
+                f'x-relevance-evaluation-period "{value}" set to "{new_value}"',
+            )
+        )
+        full = match.group(0)
+        start = match.start(2) - match.start(0)
+        end = match.end(2) - match.start(0)
+        return full[:start] + new_value + full[end:]
+
+    return NAMED_MIMEFIELD_RE.sub(repl, src), fixed
+
+
+def fix_download_size_total(src):
+    """W220: set <DownloadSize> to the prefetches' total, unzip.exe left out.
+
+    Rewrites only what check_download_size_total reports (same helper), so an
+    unknowable total -- a conditional prefetch, a runtime size, a dynamic
+    download -- is never touched. The unzip utility is left out of the total
+    the way the console computes it.
+    """
+    mismatch = _download_size_mismatch(src)
+    if mismatch is None:
+        return src, []
+    size_match, declared, total, unzip = mismatch
+    new_size = total - unzip
+    fixed = [
+        (
+            _lineno(src, size_match.start()),
+            "W220",
+            f"DownloadSize {declared} set to the prefetches' total, {new_size}",
+        )
+    ]
+    new_src = (
+        src[: size_match.start()]
+        + f"<DownloadSize>{new_size}</DownloadSize>"
+        + src[size_match.end() :]
+    )
+    return new_src, fixed
 
 
 def fix_title(src):

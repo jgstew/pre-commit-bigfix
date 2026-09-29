@@ -2442,3 +2442,275 @@ def test_w212_false_and_short_circuits(tmp_path, relevance):
 def test_short_circuit_only_at_the_top_level(tmp_path, relevance):
     got = codes(tmp_path, task(relevance=f"<![CDATA[{relevance}]]>"))
     assert "E212" not in got and "W212" not in got
+
+
+# --- Tier 1 auto-fixes: E200 E201 E202/E216 E209 E219 W216 W220 ------------
+
+
+def _fixed_codes(fixed):
+    return {code for _, code, _ in fixed}
+
+
+def test_e200_autofix_adds_missing_mimetype(tmp_path):
+    content = task().replace(' MIMEType="application/x-Fixlet-Windows-Shell"', "")
+    assert "E200" in codes(tmp_path, content)
+    out, fixed = autofix(tmp_path, content)
+    assert '<ActionScript MIMEType="application/x-Fixlet-Windows-Shell">' in out
+    assert "E200" in _fixed_codes(fixed)
+    assert "E200" not in codes(tmp_path, out, name="after.bes")
+
+
+@pytest.mark.parametrize(
+    "wrong, right",
+    [
+        ("application/x-fixlet-windows-shell", "application/x-Fixlet-Windows-Shell"),
+        ("APPLICATION/X-SH", "application/x-sh"),
+        ("application/x-applescript", "application/x-AppleScript"),
+    ],
+)
+def test_e200_autofix_normalizes_mimetype_case(tmp_path, wrong, right):
+    out, fixed = autofix(tmp_path, task(mimetype=wrong))
+    assert f'MIMEType="{right}"' in out
+    assert "E200" in _fixed_codes(fixed)
+    assert "E200" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_e200_autofix_leaves_unknown_mimetype(tmp_path):
+    out, fixed = autofix(tmp_path, task(mimetype="application/x-python"))
+    assert 'MIMEType="application/x-python"' in out
+    assert "E200" not in _fixed_codes(fixed)
+
+
+def test_e200_autofix_respects_marker_and_disable(tmp_path):
+    content = task(mimetype="application/x-sh".upper(), marker="mimetype-ok")
+    out, fixed = autofix(tmp_path, content)
+    assert 'MIMEType="APPLICATION/X-SH"' in out and "E200" not in _fixed_codes(fixed)
+    path = write(tmp_path, "d.bes", task(mimetype="APPLICATION/X-SH"))
+    _, fixed = checker.check_file(path, {"E200"}, auto_fix=True, now=FIXED_NOW)
+    assert "E200" not in _fixed_codes(fixed)
+
+
+@pytest.mark.parametrize(
+    "bad, good",
+    [
+        ("2026-7-4", "2026-07-04"),
+        ("2026/07/14", "2026-07-14"),
+        ("2026.07.14", "2026-07-14"),
+        ("2026-07-14T10:20:30Z", "2026-07-14"),
+        ("2026-07-14 10:20:30", "2026-07-14"),
+    ],
+)
+def test_e201_autofix_reformats_unambiguous_dates(tmp_path, bad, good):
+    out, fixed = autofix(tmp_path, task(srd=bad))
+    assert f"<SourceReleaseDate>{good}</SourceReleaseDate>" in out
+    assert "E201" in _fixed_codes(fixed)
+    assert "E201" not in codes(tmp_path, out, name="after.bes")
+
+
+@pytest.mark.parametrize("bad", ["07/14/2026", "14/07/2026", "2026-02-30", "soon"])
+def test_e201_autofix_leaves_ambiguous_or_impossible_dates(tmp_path, bad):
+    out, fixed = autofix(tmp_path, task(srd=bad))
+    assert f"<SourceReleaseDate>{bad}</SourceReleaseDate>" in out
+    assert "E201" not in _fixed_codes(fixed)
+
+
+def test_e201_autofix_respects_marker(tmp_path):
+    out, fixed = autofix(
+        tmp_path, task(srd="2026/07/14", marker="source-release-date-ok")
+    )
+    assert "2026/07/14" in out and "E201" not in _fixed_codes(fixed)
+
+
+@pytest.mark.parametrize(
+    "bad, good",
+    [
+        # a wrong day-of-week is dropped (it is optional), not recomputed
+        ("Fri, 14 Jul 2026 18:32:35 +0000", "14 Jul 2026 18:32:35 +0000"),
+        ("Tue, 4 Jul 2026 18:32:35 +0000", "04 Jul 2026 18:32:35 +0000"),
+        ("Tue, 14 JUL 2026 18:32:35 +0000", "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("tue, 14 jul 2026 18:32:35 +0000", "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("Tue, 14 Jul 2026 18:32:35 GMT", "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("Tue, 14 Jul 2026 18:32:35 UTC", "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("Tue, 14 Jul 2026 18:32:35 Z", "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("Tue, 14 Jul 2026 18:32:35 +05:30", "Tue, 14 Jul 2026 18:32:35 +0530"),
+        ("Tue, 14 Jul 2026 8:32:35 +0000", "Tue, 14 Jul 2026 08:32:35 +0000"),
+        ("Tuesday, 14 July 2026 18:32:35 +0000", "Tue, 14 Jul 2026 18:32:35 +0000"),
+    ],
+)
+def test_e202_autofix_normalizes_timestamp_format(tmp_path, bad, good):
+    out, fixed = autofix(tmp_path, task(modtime=bad))
+    assert f"<Value>{good}</Value>" in out
+    assert "E202" in _fixed_codes(fixed)
+    assert "E202" not in codes(tmp_path, out, name="after.bes")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "Tue, 14 Jul 2026 18:32 +0000",  # no seconds
+        "Tue, 31 Feb 2026 18:32:35 +0000",  # impossible date
+        "Tue, 14 Jul 2026 18:32:35 +9999",  # impossible offset
+        "Tue, 14 Jul 2026 18:32:35 EST",  # a zone name that is not UTC
+        "Foo, 14 Jul 2026 18:32:35 +0000",  # not a weekday at all
+        "2026-07-14T18:32:35Z",  # a different format entirely
+    ],
+)
+def test_e202_autofix_leaves_unparsable_timestamps(tmp_path, bad):
+    out, fixed = autofix(tmp_path, task(modtime=bad))
+    assert f"<Value>{bad}</Value>" in out
+    assert "E202" not in _fixed_codes(fixed)
+
+
+def test_e202_autofix_respects_marker(tmp_path):
+    bad = "Fri, 14 Jul 2026 18:32:35 +0000"
+    out, fixed = autofix(tmp_path, task(modtime=bad, marker="modification-time-ok"))
+    assert bad in out and "E202" not in _fixed_codes(fixed)
+
+
+def test_e216_autofix_normalizes_first_propagation(tmp_path):
+    content = task(
+        extra_mimefields=[
+            ("x-fixlet-first-propagation", "Fri, 14 Jul 2026 18:32:35 GMT")
+        ]
+    )
+    out, fixed = autofix(tmp_path, content)
+    assert "<Value>14 Jul 2026 18:32:35 +0000</Value>" in out
+    assert "E216" in _fixed_codes(fixed)
+    assert "E216" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_e216_autofix_respects_disable(tmp_path):
+    bad = "Fri, 14 Jul 2026 18:32:35 GMT"
+    path = write(
+        tmp_path, "d.bes", task(extra_mimefields=[("x-fixlet-first-propagation", bad)])
+    )
+    _, fixed = checker.check_file(path, {"E216"}, auto_fix=True, now=FIXED_NOW)
+    assert "E216" not in _fixed_codes(fixed)
+    assert bad in (tmp_path / "d.bes").read_text(encoding="utf-8")
+
+
+def test_e209_autofix_uppercases_cve_prefix(tmp_path):
+    content = _with_cve("<CVENames>cve-2021-44228, Cve-2021-45046</CVENames>")
+    out, fixed = autofix(tmp_path, content)
+    assert "<CVENames>CVE-2021-44228, CVE-2021-45046</CVENames>" in out
+    assert "E209" in _fixed_codes(fixed)
+    assert "E209" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_e209_autofix_does_not_merge_multiple_cvenames(tmp_path):
+    content = _with_cve(
+        "<CVENames>CVE-2021-44228</CVENames>\n\t\t<CVENames>CVE-2021-45046</CVENames>"
+    )
+    out, fixed = autofix(tmp_path, content)
+    assert out.count("<CVENames>") == 2
+    assert "E209" not in _fixed_codes(fixed)
+    assert "E209" in codes(tmp_path, out, name="after.bes")
+
+
+def test_e209_autofix_leaves_other_bad_values(tmp_path):
+    out, fixed = autofix(tmp_path, _with_cve("<CVENames>N/A</CVENames>"))
+    assert "<CVENames>N/A</CVENames>" in out and "E209" not in _fixed_codes(fixed)
+
+
+@pytest.mark.parametrize(
+    "bad, good",
+    [("6:00:00", "06:00:00"), ("6:5:0", "06:05:00"), ("1:00:00", "01:00:00")],
+)
+def test_e219_autofix_zero_pads(tmp_path, bad, good):
+    content = task(extra_mimefields=[("x-relevance-evaluation-period", bad)])
+    out, fixed = autofix(tmp_path, content)
+    assert f"<Value>{good}</Value>" in out
+    assert "E219" in _fixed_codes(fixed)
+    assert "E219" not in codes(tmp_path, out, name="after.bes")
+
+
+@pytest.mark.parametrize("bad", ["06:60:00", "6:00:75", "not-a-duration"])
+def test_e219_autofix_leaves_invalid_durations(tmp_path, bad):
+    content = task(extra_mimefields=[("x-relevance-evaluation-period", bad)])
+    out, fixed = autofix(tmp_path, content)
+    assert f"<Value>{bad}</Value>" in out and "E219" not in _fixed_codes(fixed)
+
+
+@pytest.mark.parametrize(
+    "bad, good", [("HIGH", "High"), ("critical", "Critical"), ("moderate", "Moderate")]
+)
+def test_w216_autofix_normalizes_case(tmp_path, bad, good):
+    out, fixed = autofix(tmp_path, _severity_content(bad))
+    assert f"<SourceSeverity>{good}</SourceSeverity>" in out
+    assert "W216" in _fixed_codes(fixed)
+    assert "W216" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w216_autofix_case_uses_custom_vocabulary(tmp_path):
+    path = write(tmp_path, "x.bes", _severity_content("MEDIUM"))
+    checker.check_file(
+        path, auto_fix=True, now=FIXED_NOW, severities=frozenset(["Medium", "Low"])
+    )
+    assert "<SourceSeverity>Medium</SourceSeverity>" in (tmp_path / "x.bes").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_w220_autofix_sets_download_size_to_total(tmp_path):
+    body = "\n" + _pf("a.zip", 10) + "\n" + _pf("b.cab", 20) + "\n"
+    out, fixed = autofix(tmp_path, task(download_size="249327", body=body))
+    assert "<DownloadSize>30</DownloadSize>" in out
+    assert "W220" in _fixed_codes(fixed)
+    assert "W220" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w220_autofix_leaves_unzip_out_of_the_total(tmp_path):
+    body = "\n" + _pf("a.zip", 30) + "\n" + _pf("unzip.exe", 204800) + "\n"
+    out, _ = autofix(tmp_path, task(download_size="7", body=body))
+    assert "<DownloadSize>30</DownloadSize>" in out
+
+
+def test_w220_autofix_follows_e203(tmp_path):
+    """An invalid DownloadSize becomes 0 (E203) and then the real total."""
+    body = "\n" + _pf("a.zip", 10) + "\n"
+    out, fixed = autofix(tmp_path, task(download_size="lots", body=body))
+    assert "<DownloadSize>10</DownloadSize>" in out
+    assert {"E203", "W220"} <= _fixed_codes(fixed)
+
+
+def test_w220_autofix_skips_unknowable_totals(tmp_path):
+    body = "\nif {windows of operating system}\n" + _pf("a.zip", 10) + "\nendif\n"
+    out, fixed = autofix(tmp_path, task(download_size="999", body=body))
+    assert "<DownloadSize>999</DownloadSize>" in out
+    assert "W220" not in _fixed_codes(fixed)
+
+
+def test_w220_autofix_respects_marker(tmp_path):
+    body = "\n" + _pf("a.zip", 10) + "\n"
+    content = task(download_size="999", body=body, marker="download-size-ok")
+    out, fixed = autofix(tmp_path, content)
+    assert "<DownloadSize>999</DownloadSize>" in out
+    assert "W220" not in _fixed_codes(fixed)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        task(mimetype="application/x-sh".upper(), srd="2026/07/14"),
+        task(modtime="Fri, 4 JUL 2026 8:32:35 GMT"),
+        _with_cve("<CVENames>cve-2021-44228</CVENames>"),
+    ],
+)
+def test_tier1_autofixes_are_idempotent(tmp_path, content):
+    once, _ = autofix(tmp_path, content)
+    twice, fixed = autofix(tmp_path, once, name="again.bes")
+    assert twice == once and fixed == []
+
+
+def test_e200_autofix_ignores_actionscript_text_inside_cdata(tmp_path):
+    """Leave `<ActionScript ...>` text inside a CDATA body alone.
+
+    Real bigfix-content shape: a relevance substitution that generates BES
+    XML carries `<ActionScript MIMEType=%22...%22>` as text inside a CDATA
+    body. That is action content, not an element, and must not be edited.
+    """
+    inner = 'echo {"<ActionScript MIMEType=%22application/x-sh%22>x</ActionScript>"}'
+    content = task(body=f"\n{inner}\n")
+    out, fixed = autofix(tmp_path, content)
+    assert inner in out
+    assert "E200" not in _fixed_codes(fixed)

@@ -9,7 +9,7 @@ parameter assignment (E516, E517), continue-if/pause-while condition shape
 (E518), __createfile/__appendfile production (E519), unreachable code
 (W501), action-parameter-query placement (W502), wrong-case scratch-file
 references (W503), setting/regset line shape (E520, E521), the deprecated
-`dos` verb (W504), override wait/run block termination (E522), the
+override wait/run block termination (E522), the
 lxml-based extraction of every <ActionScript> from BES XML
 (sourceline-accurate linenos, case-insensitive MIMEType gating), raw non-.bes
 file checking, createfile-heredoc masking, the skip/opt-out markers,
@@ -1408,17 +1408,22 @@ def test_regdelete_unbracketed_key_is_e521():
     assert codes(issues) == ["E521"]
 
 
-# --- W504: deprecated dos verb -----------------------------------------------------
+# --- `dos` is a valid, non-deprecated verb (W504 retired) -----------------------
 
 
-def test_dos_verb_is_w504():
+def test_dos_verb_is_not_reported():
+    """Leave `dos` unreported: it is valid and not deprecated.
+
+    It behaves differently from `waithidden cmd.exe /c` (it shows its window
+    and ends the script on a failed command), so there is nothing to warn
+    about; the old W504 is retired, not reused.
+    """
     body = "dos cd C:\\x && npm install"
-    issues = validator.check_actionscript(body)
-    assert codes(issues) == ["W504"]
-    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+    assert validator.check_actionscript(body) == []
+    assert "W504" not in validator.KNOWN_CODES
 
 
-def test_waithidden_cmd_is_not_w504():
+def test_waithidden_cmd_is_clean():
     body = "waithidden cmd.exe /c echo hi"
     assert validator.check_actionscript(body) == []
 
@@ -1929,11 +1934,6 @@ def test_override_block_marker_silences_e522(tmp_path):
         marker=validator.OVERRIDE_BLOCK_MARKER,
     )
     assert issues_for(tmp_path, content) == []
-
-
-def test_disable_w504_silences_it(tmp_path):
-    issues = issues_for(tmp_path, bes("dos echo hi"), disabled={"W504"})
-    assert issues == []
 
 
 # --- createfile heredocs are masked, not scanned ------------------------------
@@ -2536,3 +2536,137 @@ def test_cmd_k_under_wait_is_still_w505(verb):
 def test_cmd_without_c_under_run_is_still_w505():
     """Without /c the command is never run at all, whatever the verb."""
     assert codes(validator.check_actionscript("run cmd.exe dir")) == ["W505"]
+
+
+# --- Tier 1 auto-fixes: E524, W505, E521 --------------------------------------
+
+
+def _fix(tmp_path, body, **kwargs):
+    """Auto-fix a one-action BES; return (issues, fixed, fixed action text)."""
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = validator.check_file(path, auto_fix=True, **kwargs)
+    return issues, fixed, _action_texts(path)[0]
+
+
+def test_e524_auto_fix_joins_else_if(tmp_path):
+    body = "if {a}\nwait x\n  else if {b}\nwait y\nendif"
+    issues, fixed, text = _fix(tmp_path, body)
+    assert text == "if {a}\nwait x\n  elseif {b}\nwait y\nendif"
+    assert codes(fixed) == ["E524"] and "E524" not in codes(issues)
+
+
+def test_e524_auto_fix_skips_a_real_nested_if(tmp_path):
+    """Two endifs: the author meant `else` + nested `if`, not `elseif`."""
+    body = "if {a}\nwait x\nelse if {b}\nwait y\nendif\nendif"
+    _issues, fixed, text = _fix(tmp_path, body)
+    assert "else if {b}" in text and "E524" not in codes(fixed)
+
+
+def test_e524_auto_fix_respects_disable_and_marker(tmp_path):
+    body = "if {a}\nelse if {b}\nendif"
+    _issues, fixed, text = _fix(tmp_path, body, disabled={"E524"})
+    assert "else if" in text and fixed == []
+    path = write(tmp_path, "m.bes", bes(body, marker=validator.IF_MARKER))
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == []
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        ("wait cmd.exe /k dir", "wait cmd.exe /c dir"),
+        ("waithidden cmd /K setup.exe", "waithidden cmd /c setup.exe"),
+        (
+            'wait "C:\\Windows\\System32\\cmd.exe" /k x',
+            'wait "C:\\Windows\\System32\\cmd.exe" /c x',
+        ),
+        ("wait cmd.exe dir", "wait cmd.exe /c dir"),
+        ("wait cmd.exe /q dir /s", "wait cmd.exe /q /c dir /s"),
+        (
+            "waithidden cmd.exe /d /e:on echo hi",
+            "waithidden cmd.exe /d /e:on /c echo hi",
+        ),
+    ],
+)
+def test_w505_auto_fix(tmp_path, before, after):
+    issues, fixed, text = _fix(tmp_path, before)
+    assert text == after
+    assert codes(fixed) == ["W505"] and "W505" not in codes(issues)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "run cmd.exe /k dir",  # not reported: `run` does not wait
+        "wait cmd.exe /r dir",  # /r is cmd's synonym for /c; do not guess
+        "wait cmd.exe /x dir",  # an unknown switch: where /c goes is unclear
+    ],
+)
+def test_w505_auto_fix_leaves_unclear_lines(tmp_path, body):
+    _issues, fixed, text = _fix(tmp_path, body)
+    assert text == body and "W505" not in codes(fixed)
+
+
+def test_w505_auto_fix_in_an_entity_escaped_body(tmp_path):
+    content = bes("x").replace(
+        "<![CDATA[x]]>", "\nwait &quot;C:\\cmd.exe&quot; /k dir\n"
+    )
+    path = write(tmp_path, "x.bes", content)
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W505"]
+    assert "wait &quot;C:\\cmd.exe&quot; /c dir" in open(path, encoding="utf-8").read()
+
+
+def test_w505_auto_fix_respects_marker(tmp_path):
+    path = write(tmp_path, "x.bes", bes("wait cmd /k x", marker=validator.CMD_MARKER))
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == []
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        (
+            'regset [HKEY_LOCAL_MACHINE\\SOFTWARE\\My App] "v"="1"',
+            'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\My App]" "v"="1"',
+        ),
+        (
+            'regdelete64 [HKEY_CURRENT_USER\\x] "v"',
+            'regdelete64 "[HKEY_CURRENT_USER\\x]" "v"',
+        ),
+    ],
+)
+def test_e521_auto_fix_quotes_a_bracketed_key(tmp_path, before, after):
+    issues, fixed, text = _fix(tmp_path, before)
+    assert text == after
+    assert codes(fixed) == ["E521"] and "E521" not in codes(issues)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'regset HKEY_LOCAL_MACHINE\\SOFTWARE\\x "v"="1"',  # no brackets
+        'regset [HKEY_LOCAL_MACHINE\\SOFTWARE\\x "v"="1"',  # never closed
+    ],
+)
+def test_e521_auto_fix_leaves_other_shapes(tmp_path, body):
+    _issues, fixed, text = _fix(tmp_path, body)
+    assert text == body and "E521" not in codes(fixed)
+
+
+def test_dos_is_not_auto_fixed(tmp_path):
+    """Never rewrite `dos` as `waithidden cmd.exe /c`.
+
+    `dos` shows its window and fails the script on a failed command, so that
+    is not a faithful rewrite.
+    """
+    _issues, fixed, text = _fix(tmp_path, "dos echo hi")
+    assert text == "dos echo hi" and fixed == []
+
+
+def test_tier1_line_fixes_are_idempotent(tmp_path):
+    body = 'if {a}\nwait cmd /k x\nelse if {b}\nregset [HKEY_CURRENT_USER\\x] "v"="1"\nendif'
+    _i, first, text = _fix(tmp_path, body)
+    assert sorted(codes(first)) == ["E521", "E524", "W505"]
+    _i, second, again = _fix(tmp_path, text)
+    assert second == [] and again == text
