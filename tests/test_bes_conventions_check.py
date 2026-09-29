@@ -1470,9 +1470,7 @@ def test_w212_literal_false_behind_comments_or_parens(tmp_path, relevance):
 @pytest.mark.parametrize(
     "relevance",
     [
-        'true /* default */ and exists file "/etc/hosts"',
-        '(true) or (exists file "/x")',
-        "(true) and (false)",
+        'true /* default */ and exists file "/etc/hosts"',  # `true AND x` is x
         '"true"',  # a string, not the boolean literal
         "<![CDATA[/* just a comment */]]>",
     ],
@@ -2392,3 +2390,55 @@ def test_w221_marker_opts_out(tmp_path):
         marker="setting-value-ok",
     )
     assert "W221" not in codes(tmp_path, content)
+
+
+# --- E212 / W212: a literal operand short-circuits the whole relevance -------
+
+
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        # real server-export shape: a test hack left on a destructive task
+        'TRUE OR (exists (it as string) whose (it contains "On") of '
+        "protection status of encryptable volumes)",
+        '(exists file "/x") or true',
+        'true /* force */ OR (exists file "/x")',
+        '(true) or (exists file "/x") or (exists file "/y")',
+        '(true) or (exists file "/x")',
+    ],
+)
+def test_e212_true_or_short_circuits(tmp_path, relevance):
+    """`true OR x` is always true: it targets every endpoint, like a bare
+    literal `true`.
+    """
+    content = task(relevance=f"<![CDATA[{relevance}]]>")
+    assert "E212" in codes(tmp_path, content)
+
+
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        'false AND (exists file "/x")',
+        '(exists file "/x") and (FALSE)',
+        "(true) and (false)",  # always false, though not a bare literal
+    ],
+)
+def test_w212_false_and_short_circuits(tmp_path, relevance):
+    got = codes(tmp_path, task(relevance=f"<![CDATA[{relevance}]]>"))
+    assert "W212" in got and "E212" not in got
+
+
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        'true and (exists file "/x")',  # `true AND x` is just x
+        '(exists file "/x") or false',  # `x OR false` is just x
+        '(true or exists file "/x") and exists file "/y"',  # nested, not top-level
+        'exists file "/x" whose (name of it = "true or")',  # inside a string
+        "x or (y and true)",
+        'not true or exists file "/x"',  # `not true` is false, not true
+    ],
+)
+def test_short_circuit_only_at_the_top_level(tmp_path, relevance):
+    got = codes(tmp_path, task(relevance=f"<![CDATA[{relevance}]]>"))
+    assert "E212" not in got and "W212" not in got

@@ -42,7 +42,9 @@ Checks:
     E211  a <Title> is a default placeholder ("Custom Fixlet"/"Custom Task"/
           "Custom Baseline"/"Custom Analysis")
     E212  a <Relevance> is the literal `true` (case-insensitive) -- it targets
-          every endpoint
+          every endpoint. Comments and wrapping parentheses are ignored, and
+          a top-level `true OR ...` operand counts too: it is always true,
+          whatever the rest says (typically a test hack left in)
     E213  a <Relevance> is empty or whitespace only
     E214  the file has no XML declaration, or its declaration does not specify
           encoding="UTF-8" (fixable -> declaration inserted / encoding set)
@@ -103,7 +105,7 @@ Checks:
     W211  an <ActionScript> uses a dynamic `download` statement (a line whose
           first non-whitespace token is `download`); prefer a static prefetch
     W212  a <Relevance> is the literal `false` (case-insensitive) -- it never
-          applies to any endpoint
+          applies to any endpoint; likewise a top-level `false AND ...`
     W213  a <Relevance> has leading/trailing whitespace (fixable -> trimmed;
           a CDATA-wrapped Relevance is left untouched, as with Title/W209)
     W214  a <Title> contains a TODO or FIXME marker
@@ -1904,6 +1906,65 @@ def _relevance_literal(value):
     return value.lower()
 
 
+def _decoded_relevance(inner):
+    """A Relevance element's text as the evaluator sees it (CDATA or not)."""
+    cdata = CDATA_RE.match(inner.strip())
+    return cdata.group(1) if cdata else _xml_unescape(inner)
+
+
+def _top_level_operands(value, keyword):
+    """Split relevance on a top-level `and`/`or` (outside parens and strings).
+
+    Returns the operand texts, or a single-item list when `keyword` does not
+    occur at the top level. Comments are removed and wrapping parentheses
+    dropped first (see _relevance_literal).
+    """
+    text = RELEVANCE_COMMENT_RE.sub(" ", value).strip()
+    while True:  # drop wrapping parens, as _relevance_literal does
+        unwrapped = _relevance_literal(text)
+        if unwrapped == text.lower():
+            break
+        text = text.strip()[1:-1].strip()
+    operands, depth, quoted, start = [], 0, False, 0
+    pattern = re.compile(r"\s" + keyword + r"\s", re.IGNORECASE)
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            quoted = not quoted
+        elif not quoted and char == "(":
+            depth += 1
+        elif not quoted and char == ")":
+            depth -= 1
+        elif not quoted and not depth:
+            match = pattern.match(text, index)
+            if match:
+                operands.append(text[start:index])
+                index = start = match.end()
+                continue
+        index += 1
+    operands.append(text[start:])
+    return operands
+
+
+def _short_circuit(value):
+    """Return "true"/"false" if a top-level literal operand decides `value`.
+
+    `true OR x` is always true and `false AND x` always false, whatever x is
+    -- typically a test hack or a leftover that silently disables the real
+    condition. `true AND x` / `x OR false` are just x and not reported.
+    """
+    operands = _top_level_operands(value, "or")
+    if len(operands) > 1:
+        return (
+            "true" if any(_relevance_literal(op) == "true" for op in operands) else None
+        )
+    operands = _top_level_operands(value, "and")
+    if len(operands) > 1 and any(_relevance_literal(op) == "false" for op in operands):
+        return "false"
+    return None
+
+
 def check_relevance(src):
     """E212/E213/W212/W213: Relevance empty/`true`/`false`, or stray whitespace."""
     issues = []
@@ -1930,6 +1991,30 @@ def check_relevance(src):
                     (
                         "Relevance is the literal `true`; it targets every endpoint; "
                         f"add `{RELEVANCE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        elif _short_circuit(_decoded_relevance(inner)) == "true":
+            issues.append(
+                (
+                    lineno,
+                    "E212",
+                    (
+                        "Relevance is always true: a top-level `true OR ...` "
+                        "operand decides it whatever the rest says, so it targets "
+                        f"every endpoint; add `{RELEVANCE_MARKER}` if intentional"
+                    ),
+                )
+            )
+        elif _short_circuit(_decoded_relevance(inner)) == "false":
+            issues.append(
+                (
+                    lineno,
+                    "W212",
+                    (
+                        "Relevance is always false: a top-level `false AND ...` "
+                        "operand decides it, so it never applies; add "
+                        f"`{RELEVANCE_MARKER}` if intentional"
                     ),
                 )
             )
