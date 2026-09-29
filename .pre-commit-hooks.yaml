@@ -127,7 +127,9 @@
     warns (W402); a prefetch statement with no sha1 warns (W405) instead of
     failing the line, since current BigFix clients accept a statement with
     sha256 alone. A declared name whose extension differs from the URL
-    file's (`<sha1>.msi` from `ccsetup531.exe`) warns W406. An `add nohash prefetch item` line is reported rather
+    file's (`<sha1>.msi` from `ccsetup531.exe`) warns W406, and text the
+    prefetch syntax does not define (a stray token, `sha2:` for `sha256:`, an
+    unencoded space in the URL) is E403. An `add nohash prefetch item` line is reported rather
     than validated (W403) since it is hashless by definition -- on the old
     URL it is reported but not rewritten, since a hashed prefetch would
     change what the line does. --auto-fix-network, OFF by default, adds the

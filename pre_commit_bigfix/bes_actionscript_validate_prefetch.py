@@ -30,6 +30,12 @@ Checks:
           that still wants it optional can `--disable E401`.
     E402  a prefetch downloads the retired unzip-5.52.exe from the BigFix
           redist folder; unzip-6.0.exe is the current one. Auto-fixable.
+    E403  a prefetch line holds text its syntax does not define: a statement
+          allows only `prefetch <name>`, the `sha1:`/`sha256:`/`size:` fields
+          and the URL; a block item only `name=`/`sha1=`/`sha256=`/`size=`/
+          `url=`. The reference parser silently ignores the rest, so e.g. a
+          template's `vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe` validates
+          while the file is saved as `vs_SSMS.exe;`
     W400  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W402  a prefetch block item has no sha1; technically valid, but unusual
@@ -162,7 +168,7 @@ SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-prefetch"
 PREFETCH_MARKER = "prefetch-ok"
 
 KNOWN_CODES = frozenset(
-    ["E400", "E401", "E402", "W400", "W402", "W403", "W404", "W405", "W406"]
+    ["E400", "E401", "E402", "E403", "W400", "W402", "W403", "W404", "W405", "W406"]
 )
 
 # W406: a trailing `.` + 1-4 characters, at least one a letter, is taken as a
@@ -469,6 +475,35 @@ def validate_prefetch_line(line):
     return issues
 
 
+# E403: what a prefetch statement's fields after the name may be, and the
+# keys an `add prefetch item` may carry
+STATEMENT_FIELD_RE = re.compile(r"^(?:sha1|sha256|size):\S+$|://", re.IGNORECASE)
+ITEM_FIELD_RE = re.compile(r"^(?:name|sha1|sha256|size|url)=", re.IGNORECASE)
+# a trailing `// comment` after whitespace ends the line's syntax
+TRAILING_COMMENT_RE = re.compile(r"\s//.*$")
+ITEM_PREFIX_RE = re.compile(r"^\s*add\s+(?:nohash\s+)?prefetch\s+item\b", re.IGNORECASE)
+
+
+def stray_prefetch_tokens(line):
+    """E403: return the tokens of a prefetch line its syntax does not define.
+
+    A statement is `prefetch <name>` followed only by `sha1:`, `sha256:`,
+    `size:` fields and the URL; a block item only by `name=`, `sha1=`,
+    `sha256=`, `size=`, `url=`. The reference parser keeps what it
+    recognizes and silently ignores anything else -- so a template that
+    pastes extra text into the line (`vs_SSMS.exe; filename*=UTF-8''...`)
+    validates, and the file is saved under a name nothing else uses.
+    """
+    line = TRAILING_COMMENT_RE.sub("", line)  # a spaced `// comment` is valid
+    item = ITEM_PREFIX_RE.match(line)
+    if item:
+        return [
+            tok for tok in line[item.end() :].split() if not ITEM_FIELD_RE.match(tok)
+        ]
+    tokens = line.split()[2:]  # past `prefetch <name>`
+    return [tok for tok in tokens if not STATEMENT_FIELD_RE.search(tok)]
+
+
 def _extension(name):
     """Return `name`'s lowercased, alias-normalized extension, or None."""
     match = EXTENSION_RE.search(name)
@@ -526,6 +561,21 @@ def validate_actionscript(body):
                         "prefetch downloads the retired unzip-5.52.exe; "
                         f"{CURRENT_UNZIP['download_url']} is the current one"
                         f"{fixable}; add `{PREFETCH_MARKER}` if intentional"
+                    ),
+                )
+            )
+        stray = stray_prefetch_tokens(line)
+        if stray:
+            issues.append(
+                (
+                    lineno,
+                    "E403",
+                    (
+                        "prefetch line has text its syntax does not define ("
+                        + ", ".join(f"`{tok}`" for tok in stray)
+                        + "); it is silently ignored, and a stray token next "
+                        "to the name usually means the name itself is wrong; "
+                        f"add `{PREFETCH_MARKER}` if intentional"
                     ),
                 )
             )

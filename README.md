@@ -166,7 +166,11 @@ extension decides how the file is run or unpacked. An extension is a trailing
 `.` plus 1-4 characters including a letter; names or URLs without one, and
 server-side script URLs such as `download.php`, are not compared, and a URL
 that is the declared name with one more extension appended (`7z.dll.txt`, a
-way past web filtering) counts as a match. An
+way past web filtering) counts as a match. Text the prefetch syntax does not
+define is `E403` - a stray token (an AutoPkg template's
+`vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe`), a misspelt field (`sha2:`), an
+unencoded space splitting the URL - since the reference parser silently
+ignores it; a space-separated trailing `// comment` is fine. An
 `add nohash prefetch item` line is reported rather than validated (`W403`),
 since it is hashless by definition and its download cannot be verified.
 

@@ -782,3 +782,57 @@ def test_w406_marker_and_disable(tmp_path):
     assert "W406" in codes(issues_for(tmp_path, bes(body)))
     assert "W406" not in codes(issues_for(tmp_path, bes(body), disabled={"W406"}))
     assert issues_for(tmp_path, bes(body, marker=validator.PREFETCH_MARKER)) == []
+
+
+# --- E403: a token the prefetch syntax does not define -----------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # real server-export shape: an AutoPkg template pasted a
+        # Content-Disposition fragment into the name
+        f"prefetch vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe sha1:{SHA1} "
+        f"size:5693920 https://aka.ms/ssmsfullsetup sha256:{SHA256}",
+        f"prefetch a.exe sha1:{SHA1} size:10 {URL} extra sha256:{SHA256}",
+        f"add prefetch item name=a.exe sha1={SHA1} size=10 url={URL} "
+        f"sha256={SHA256} bogus=1",
+        f"add prefetch item name=a.exe sha1={SHA1} size=10 url={URL} "
+        f"sha256={SHA256} stray",
+    ],
+)
+def test_token_outside_the_prefetch_syntax_is_e403(line):
+    """The parser keeps what it recognises and ignores the rest, so a stray
+    token is silently dropped -- and in the name case, the file is saved.
+
+    under a name (`vs_SSMS.exe;`) nothing else in the script uses.
+    """
+    issues = validator.validate_actionscript(line)
+    assert "E403" in codes(issues)
+    assert validator.PREFETCH_MARKER in [m for _, c, m in issues if c == "E403"][0]
+
+
+def test_trailing_comment_on_a_prefetch_line_is_not_e403():
+    """A space-separated trailing `// comment` is valid ActionScript."""
+    line = f"prefetch a.exe sha1:{SHA1} size:10 {URL} sha256:{SHA256} // the installer"
+    assert "E403" not in codes(validator.validate_actionscript(line))
+
+
+def test_comment_glued_onto_the_hash_is_still_e403():
+    """`sha256:<hex>//note` -- no space, so the hash token itself is mangled."""
+    line = f"prefetch a.exe sha1:{SHA1} size:10 {URL} sha256:{SHA256}//Identify the dir"
+    assert "E403" in codes(validator.validate_actionscript(line))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        GOOD_STATEMENT,
+        GOOD_BLOCK_ITEM,
+        f"prefetch a.exe size:10 {URL} sha256:{SHA256}",  # sha1-less statement
+        f"add nohash prefetch item name=a.exe size=10 url={URL}",
+        f"prefetch a.exe sha1:{SHA1} size:10 SWDProtocol://127.0.0.1:52311/x sha256:{SHA256}",
+    ],
+)
+def test_well_formed_prefetch_is_not_e403(line):
+    assert "E403" not in codes(validator.validate_actionscript(line))
