@@ -119,7 +119,8 @@ Checks:
     W504  the deprecated `dos` verb; use `waithidden cmd.exe /c ...` instead
     W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (cmd.exe
           opens a shell and never runs the command), or uses `/k` instead (the
-          command runs but the shell never exits, so the action hangs)
+          command runs but the shell never exits, so an action that waits for it
+          hangs -- `run`/`runhidden` do not wait, so `/k` there is fine)
     W506  a `move`/`copy` (of any source: a scratch file, a download, ...)
           onto a destination that is not cleared earlier in the body -- by a
           `delete` (also one that looks the same file up by relevance), a
@@ -1611,18 +1612,21 @@ def _check_command_shapes(lines):
                 if _CMD_RUN_SWITCH_RE.search(arguments):
                     pass  # /c (with or without /k alongside it) runs and exits
                 elif _CMD_PERSIST_SWITCH_RE.search(arguments):
-                    issues.append(
-                        (
-                            lineno,
-                            "W505",
+                    if match.group(1).lower().startswith("run"):
+                        pass  # `run` does not wait, so /k cannot hang it
+                    else:
+                        issues.append(
                             (
-                                "`cmd.exe` is run with `/k`, which leaves the "
-                                "shell open after the command finishes, so the "
-                                f"action never completes; use `/c`; add "
-                                f"`{CMD_MARKER}` if intentional"
-                            ),
+                                lineno,
+                                "W505",
+                                (
+                                    "`cmd.exe` is run with `/k`, which leaves the "
+                                    "shell open after the command finishes, so the "
+                                    f"action never completes; use `/c`; add "
+                                    f"`{CMD_MARKER}` if intentional"
+                                ),
+                            )
                         )
-                    )
                 else:
                     issues.append(
                         (

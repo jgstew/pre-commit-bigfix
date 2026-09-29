@@ -2511,3 +2511,28 @@ def test_overwriting_redirect_after_a_redirect_is_still_e512():
         "wait cmd /c type __Download\\out.txt"
     )
     assert "E512" in codes(validator.check_actionscript(body))
+
+
+# --- W505: `/k` only hangs an action that waits for the shell -------------------
+
+
+@pytest.mark.parametrize("verb", ["run", "runhidden"])
+def test_cmd_k_under_run_does_not_hang_the_action(verb):
+    """`run` launches and moves on, so a shell left open by `/k` cannot keep
+    the action from completing (real server-export shape: an interactive.
+
+    shell opened for the current user).
+    """
+    body = f'{verb} CMD /K CD "C:\\Users\\Public"'
+    assert "W505" not in codes(validator.check_actionscript(body))
+
+
+@pytest.mark.parametrize("verb", ["wait", "waithidden"])
+def test_cmd_k_under_wait_is_still_w505(verb):
+    body = f'{verb} CMD /K CD "C:\\Users\\Public"'
+    assert codes(validator.check_actionscript(body)) == ["W505"]
+
+
+def test_cmd_without_c_under_run_is_still_w505():
+    """Without /c the command is never run at all, whatever the verb."""
+    assert codes(validator.check_actionscript("run cmd.exe dir")) == ["W505"]
