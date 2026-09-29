@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+Found by a false-positive/false-negative sweep of a BigFix server export
+(2,987 `.bes` files), each change compared before/after against it,
+bigfix/CommunityContent and jgstew/bigfix-content.
+
+### Added (server-export sweep)
+
+- **`bes-conventions-check` `W221`**: a Relevance that is true *until* a
+  client setting has value V (`not exists settings "N" whose ("V" = value of
+  it) of client`, or `value of setting "N" of client != "V"`) while the
+  action sets N to something else, so the content stays relevant after it
+  runs. Branches waiting for several values are fine when the action sets
+  one of them. Marker: `setting-value-ok`.
+- **`bes-actionscript-validate-prefetch` `E403`**: text the prefetch syntax
+  doesn't define. That includes a stray token (an AutoPkg template's
+  `vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe`), a misspelt field (`sha2:`),
+  and an unencoded space splitting the URL. The reference parser silently
+  drops such text. A space-separated trailing `// comment` is allowed.
+
+### Changed (server-export sweep)
+
+- **`bes-conventions-check` `E212`/`W212`** also catch a top-level
+  `true OR ...` (always true) or `false AND ...` (always false), e.g. a test hack
+  left on a destructive BitLocker task.
+
+### Fixed (server-export sweep)
+
+- **`bes-actionscript-lint-schclass` `E301`**: an escaped `{{` (or `}}`
+  inside a substitution) was reported as an unclosed substitution. The two
+  ActionScript hooks now apply the same escape rule.
+- **`bes-conventions-check` `W220`**: a prefetch mirror (same hashes and
+  size, another URL) is counted once.
+- **`bes-actionscript-validate-script` `E512`**: a `>>` append to an existing
+  `__Download` file is not a second declaration.
+- **`bes-actionscript-validate-script` `W505`**: `/k` is only flagged under a
+  verb that waits (`wait`/`waithidden`), not `run`/`runhidden`.
+
 Found by a false-negative sweep of every hook over
 [bigfix/CommunityContent](https://github.com/bigfix/CommunityContent) and
 jgstew/bigfix-content, each change compared before/after against both.
