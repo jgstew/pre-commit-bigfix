@@ -2147,3 +2147,68 @@ def test_e221_main_exit_code_after_autofix(tmp_path, capsys):
     path = write(tmp_path, "x.bes", content)
     rc = checker.main([path])
     assert rc == 1
+
+
+# --- W219 SourceReleaseDate later than x-fixlet-modification-time ----------
+
+
+@pytest.mark.parametrize(
+    "srd, modtime",
+    [
+        # real bigfix-content shape: metadata copied from an older file
+        ("2018-10-24", "Mon, 07 Dec 2015 19:38:53 +0000"),
+        ("2026-07-15", "Tue, 14 Jul 2026 18:32:35 +0000"),
+    ],
+)
+def test_w219_release_date_after_modification_time(tmp_path, srd, modtime):
+    """A file cannot be released after it was last modified; the dates
+    disagreeing is a sign of a hand edit that missed a field.
+    """
+    got = codes(tmp_path, task(srd=srd, modtime=modtime))
+    assert "W219" in got
+
+
+@pytest.mark.parametrize(
+    "srd, modtime",
+    [
+        ("2026-07-14", "Tue, 14 Jul 2026 18:32:35 +0000"),  # same day
+        ("2015-12-07", "Tue, 14 Jul 2026 18:32:35 +0000"),  # released earlier
+        # 23:30 at -0500 is already the 15th in UTC: either date may be meant
+        ("2026-07-15", "Tue, 14 Jul 2026 23:30:00 -0500"),
+        ("2026-99-99", "Tue, 14 Jul 2026 18:32:35 +0000"),  # E201's business
+        ("2026-07-15", "not a date"),  # E202's business
+        (None, "Tue, 14 Jul 2026 18:32:35 +0000"),
+        ("2026-07-15", None),
+        ("", "Tue, 14 Jul 2026 18:32:35 +0000"),
+    ],
+)
+def test_w219_not_flagged(tmp_path, srd, modtime):
+    assert "W219" not in codes(tmp_path, task(srd=srd, modtime=modtime))
+
+
+def test_w202_fix_uses_the_existing_modification_date_not_today(tmp_path):
+    """Filling a missing SourceReleaseDate with today on old content made it
+    later than the modification time -- the fixer's own W219.
+
+    It now uses
+    the date of the modification time the content already carries.
+    """
+    content = task(srd=None, modtime="Sat, 12 May 2012 00:55:27 +0000")
+    out, fixed = autofix(tmp_path, content)
+    assert "<SourceReleaseDate>2012-05-12</SourceReleaseDate>" in out
+    assert any(code == "W202" for _, code, _ in fixed)
+    assert "W219" not in codes(tmp_path, out, name="after.bes")
+
+
+def test_w202_fix_uses_today_when_there_is_no_modification_time(tmp_path):
+    out, _fixed = autofix(tmp_path, task(srd=None, modtime=None))
+    assert "<SourceReleaseDate>2026-07-14</SourceReleaseDate>" in out
+
+
+def test_w219_marker_opts_out(tmp_path):
+    content = task(
+        srd="2018-10-24",
+        modtime="Mon, 07 Dec 2015 19:38:53 +0000",
+        marker="source-release-date-ok",
+    )
+    assert "W219" not in codes(tmp_path, content)

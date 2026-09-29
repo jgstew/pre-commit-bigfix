@@ -55,7 +55,8 @@ SourceSeverity vocabulary (default Low/Moderate/Important/High/Critical,
 overridable with `--severity-values`; `Unspecified` is auto-fixed to empty), description placeholders / empty
 descriptions, a Description `<script>` block free of `//` line comments
 (lost when the file is converted to FXF, since Description newlines are
-collapsed), and Task/Fixlet release-date / modification-time presence.
+collapsed), and Task/Fixlet release-date / modification-time presence and order
+(a SourceReleaseDate later than the modification time warns `W219`).
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`

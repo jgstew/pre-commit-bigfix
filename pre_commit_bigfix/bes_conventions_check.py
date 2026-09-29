@@ -122,6 +122,11 @@ Checks:
           always where a generator substituted an empty product name (e.g.
           "<PostLink> to deploy  v11.3.2.</PostLink>"). Not auto-fixed: the
           missing word is what needs restoring, not the space
+    W219  a <SourceReleaseDate> later than the x-fixlet-modification-time:
+          content cannot be released after it was last modified, so one of
+          the two was likely missed in a hand edit or copied from another
+          file (compared with the later of the timestamp's local and UTC
+          dates, so a late-evening edit is not flagged)
 
 Timestamp fields (E202, E216): x-fixlet-modification-time and
 x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
@@ -212,7 +217,7 @@ A file can opt out of all checks with an XML comment anywhere in it:
 or out of a single check family with the matching marker (also anywhere in the
 file, e.g. in an XML comment):
     mimetype-ok             (E200)
-    source-release-date-ok  (E201 and W202)
+    source-release-date-ok  (E201, W202, and W219)
     modification-time-ok     (E202 and W201)
     first-propagation-ok    (E216)
     download-size-ok        (E203 and W203)
@@ -272,7 +277,7 @@ SKIP_MARKER = "pre-commit-skip: bes-conventions-check"
 
 # per-check opt-out markers (matched anywhere in the file text)
 MIMETYPE_MARKER = "mimetype-ok"  # E200
-SOURCE_RELEASE_DATE_MARKER = "source-release-date-ok"  # E201, W202
+SOURCE_RELEASE_DATE_MARKER = "source-release-date-ok"  # E201, W202, W219
 MODIFICATION_TIME_MARKER = "modification-time-ok"  # E202, W201
 FIRST_PROPAGATION_MARKER = "first-propagation-ok"  # E216
 DOWNLOAD_SIZE_MARKER = "download-size-ok"  # E203, W203
@@ -591,6 +596,7 @@ KNOWN_CODES = frozenset(
         "E210",  # duplicate MIMEField Name within one content object
         "E220",  # duplicate Analysis <Property> Name or ID
         "W218",  # action link text has a run of 2+ spaces
+        "W219",  # SourceReleaseDate later than x-fixlet-modification-time
         "E211",  # Title is a default placeholder value
         "E212",  # Relevance is the literal `true`
         "E213",  # Relevance is empty / whitespace only
@@ -692,7 +698,12 @@ def _valid_source_release_date(value):
 
 
 def _valid_timestamp(value):
-    """True if `value` is a valid RFC 5322 date-time (E202 / E216).
+    """True if `value` is a valid RFC 5322 date-time (E202 / E216)."""
+    return _parse_timestamp(value) is not None
+
+
+def _parse_timestamp(value):
+    """Return `value` as an aware datetime if it is a valid RFC 5322 date-time.
 
     `Tue, 14 Jul 2026 18:32:35 +0000` and `14 Jul 2026 18:32:35 +0000` (no
     day-of-week) are both valid; `Fri, 14 Jul 2026 18:32:35 +0000` is not,
@@ -701,12 +712,12 @@ def _valid_timestamp(value):
     """
     match = TIMESTAMP_RE.match(value)
     if not match:
-        return False
+        return None
     if match.group("mon") not in MONTHS:
-        return False
+        return None
     dow = match.group("dow")
     if dow is not None and dow not in WEEKDAYS:
-        return False
+        return None
     try:
         # Parsed from `rest` (the day-of-week, if any, already matched and
         # verified above) so a correctly-spelled but wrong-for-the-date
@@ -716,8 +727,10 @@ def _valid_timestamp(value):
         # "must represent a valid offset" requirement.
         parsed = datetime.strptime(match.group("rest"), "%d %b %Y %H:%M:%S %z")
     except ValueError:
-        return False
-    return not (dow is not None and WEEKDAY_ABBREVS[parsed.weekday()] != dow)
+        return None
+    if dow is not None and WEEKDAY_ABBREVS[parsed.weekday()] != dow:
+        return None
+    return parsed
 
 
 def _valid_cpe23(value):
@@ -841,6 +854,41 @@ def check_modification_time_format(src):
                 )
             )
     return issues
+
+
+def check_release_after_modification(src):
+    """W219: <SourceReleaseDate> is later than x-fixlet-modification-time.
+
+    Content cannot be released after it was last modified, so the two
+    disagreeing is a sign the file was hand-edited or its metadata copied
+    from another file with a field missed. Only two valid values are compared
+    (malformed ones are E201/E202's). SourceReleaseDate has no time zone, so
+    it is compared with the later of the modification time's local and UTC
+    dates -- a late-evening timestamp is never flagged for a next-day date.
+    """
+    srd_match = SRD_RE.search(src)
+    mod_match = MODTIME_VALUE_RE.search(src)
+    if not srd_match or not mod_match:
+        return []
+    srd = _strip_cdata(srd_match.group(1))
+    modified = _parse_timestamp(_strip_cdata(mod_match.group(1)))
+    if not srd or not _valid_source_release_date(srd) or modified is None:
+        return []
+    latest = max(modified.date(), modified.astimezone(timezone.utc).date())
+    if date.fromisoformat(srd) <= latest:
+        return []
+    return [
+        (
+            _lineno(src, srd_match.start()),
+            "W219",
+            (
+                f"SourceReleaseDate {srd} is later than x-fixlet-modification-time "
+                f"{_strip_cdata(mod_match.group(1))}; one of them was likely "
+                "missed in an edit; add "
+                f"`{SOURCE_RELEASE_DATE_MARKER}` if intentional"
+            ),
+        )
+    ]
 
 
 def check_first_propagation_format(src):
@@ -1861,6 +1909,7 @@ VALUE_CHECKS = (
     (("E200",), MIMETYPE_MARKER, check_action_mimetypes),
     (("E201",), SOURCE_RELEASE_DATE_MARKER, check_source_release_date_format),
     (("E202",), MODIFICATION_TIME_MARKER, check_modification_time_format),
+    (("W219",), SOURCE_RELEASE_DATE_MARKER, check_release_after_modification),
     (("E216",), FIRST_PROPAGATION_MARKER, check_first_propagation_format),
     (("E203",), DOWNLOAD_SIZE_MARKER, check_download_size_value),
     (("E205",), CPE_MARKER, check_cpe23),
@@ -2329,7 +2378,10 @@ def _insert_ordered(inner, new_text, anchors):
 def fix_missing_dates(src, now=None, fix_srd=True, fix_modtime=True):
     """W201/W202: insert a missing SourceReleaseDate / modification time.
 
-    Values use the moment the linter ran. Insertion positions keep the BES.xsd
+    Values use the moment the linter ran -- except that a SourceReleaseDate
+    inserted into content that already carries a valid modification time
+    takes that timestamp's date, so the fix never makes the release date
+    later than the last modification (W219). Insertion positions keep the BES.xsd
     element ordering (SourceReleaseDate in the metadata block; the modification
     time MIMEField before <Domain>). `fix_srd` / `fix_modtime` gate each insert
     independently so a single per-field opt-out marker only suppresses its own.
@@ -2343,12 +2395,17 @@ def fix_missing_dates(src, now=None, fix_srd=True, fix_modtime=True):
         indent = _detect_indent(inner)
         lineno = _lineno(src, match.start())
         if fix_srd and "<SourceReleaseDate" not in inner:
+            release = date_now
+            existing = MODTIME_VALUE_RE.search(inner)
+            modified = existing and _parse_timestamp(_strip_cdata(existing.group(1)))
+            if modified:
+                release = modified.date().isoformat()
             inner = _insert_ordered(
                 inner,
-                f"{indent}<SourceReleaseDate>{date_now}</SourceReleaseDate>\n",
+                f"{indent}<SourceReleaseDate>{release}</SourceReleaseDate>\n",
                 SRD_ANCHORS,
             )
-            fixed.append((lineno, "W202", f"inserted SourceReleaseDate {date_now}"))
+            fixed.append((lineno, "W202", f"inserted SourceReleaseDate {release}"))
         if fix_modtime and MODIFICATION_TIME_NAME not in inner:
             block = (
                 f"{indent}<MIMEField>\n"
