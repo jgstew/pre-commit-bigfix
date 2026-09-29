@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+Found by a false-negative sweep of every hook over
+[bigfix/CommunityContent](https://github.com/bigfix/CommunityContent) and
+jgstew/bigfix-content, each change compared before/after against both.
+
+### Added
+
+- **`bes-actionscript-validate-script` `E525`**: a `folder create` /
+  `folder delete` path that is not double-quoted. It's required even when
+  today's value has no spaces, because a user profile or parameter value can
+  contain one. Auto-fixed by wrapping the path in quotes (`&quot;` in an
+  entity-escaped body).
+- **`bes-actionscript-validate-script` `W508`**: a `parameter "X"` whose
+  name occurs nowhere else in the whole file: not assigned, not queried,
+  not in a Description form. This is almost always copy-paste from a sibling
+  fixlet, and the substitution fails at runtime. The platform-supplied
+  `action issue date` is exempt.
+- **`bes-conventions-check` `W219`**: a `<SourceReleaseDate>` later than the
+  `x-fixlet-modification-time`, which is a sign of a hand edit that missed a
+  field.
+- **`bes-conventions-check` `W220`**: a `<DownloadSize>` that doesn't match
+  the total of the prefetch sizes. Only checked when that total is knowable:
+  a single prefetching action, no conditional prefetch, literal sizes, and no
+  dynamic `download`. The `unzip.exe` utility may be left out.
+
+### Changed
+
+- **`bes-actionscript-validate-script` `W506`** now covers a `move`/`copy` of
+  *any* source (a download, a file, a scratch file) onto an undeleted
+  destination, and is **auto-fixed** by inserting `delete <destination>`
+  before the command. More kinds of clearing are recognized: a `delete` that
+  looks the same file up by relevance, a `folder delete` of a substituted
+  ancestor, and a shell `rm`/`del` naming the path.
+- **`bes-actionscript-validate-script` `E508`** now also checks
+  `createfile until` content for an unclosed `{`. The agent substitutes
+  relevance there too, so a literal brace must be written `{{`.
+- **`bes-conventions-check` `W202`** auto-fix: a missing SourceReleaseDate is
+  now filled with the date of the content's existing modification time
+  instead of today, so the fix no longer makes it later than the
+  modification time (`W219`).
+
+### Fixed
+
+- **`bes-actionscript-validate-script`**: a trailing `// comment` on an
+  `if`/`elseif`/`else`/`endif`, `begin`/`end prefetch block` or `override`
+  line is now ignored. Before, `endif // ...` wasn't recognized as an endif,
+  causing 23 cascading `E500`s in CommunityContent, and `else // ...` was read
+  as a command. Command lines are unchanged, since `cscript //Nologo` uses
+  `//` for its own options.
+- **`bes-conventions-check` `E212`/`W212`** now see a literal `true`/`false`
+  behind a `/* ... */` comment or wrapping parentheses (e.g.
+  `true /* not exists settings ... */`).
+
 ### Changed
 
 `bes-relevance-lint` picks up one more rule added in `bigfix-relevance-analyzer`
