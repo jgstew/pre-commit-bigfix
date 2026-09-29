@@ -526,6 +526,38 @@ _UNBALANCED_STRING_MESSAGE = (
 )
 
 
+def _mask_brace_escapes(line):
+    """Blank out ActionScript's literal-brace escapes, keeping every column.
+
+    `{{` outside a substitution is a literal `{`, and `}}` inside one is a
+    literal `}`; the display grammar knows neither, so a `{{` would start a
+    substitution that never closes (a false E301). Quoted relevance strings
+    inside a substitution are skipped so their braces are left alone.
+    """
+    chars, depth, quoted, index = list(line), 0, False, 0
+    while index < len(line):
+        char = line[index]
+        if depth and char == '"':
+            quoted = not quoted
+        elif (
+            not quoted
+            and not depth
+            and line.startswith("{{", index)
+            or not quoted
+            and depth
+            and line.startswith("}}", index)
+        ):
+            chars[index] = chars[index + 1] = " "
+            index += 2
+            continue
+        elif not quoted and char == "{":
+            depth += 1
+        elif not quoted and char == "}" and depth:
+            depth -= 1
+        index += 1
+    return "".join(chars)
+
+
 def lint_actionscript(body, tokenizer=None):
     """Lint one ActionScript body; return sorted [(lineno, code, message)].
 
@@ -541,7 +573,9 @@ def lint_actionscript(body, tokenizer=None):
         for lineno, (raw, now) in enumerate(zip(lines, masked_lines), start=1)
         if raw != now
     }
-    tokens, _errors = tokenizer.tokenize("\n".join(masked_lines))
+    tokens, _errors = tokenizer.tokenize(
+        "\n".join(_mask_brace_escapes(line) for line in masked_lines)
+    )
     # everything after `appendfile` is one line of raw file content (a batch
     # file, a VBScript, JSON...), so its quotes are not ActionScript strings
     appendfile_lines = {

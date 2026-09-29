@@ -674,3 +674,30 @@ def test_repo_example_files_lint_clean():
     issues, fixed = linter.check_file("tests/examples/example-test.bes")
     assert fixed == []
     assert [code for _l, code, _m in issues if code.startswith("E")] == []
+
+
+# --- E301: `{{` / `}}` are literal-brace escapes, not substitution bounds ------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "appendfile preserve_BES_symlinks() {{",  # real export shape
+        "wait cmd /c echo a {{ b",
+        "appendfile }",  # a lone `}` is literal
+        'wait cmd /c echo {{"k":"v"}',  # escaped JSON brace, then a literal }
+        'wait cmd /c echo {"a" & "}}" & "b"}',  # `}}` inside a substitution
+    ],
+)
+def test_escaped_braces_are_not_an_unclosed_substitution(line):
+    assert "E301" not in [code for _, code, _ in linter.lint_actionscript(line + "\n")]
+
+
+def test_real_unclosed_substitution_is_still_e301():
+    issues = linter.lint_actionscript("wait cmd /c echo {name of computer\n")
+    assert [code for _, code, _ in issues] == ["E301"]
+
+
+def test_unclosed_substitution_after_an_escape_is_still_e301():
+    issues = linter.lint_actionscript("wait cmd /c echo {{ {name of computer\n")
+    assert [code for _, code, _ in issues] == ["E301"]
