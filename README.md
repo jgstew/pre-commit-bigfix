@@ -347,7 +347,9 @@ these are console-time prompts and belong at the top.
 `--auto-fix` (`W503`, `W506`), on by default when files are given (as
 pre-commit does) and off when auto-discovering, rewrites every wrong-case
 `__download`/`__createfile`/`__appendfile` reference to its canonical
-spelling and inserts a `delete <destination>` before each `W506` move/copy,
+spelling, inserts a `delete <destination>` before each `W506` move/copy, and
+quotes each unquoted `folder create`/`folder delete` path (`E525` - quoted even
+when today's value has no spaces, since a user profile or parameter can),
 in place; an auto-fixed file fails the hook so the change is reviewed and
 re-staged. No other check here has an auto-fix: a hook has no
 way to know where a missing `endif` or `end prefetch block` was meant to go,
@@ -373,7 +375,7 @@ its `E301`, so one marker covers both hooks),
 `actionscript-download-ok` (`E512`, `W507`), `actionscript-parameter-ok`
 (`E516`, `E517`, `W508`), `actionscript-scratch-ok` (`E519`, `W503`),
 `actionscript-scratch-dest-ok` (`W506`),
-`actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `W504`),
+`actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `E525`, `W504`),
 `actionscript-cmd-ok` (`W505`),
 `actionscript-override-ok` (`E522` - shared with
 `bes-actionscript-lint-schclass`'s `E303`), `actionscript-unreachable-ok`

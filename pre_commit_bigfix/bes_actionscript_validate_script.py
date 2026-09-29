@@ -96,6 +96,12 @@ Checks:
           express
     E523  an `action uses wow64 redirection` argument that is not `true`,
           `false`, or a `{...}` relevance substitution
+    E525  a `folder create` / `folder delete` path that is not double-quoted.
+          Quoted even when today's value has no spaces: a user profile, a
+          parameter, or a relevance result can hold one, and then the
+          command acts on the wrong path (fixable -> the path is wrapped in
+          quotes, `&quot;` in an entity-escaped body; a path already holding
+          a stray `"` is reported but not fixed)
     E524  `else if` (two words) instead of `elseif`: the agent does not read
           it as a chained branch. It is tracked as the `elseif` it was meant
           to be, so the rest of the if/endif pairing does not cascade
@@ -158,15 +164,16 @@ structure (an `endif`, an `end prefetch block`, ...) a hook has no way to
 know the right place for, and guessing could silently change what the action
 does.
 
---auto-fix (W503, W506), on by default (yes when files are given, as
+--auto-fix (W503, W506, E525), on by default (yes when files are given, as
 pre-commit does; no when auto-discovering). Every wrong-case `__download`,
 `__createfile`, or `__appendfile` reference is rewritten in place to its
 canonical spelling -- purely a case correction of a reference this hook
 already resolved to a known scratch-file token, so there is nothing to
 guess -- and a `delete <destination>` line (same indentation, same XML
 escaping as the body) is inserted before each W506 move/copy, the
-documented pattern. An auto-fixed file fails the hook so the change is
-reviewed and re-staged.
+documented pattern -- and an unquoted `folder create|delete` path is
+wrapped in quotes (E525). An auto-fixed file fails the hook so the change
+is reviewed and re-staged.
 
 Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (matched case-insensitively; a mixed-case MIMEType is still valid BigFix
@@ -201,7 +208,7 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-parameter-ok      (E516, E517, W508)
     actionscript-scratch-ok        (E519, W503)
     actionscript-scratch-dest-ok   (W506)
-    actionscript-command-shape-ok  (E520, E521, E523, W504)
+    actionscript-command-shape-ok  (E520, E521, E523, E525, W504)
     actionscript-cmd-ok            (W505)
     actionscript-override-ok       (E522 -- shared with bes-actionscript-lint-schclass's E303)
     actionscript-unreachable-ok    (W501)
@@ -261,7 +268,7 @@ PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, 
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, W507
 PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517, W508
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
-COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, W504
+COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, E525, W504
 CMD_MARKER = "actionscript-cmd-ok"  # W505
 SCRATCH_DEST_MARKER = "actionscript-scratch-dest-ok"  # W506
 # shared with the sibling schclass hook's E303 on purpose: one marker turns
@@ -295,6 +302,7 @@ CHECK_MARKERS = {
     "E522": OVERRIDE_BLOCK_MARKER,
     "E523": COMMAND_SHAPE_MARKER,
     "E524": IF_MARKER,
+    "E525": COMMAND_SHAPE_MARKER,
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
     "W503": SCRATCH_MARKER,
@@ -331,6 +339,7 @@ KNOWN_CODES = frozenset(
         "E522",
         "E523",
         "E524",
+        "E525",
         "W500",
         "W501",
         "W502",
@@ -396,6 +405,15 @@ _DOWNLOAD_REF_NESTED_RE = re.compile(
 )
 # `folder create "__Download\<dir>"` makes a subfolder later lines fill
 _FOLDER_CREATE_RE = re.compile(r"^folder\s+create\b", re.IGNORECASE)
+# `folder create|delete <path>`: the path is captured for the E525 quoting check
+_FOLDER_COMMAND_RE = re.compile(
+    r"^(folder\s+(?:create|delete))\s+(\S.*?)\s*$", re.IGNORECASE
+)
+# the same command inside a raw file line, stopping before a CDATA/tag close
+_RAW_FOLDER_COMMAND_RE = re.compile(
+    r"(folder\s+(?:create|delete)\s+)(.*?)(\s*(?:\]\]>|</ActionScript>|$))",
+    re.IGNORECASE,
+)
 # a launching verb whose program is an archive extractor; run against
 # `__Download` it writes files the script never names, like `extract` does.
 # The executable is matched by basename, bare or quoted inside a relevance
@@ -1408,6 +1426,50 @@ def fix_scratch_destinations(src, targets):
     return "\n".join(lines), sorted(fixed)
 
 
+def _folder_quote_targets(raw, src, is_bes):
+    """Yield the file line of every fixable E525 `folder create|delete`."""
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return
+    else:
+        bodies = [(1, src)]
+    for sourceline, body in bodies:
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        for index, _command, _path, fixable in _unquoted_folder_paths(masked_lines):
+            if fixable:
+                yield sourceline + index
+
+
+def fix_folder_quoting(src, targets):
+    """E525: wrap each unquoted `folder create|delete` path in double quotes.
+
+    The quote is `&quot;` when the line is entity-escaped that way, else a
+    literal `"` (valid both in CDATA and in plain element text). Returns
+    (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    for lineno in sorted(set(targets)):
+        if not 1 <= lineno <= len(lines):
+            continue
+        raw_line = lines[lineno - 1]
+        quote = "&quot;" if "&quot;" in raw_line else '"'
+        match = _RAW_FOLDER_COMMAND_RE.search(raw_line)
+        if not match or not match.group(2) or match.group(2).startswith(quote):
+            continue
+        lines[lineno - 1] = (
+            raw_line[: match.start(2)]
+            + quote
+            + match.group(2)
+            + quote
+            + raw_line[match.end(2) :]
+        )
+        fixed.append((lineno, "E525", f"quoted the {match.group(1).strip()} path"))
+    return "\n".join(lines), fixed
+
+
 def _replace_on_line(lines, lineno, text, replacement):
     """Substitute one `text` on 1-based `lineno` of `lines`; say whether it landed.
 
@@ -1765,6 +1827,59 @@ def _ignore_structural_comments(lines):
     return result
 
 
+def _has_quote_outside_braces(text):
+    """True if `text` has a `"` outside any `{...}` substitution."""
+    depth = 0
+    for char in text:
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+        elif char == '"' and not depth:
+            return True
+    return False
+
+
+def _unquoted_folder_paths(lines):
+    """Yield (index, command, path, fixable) for each E525 target in `lines`.
+
+    `fixable` is False when the path already holds a `"` outside a
+    substitution (`C:\\x\\"`): where the quotes were meant to go is unknowable.
+    """
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        match = _FOLDER_COMMAND_RE.match(stripped)
+        if not match or match.group(2).startswith('"'):
+            continue
+        path = match.group(2)
+        yield index, match.group(1).lower(), path, not _has_quote_outside_braces(path)
+
+
+def _check_folder_quoting(lines):
+    """E525: a `folder create`/`folder delete` path that is not quoted.
+
+    Quoted even when today's value has no spaces: a user profile, a
+    parameter, or a relevance result can contain one, and then the command
+    silently acts on the wrong path.
+    """
+    return [
+        (
+            index + 1,
+            "E525",
+            (
+                f"`{' '.join(command.split())}` path is not double-quoted; a "
+                "path with a space (a user profile, a parameter value) breaks "
+                f'it -- write `{" ".join(command.split())} "{path}"`'
+                f"{' (auto-fixable)' if fixable else ''}; add "
+                f"`{COMMAND_SHAPE_MARKER}` if intentional"
+            ),
+        )
+        for index, command, path, fixable in _unquoted_folder_paths(lines)
+    ]
+
+
 def _check_heredoc_braces(raw_lines, masked_lines):
     """E508 for a `{` left open on a `createfile until` content line.
 
@@ -1825,6 +1940,7 @@ def check_actionscript(body, first_line=1):
     issues.extend(_check_command_shapes(lines))  # E520 / E521 / E523 / W504 / W505
     issues.extend(_check_condition_shapes(lines))  # E518
     issues.extend(_check_override_blocks(lines, first_line))  # E522
+    issues.extend(_check_folder_quoting(lines))  # E525
     if_stack = []  # each entry: [lineno, seen_else]
     prefetch_stack = []  # each entry: [lineno, if_depth_at_open]
     preamble_over = False  # True once anything a prefetch block may not follow
@@ -2259,6 +2375,12 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
         )
         fixed += got
         raw = _encode(src, was_crlf)
+    if auto_fix and "E525" not in disabled and COMMAND_SHAPE_MARKER not in src:
+        src, got = fix_folder_quoting(
+            src, list(_folder_quote_targets(raw, src, is_bes))
+        )
+        fixed += got
+        raw = _encode(src, was_crlf)
     if raw != original:
         with open(path, "wb") as handle:
             handle.write(raw)
@@ -2349,7 +2471,8 @@ def main(argv=None):
         help=(
             "rewrite wrong-case __download/__createfile/__appendfile "
             "references (W503) to their canonical spelling and insert a "
-            "`delete` before each uncleared move/copy (W506), in place "
+            "`delete` before each uncleared move/copy (W506) and quote "
+            "folder create/delete paths (E525), in place "
             "(default: yes when files are given, no when auto-discovering)"
         ),
     )

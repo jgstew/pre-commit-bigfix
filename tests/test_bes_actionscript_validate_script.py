@@ -685,7 +685,7 @@ def test_delete_of_a_download_is_cleanup_not_consumption():
     """`delete __Download\\x` before downloading x is normal hygiene."""
     body = (
         "delete __Download\\document\n"
-        "folder delete __Download\\stage\n"
+        'folder delete "__Download\\stage"\n'
         "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
         "wait __Download\\a.exe"
     )
@@ -1575,7 +1575,7 @@ def test_quoted_delete_matches_an_unquoted_destination():
 def test_folder_delete_of_the_parent_clears_the_destination():
     """`folder delete` of an ancestor removes anything beneath it."""
     body = (
-        "folder delete __Local/Upgrade\n"
+        'folder delete "__Local/Upgrade"\n'
         "appendfile #!/bin/sh\n"
         "move __appendfile __Local/Upgrade/besclientupgrade"
     )
@@ -2419,3 +2419,73 @@ def test_parameter_marker_silences_w508(tmp_path):
         'wait echo {parameter "JREFolder"}', marker=validator.PARAMETER_MARKER
     )
     assert issues_for(tmp_path, content) == []
+
+
+# --- E525: folder create / folder delete path must be quoted ---------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'folder create {parameter "CurrentUserTempFolder"}',
+        "folder delete C:\\Windows\\Temp\\LGPO_30",
+        "folder create /tmp/_BigFix/Icons",
+        'Folder Create { parameter "target_folder" }',
+    ],
+)
+def test_unquoted_folder_path_is_e525(line):
+    """Quote the path even when today's value has no spaces: a user
+    profile or parameter value can, and then the command breaks.
+    """
+    issues = validator.check_actionscript(line)
+    assert codes(issues) == ["E525"]
+    assert validator.COMMAND_SHAPE_MARKER in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'folder create "C:\\ProgramData\\BigFix"',
+        'folder delete "{parameter "baseFolder"}"',
+        "folder create",  # no argument: not this rule's business
+    ],
+)
+def test_quoted_folder_path_is_not_e525(line):
+    assert "E525" not in codes(validator.check_actionscript(line))
+
+
+def test_command_shape_marker_silences_e525(tmp_path):
+    content = bes("folder create /tmp/x", marker=validator.COMMAND_SHAPE_MARKER)
+    assert "E525" not in codes(issues_for(tmp_path, content))
+
+
+def test_e525_auto_fix_quotes_the_path(tmp_path):
+    body = 'wait x\n  folder create {parameter "Dir"}\nfolder delete /tmp/a b'
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert "E525" not in codes(issues)
+    assert codes(fixed) == ["E525", "E525"]
+    [text] = _action_texts(path)
+    assert (
+        text == 'wait x\n  folder create "{parameter "Dir"}"\nfolder delete "/tmp/a b"'
+    )
+
+
+def test_e525_auto_fix_in_an_entity_escaped_body(tmp_path):
+    content = bes("x").replace(
+        "<![CDATA[x]]>", "\nfolder create {parameter &quot;Dir&quot;}\n"
+    )
+    path = write(tmp_path, "x.bes", content)
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["E525"]
+    assert (
+        "folder create &quot;{parameter &quot;Dir&quot;}&quot;"
+        in open(path, encoding="utf-8").read()
+    )
+
+
+def test_e525_with_a_stray_quote_is_reported_but_not_fixed(tmp_path):
+    """`C:\\x\\"` -- where the quotes were meant to go cannot be told."""
+    path = write(tmp_path, "x.bes", bes('folder create C:\\x\\"'))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert "E525" in codes(issues) and "E525" not in codes(fixed)

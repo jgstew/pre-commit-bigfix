@@ -234,7 +234,8 @@
     fail the hook. --auto-fix (W503, W506), on by default when files are given
     (as pre-commit does) and off when auto-discovering, rewrites every
     wrong-case scratch reference to its canonical spelling and inserts a
-    `delete` before each W506 move/copy, in place; an auto-fixed file fails
+    `delete` before each W506 move/copy and quotes each unquoted `folder
+    create|delete` path (E525), in place; an auto-fixed file fails
     the hook so the change is reviewed and re-staged. No other check here
     has an auto-fix, since a hook has no way to know
     where a missing `endif` or `end prefetch block` was meant to go, and
@@ -256,7 +257,7 @@
     `actionscript-download-ok` (E512, W507), `actionscript-parameter-ok`
     (E516, E517, W508), `actionscript-scratch-ok` (E519, W503),
     `actionscript-scratch-dest-ok` (W506),
-    `actionscript-command-shape-ok` (E520, E521, E523, W504),
+    `actionscript-command-shape-ok` (E520, E521, E523, E525, W504),
     `actionscript-cmd-ok` (W505),
     `actionscript-override-ok` (E522 -- shared with
     bes-actionscript-lint-schclass's E303), `actionscript-unreachable-ok`
