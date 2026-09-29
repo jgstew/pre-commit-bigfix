@@ -511,6 +511,15 @@ _CMD_RUN_SWITCH_RE = re.compile(r"(?:^|\s)/c\b", re.IGNORECASE)
 # /k runs the command but leaves the shell alive, so the action never returns
 _CMD_PERSIST_SWITCH_RE = re.compile(r"(?:^|\s)/k\b", re.IGNORECASE)
 _OVERRIDE_VERB_RE = re.compile(r"^override\s+(wait|run)\s*$", re.IGNORECASE)
+# lines whose syntax is fixed -- a keyword and at most a `{...}` condition --
+# so a trailing `// comment` on them is just a comment. Command lines are NOT
+# included: the rest of a launch line goes to the program verbatim, and
+# `cscript //Nologo` uses `//` for its own options.
+_FIXED_SYNTAX_RE = re.compile(
+    r"^(?:if|elseif|else|endif|begin\s+prefetch\s+block|end\s+prefetch\s+block"
+    r"|override)\b",
+    re.IGNORECASE,
+)
 _OVERRIDE_OPTION_LINE_RE = re.compile(r"^\w+\s*=")
 
 # lines that do not count as "execution has started" for W502: declarations,
@@ -1558,6 +1567,52 @@ def _check_override_blocks(lines, first_line=1):
     return issues
 
 
+def _strip_trailing_comment(line):
+    """Return `line` without a trailing `// comment` and trailing whitespace.
+
+    Only a `//` that follows whitespace and sits outside a "..." string and
+    outside a `{...}` relevance substitution starts a comment, so a path or
+    URL containing `//` (and `else//x`) is left alone. `{{` outside a
+    substitution is the literal-brace escape, not an opener.
+    """
+    quoted, depth, index = False, 0, 0
+    while index < len(line):
+        char = line[index]
+        if char == '"' and not depth:
+            quoted = not quoted
+        elif not quoted and char == "{":
+            if not depth and line.startswith("{{", index):
+                index += 2
+                continue
+            depth += 1
+        elif not quoted and char == "}" and depth:
+            depth -= 1
+        elif (
+            not quoted
+            and not depth
+            and line.startswith("//", index)
+            and index
+            and line[index - 1] in " \t"
+        ):
+            return line[:index].rstrip()
+        index += 1
+    return line.rstrip()
+
+
+def _ignore_structural_comments(lines):
+    """Strip trailing `// comments` from fixed-syntax lines (see
+    _FIXED_SYNTAX_RE), keeping each line's indentation.
+    """
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if _FIXED_SYNTAX_RE.match(stripped):
+            indent = line[: len(line) - len(line.lstrip())]
+            line = indent + _strip_trailing_comment(stripped)
+        result.append(line)
+    return result
+
+
 def check_actionscript(body, first_line=1):
     """Check a single ActionScript body for balanced blocks and substitutions.
 
@@ -1573,6 +1628,9 @@ def check_actionscript(body, first_line=1):
     own E302 belongs to the sibling schclass hook, not here).
     """
     lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+    # a trailing `// comment` is valid ActionScript; on a fixed-syntax line
+    # (endif, else, ...) it must not change how the line is parsed
+    lines = _ignore_structural_comments(lines)
     issues = _check_download_names(lines, first_line)  # E512 / W507
     issues.extend(_check_parameters(lines, first_line))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503

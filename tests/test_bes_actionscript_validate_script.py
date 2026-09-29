@@ -1983,3 +1983,62 @@ def test_line_numbers_in_messages_are_file_lines(
     messages = [msg for _, found, msg in issues_for(tmp_path, content) if found == code]
     assert messages, f"expected {code}"
     assert f"line {expected}" in messages[0], messages[0]
+
+
+# --- trailing `//` comments on fixed-syntax lines --------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "if {a}\nwait x\nendif // end of the a check",
+        "if {a}\nwait x\nendif  //no space after the slashes",
+        'if {a}\nwait x\nelse  //if {exists local user "x"}\nwait y\nendif',
+        "if {a} // why we check a\nwait x\nendif",
+        "if {a}\nwait x\nelseif {b} // b case\nwait y\nendif",
+        "begin prefetch block // downloads\n"
+        "add prefetch item name=a.exe sha1=x size=1 url=http://x/a.exe\n"
+        "end prefetch block // done\nwait __Download\\a.exe",
+        "override wait // SYSTEM cannot change display settings\n"
+        "hidden=true\nwait cmd /c echo a",
+    ],
+)
+def test_trailing_comment_on_a_fixed_syntax_line_is_ignored(body):
+    """A `// comment` at the end of a line is valid ActionScript; on a line
+    whose syntax is fixed (if/elseif/else/endif, prefetch block bounds,.
+
+    override) it must not change how the line is parsed.
+    """
+    assert validator.check_actionscript(body) == []
+
+
+def test_else_with_trailing_comment_is_still_an_else():
+    """Recognized as an else, so a second else for the same if is E506."""
+    body = "if {a}\nwait x\nelse // first\nwait y\nelse\nwait z\nendif"
+    assert codes(validator.check_actionscript(body)) == ["E506"]
+
+
+def test_double_slash_arguments_of_a_command_are_not_a_comment():
+    """`cscript //Nologo` -- the rest of a launch line goes to the program
+    verbatim, so its `>` redirect into __Download still produces the file.
+    """
+    body = (
+        "prefetch a.vbs sha1:x size:1 http://x/a.vbs\n"
+        "waithidden cmd /c cscript __Download\\a.vbs //Nologo > __Download\\out.ini\n"
+        "copy __Download\\out.ini C:\\out.ini"
+    )
+    assert "W507" not in codes(validator.check_actionscript(body))
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("endif // x", "endif"),
+        ("endif", "endif"),
+        ('if {exists file "a//b"} // c', 'if {exists file "a//b"}'),
+        ('if {"x // y" = "z"}', 'if {"x // y" = "z"}'),  # inside a substitution
+        ("else//x", "else//x"),  # `//` must follow whitespace
+    ],
+)
+def test_strip_trailing_comment(line, expected):
+    assert validator._strip_trailing_comment(line) == expected
