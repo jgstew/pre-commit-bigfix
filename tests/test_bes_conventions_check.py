@@ -1435,6 +1435,53 @@ def test_relevance_real_clause_clean(tmp_path):
     assert "E212" not in got and "E213" not in got
 
 
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        # real CommunityContent shapes: the real clause commented out
+        "<![CDATA[true /*There isn't an existing configuration file "
+        '(not exists (files whose (Name of it = "x") of folder "/tmp")) */]]>',
+        "<![CDATA[/* No special file types found. Default relevance used. */   true]]>",
+        "(true)",
+        "( ( TRUE ) )",
+        "true /* a */ /* b */",
+    ],
+)
+def test_e212_literal_true_behind_comments_or_parens(tmp_path, relevance):
+    """Comments and redundant parentheses do not change the value: this
+    still targets every endpoint.
+    """
+    assert "E212" in codes(tmp_path, task(relevance=relevance))
+
+
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        "<![CDATA[false /* Superseded */]]>",
+        "<![CDATA[FALSE  /* THIS IS UNTESTED! */]]>",
+        "(false)",
+    ],
+)
+def test_w212_literal_false_behind_comments_or_parens(tmp_path, relevance):
+    got = codes(tmp_path, task(relevance=relevance))
+    assert "W212" in got and "E212" not in got
+
+
+@pytest.mark.parametrize(
+    "relevance",
+    [
+        'true /* default */ and exists file "/etc/hosts"',
+        '(true) or (exists file "/x")',
+        "(true) and (false)",
+        '"true"',  # a string, not the boolean literal
+        "<![CDATA[/* just a comment */]]>",
+    ],
+)
+def test_relevance_that_is_not_just_a_literal_is_not_e212_or_w212(tmp_path, relevance):
+    got = codes(tmp_path, task(relevance=relevance))
+    assert "E212" not in got and "W212" not in got
+
+
 def test_relevance_marker_opts_out(tmp_path):
     assert "E212" not in codes(tmp_path, task(relevance="true", marker="relevance-ok"))
 

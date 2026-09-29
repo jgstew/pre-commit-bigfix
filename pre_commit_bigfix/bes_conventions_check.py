@@ -1639,6 +1639,28 @@ def check_title(src):
     return issues
 
 
+# a relevance `/* ... */` comment (relevance has no line comments)
+RELEVANCE_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _relevance_literal(value):
+    """Return `value` lowercased with comments and wrapping parens removed.
+
+    `true /* old clause */` and `((TRUE))` are still the literal `true`, so
+    E212/W212 compare this rather than the raw text. Only parentheses that
+    wrap the whole expression are removed: `(true) and (false)` is kept.
+    """
+    value = RELEVANCE_COMMENT_RE.sub(" ", value).strip()
+    while value.startswith("(") and value.endswith(")"):
+        depth = 0
+        for index, char in enumerate(value):
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            if depth == 0 and index < len(value) - 1:
+                return value.lower()  # the first `(` closes before the end
+        value = value[1:-1].strip()
+    return value.lower()
+
+
 def check_relevance(src):
     """E212/E213/W212/W213: Relevance empty/`true`/`false`, or stray whitespace."""
     issues = []
@@ -1657,7 +1679,7 @@ def check_relevance(src):
                     ),
                 )
             )
-        elif value.lower() == "true":
+        elif _relevance_literal(value) == "true":
             issues.append(
                 (
                     lineno,
@@ -1668,7 +1690,7 @@ def check_relevance(src):
                     ),
                 )
             )
-        elif value.lower() == "false":
+        elif _relevance_literal(value) == "false":
             issues.append(
                 (
                     lineno,
