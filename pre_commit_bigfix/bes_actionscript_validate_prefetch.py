@@ -35,7 +35,11 @@ Checks:
           and the URL; a block item only `name=`/`sha1=`/`sha256=`/`size=`/
           `url=`. The reference parser silently ignores the rest, so e.g. a
           template's `vs_SSMS.exe; filename*=UTF-8''vs_SSMS.exe` validates
-          while the file is saved as `vs_SSMS.exe;`
+          while the file is saved as `vs_SSMS.exe;`. Two shapes are
+          auto-fixable offline, having one meaning each: `sha2:`/`sha2=` in
+          front of a 64-hex value becomes `sha256`, and tokens directly
+          after the URL (an unencoded space in it) are joined with `%20`;
+          stray text anywhere else is left for a human
     W400  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W402  a prefetch block item has no sha1; technically valid, but unusual
@@ -57,14 +61,20 @@ Checks:
           is usually a copy-paste slip. An extension is a trailing `.` + 1-4
           characters with a letter in them; a name or URL without one, and
           a server-side script URL (`download.php`), are not compared
+    W407  --auto-fix-network tried to switch an http prefetch URL to https
+          (W207 in bes-conventions-check) and did not: the https URL was
+          unreachable, redirected off https, reported a Content-Length other
+          than the line's size (so nothing was downloaded), or served a file
+          whose size/sha1/sha256 differ. The line stays on http.
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given.
 
-AUTO-FIXES. There are two, and they are separate flags because one of them
-touches the network:
+AUTO-FIXES. They sit behind two separate flags, because some touch the
+network:
 
---auto-fix (E402), on by default. The retired unzip-5.52.exe prefetch is
+--auto-fix (E402, E403), on by default. An E403 `sha2:` for `sha256:`, or a
+space in the URL, is rewritten as described under E403 above. The retired unzip-5.52.exe prefetch is
 rewritten in place to the current unzip-6.0.exe one, in whichever spelling the
 line already used -- the replacement is built by `prefetch_from_dictionary()`
 from bigfix_prefetch, so its shape is the reference implementation's, not this
@@ -82,6 +92,17 @@ line, and re-emits the prefetch with sha256 added; a download that does not
 match, or does not happen, is W404 and the line is left alone. Because this
 reaches out to whatever URLs the content names, it is opt-in, never the
 default, and each URL is fetched at most once per run.
+
+The same flag also switches an `http://` prefetch URL to `https://` (the fix
+for bes-conventions-check's W207), but only once the https copy is proven to
+be the same file: a HEAD request must report a Content-Length equal to the
+line's size -- checked BEFORE anything is downloaded, so a mismatch costs no
+download -- and must not redirect off https; then the file is downloaded
+(capped one byte past that size) and its size and every hash on the line
+(sha1 and/or sha256) must match. Only the URL's scheme changes. Anything else
+is W407 and the line stays on http. A line with no literal size, no hash, a
+`{...}` in it, or `add nohash prefetch item` is not attempted. `--disable
+W407` turns this part off.
 
 An auto-fixed file fails the hook so the change is reviewed and re-staged.
 Nothing else is fixable: E400's right size and hashes are properties of the
@@ -134,11 +155,13 @@ Exit codes:
 
 import argparse
 import contextlib
+import hashlib
 import io
 import os
 import re
 import socket
 import sys
+import urllib.request
 import warnings
 from urllib.parse import urlsplit
 
@@ -168,7 +191,19 @@ SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-prefetch"
 PREFETCH_MARKER = "prefetch-ok"
 
 KNOWN_CODES = frozenset(
-    ["E400", "E401", "E402", "E403", "W400", "W402", "W403", "W404", "W405", "W406"]
+    [
+        "E400",
+        "E401",
+        "E402",
+        "E403",
+        "W400",
+        "W402",
+        "W403",
+        "W404",
+        "W405",
+        "W406",
+        "W407",
+    ]
 )
 
 # W406: a trailing `.` + 1-4 characters, at least one a letter, is taken as a
@@ -504,6 +539,263 @@ def stray_prefetch_tokens(line):
     return [tok for tok in tokens if not STATEMENT_FIELD_RE.search(tok)]
 
 
+# E403 fix: `sha2` written for `sha256`, carrying a real sha256 value
+FIELD_LIKE_RE = re.compile(r"^\w+[:=]")
+SHA2_TYPO_RE = re.compile(r"(?<!\S)sha2([:=])([0-9A-Fa-f]{64})(?!\S)", re.IGNORECASE)
+
+
+def _is_field(token, item):
+    """Say whether `token` is a field the prefetch syntax defines."""
+    if item:
+        return bool(ITEM_FIELD_RE.match(token))
+    return bool(STATEMENT_FIELD_RE.search(token))
+
+
+def stray_tokens_fixed(line):
+    """E403: return `line` with its certain stray-text fixes applied, or None.
+
+    Two E403 shapes have exactly one meaning, and only these are rewritten:
+    `sha2:`/`sha2=` in front of a 64-hex value (a truncated `sha256`), and
+    tokens directly after the URL, before the next field -- an unencoded
+    space in the URL, joined back with `%20`. Stray text anywhere else (next
+    to the name, say) is left for a human, and a trailing `// comment` is
+    kept as it is.
+    """
+    comment = TRAILING_COMMENT_RE.search(line)
+    core, tail = (
+        (line[: comment.start()], line[comment.start() :]) if comment else (line, "")
+    )
+    item = bool(ITEM_PREFIX_RE.match(core))
+    separator = "=" if item else ":"
+    core = SHA2_TYPO_RE.sub(
+        lambda m: (
+            f"sha256{separator}{m.group(2)}" if m.group(1) == separator else m.group(0)
+        ),
+        core,
+    )
+
+    tokens = list(re.finditer(r"\S+", core))
+    # past `add [nohash] prefetch item` / `prefetch <name>`
+    first_field = len(ITEM_PREFIX_RE.match(core).group(0).split()) if item else 2
+    url_index = next(
+        (
+            index
+            for index in range(first_field, len(tokens))
+            if (
+                tokens[index].group(0).lower().startswith("url=")
+                if item
+                else "://" in tokens[index].group(0)
+            )
+        ),
+        None,
+    )
+    if url_index is not None:
+        last = url_index
+        while last + 1 < len(tokens):
+            token = tokens[last + 1].group(0)
+            # a `key:value` / `key=value` token is a mistyped field, not URL text
+            if _is_field(token, item) or FIELD_LIKE_RE.match(token):
+                break
+            last += 1
+        if last > url_index:
+            start, end = tokens[url_index].start(), tokens[last].end()
+            span = core[start:end]
+            if "\t" not in span:
+                core = core[:start] + span.replace(" ", "%20") + core[end:]
+
+    new_line = core + tail
+    return new_line if new_line != line else None
+
+
+def find_stray_fix_targets(raw, src, is_bes):
+    """Return [(file_lineno, line, new_line)] for the E403 lines to rewrite.
+
+    `add nohash prefetch item` lines are included: joining a URL or fixing a
+    field name does not change what a hashless line does.
+    """
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return []
+    else:
+        bodies = [(1, src)]
+    targets = []
+    for sourceline, body in bodies:
+        for lineno, line, _is_nohash in find_prefetch_lines(body):
+            if stray_prefetch_tokens(line):
+                new_line = stray_tokens_fixed(line)
+                if new_line is not None:
+                    targets.append((sourceline + lineno - 1, line, new_line))
+    return targets
+
+
+def fix_stray_tokens(src, targets):
+    """Apply `find_stray_fix_targets`' rewrites in place; return (src, fixed)."""
+    lines = src.split("\n")
+    fixed = []
+    for lineno, text, new_text in targets:
+        if _replace_on_line(lines, lineno, text, new_text):
+            fixed.append(
+                (
+                    lineno,
+                    "E403",
+                    (
+                        "rewrote stray prefetch text (`sha2` -> `sha256`, or a "
+                        "space in the URL -> `%20`)"
+                    ),
+                )
+            )
+    return "\n".join(lines), fixed
+
+
+# W207 network fix: the https copy of an http prefetch is checked before the
+# URL is switched. Content-Length first, so nothing is downloaded unless the
+# size already matches; then the download is capped at that size (plus one
+# byte, to notice a longer file) and hashed.
+DOWNLOAD_CHUNK = 65536
+
+
+def https_head(url):
+    """Return (final_url, content_length_or_None) for a HEAD of `url`.
+
+    Redirects are followed (urllib's default); the caller checks the final
+    URL is still https.
+    """
+    request = urllib.request.Request(url, method="HEAD")
+    with urllib.request.urlopen(request, timeout=NETWORK_TIMEOUT) as response:
+        length = response.headers.get("Content-Length", "")
+        return response.geturl(), (int(length) if length.strip().isdigit() else None)
+
+
+def https_hashes(url, limit):
+    """Download `url` and return (size, sha1, sha256) of at most `limit`+1 bytes.
+
+    Reading stops one byte past `limit`, so a file larger than the prefetch
+    says is noticed (its size is wrong) without being streamed to the end.
+    """
+    sha1, sha256, size = hashlib.sha1(), hashlib.sha256(), 0
+    with urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT) as response:
+        if urlsplit(response.geturl()).scheme.lower() != "https":
+            raise ValueError(f"redirected to a non-https URL ({response.geturl()})")
+        while size <= limit:
+            chunk = response.read(min(DOWNLOAD_CHUNK, limit + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            sha1.update(chunk)
+            sha256.update(chunk)
+    return size, sha1.hexdigest(), sha256.hexdigest()
+
+
+def http_prefetch_facts(line):
+    """Return (url, size, sha1, sha256) for an http prefetch W207 could fix.
+
+    None when the line is not a candidate: not http, no literal size, or no
+    hash at all to verify an https copy against.
+    """
+    sha1_less = statement_missing_sha1(line)
+    to_parse = _with_placeholder_sha1(line) if sha1_less else line
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            parsed = parse_prefetch(to_parse)
+        except (AttributeError, TypeError, ValueError, KeyError):
+            return None
+    url = parsed.get("download_url") or ""
+    size = str(parsed.get("file_size") or "")
+    sha1 = None if sha1_less else parsed.get("file_sha1")
+    sha256 = parsed.get("file_sha256")
+    if not url.lower().startswith("http://") or url not in line:
+        return None
+    if not size.isdigit() or not (sha1 or sha256):
+        return None
+    return url, int(size), sha1, sha256
+
+
+def verified_https_url(url, size, sha1, sha256):
+    """Return the https URL for `url` once its copy is proven identical.
+
+    Raises ValueError (or a network error) saying why when it is not: a
+    Content-Length that does not equal `size` -- checked before anything is
+    downloaded -- a redirect off https, or a size/sha1/sha256 mismatch.
+    """
+    https_url = "https://" + url[len("http://") :]
+    final, length = https_head(https_url)
+    if urlsplit(final).scheme.lower() != "https":
+        raise ValueError(f"the https URL redirects to a non-https one ({final})")
+    if length != size:
+        raise ValueError(
+            f"the https copy's Content-Length ({length}) is not the prefetch's "
+            f"size ({size}); nothing was downloaded"
+        )
+    got_size, got_sha1, got_sha256 = https_hashes(https_url, size)
+    if got_size != size:
+        raise ValueError(f"the https copy is {got_size} bytes, not {size}")
+    if sha1 and got_sha1 != sha1.lower():
+        raise ValueError("the https copy's sha1 does not match the prefetch's")
+    if sha256 and got_sha256 != sha256.lower():
+        raise ValueError("the https copy's sha256 does not match the prefetch's")
+    return https_url
+
+
+def find_https_fix_targets(raw, src, is_bes):
+    """Return [(file_lineno, line, facts)] for the http prefetches W207 may fix."""
+    targets = []
+    for lineno, line in iter_prefetch_targets(raw, src, is_bes):
+        facts = http_prefetch_facts(line)
+        if facts:
+            targets.append((lineno, line, facts))
+    return targets
+
+
+def fix_http_urls(src, targets, cache=None):
+    """Switch each target's http URL to https once it is verified.
+
+    Returns (src, fixed, failed). `failed` is a list of W407s -- the line stayed http. `cache` maps a
+    prefetch's (url, size, sha1, sha256) to its verified https URL, or to the
+    reason it failed, so each URL is checked at most once per run.
+    """
+    if cache is None:
+        cache = {}
+    lines = src.split("\n")
+    fixed = []
+    failed = []
+    for lineno, text, facts in targets:
+        key = ("https",) + facts
+        if key not in cache:
+            try:
+                cache[key] = (verified_https_url(*facts), None)
+            except Exception as err:  # noqa: BLE001 -- same reasoning as E401's
+                cache[key] = (None, f"{type(err).__name__}: {err}")
+        https_url, reason = cache[key]
+        if https_url is None:
+            failed.append(
+                (
+                    lineno,
+                    "W407",
+                    (
+                        f"could not switch the prefetch URL to https ({reason}); "
+                        "the line was left on http"
+                    ),
+                )
+            )
+        elif _replace_on_line(
+            lines, lineno, text, text.replace(facts[0], https_url, 1)
+        ):
+            fixed.append(
+                (
+                    lineno,
+                    "W207",
+                    (
+                        "switched the prefetch URL to https after verifying the "
+                        "https copy's size and hashes"
+                    ),
+                )
+            )
+    return "\n".join(lines), fixed, failed
+
+
 def _extension(name):
     """Return `name`'s lowercased, alias-normalized extension, or None."""
     match = EXTENSION_RE.search(name)
@@ -776,10 +1068,13 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
 ):
     """Check one file; return (issues, fixed), each a list of (lineno, code, msg).
 
-    With `auto_fix`, the retired unzip-5.52.exe prefetches (E402) are rewritten
-    in place to the current unzip-6.0.exe one. With `auto_fix_network` -- which
+    With `auto_fix`, the certain E403 stray-text shapes are fixed and the
+    retired unzip-5.52.exe prefetches (E402) are rewritten in place to the
+    current unzip-6.0.exe one. With `auto_fix_network` -- which
     downloads files, and so is never the default -- a prefetch with no sha256
-    (E401) gets one, or a W404 saying why it could not; `network_cache` is a
+    (E401) gets one, or a W404 saying why it could not, and an http URL is
+    switched to https once verified (W207), or a W407 says why not;
+    `network_cache` is a
     dict shared across files so a repeated URL is fetched once. Both report
     under `fixed`, and the file's line endings are preserved (CRLF in, CRLF
     out). `strict` is accepted for parity with the sibling hooks and does not
@@ -809,6 +1104,10 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     raw = original
     fixed = []
     failed = []
+    if not opted_out and auto_fix and "E403" not in disabled:
+        src, got = fix_stray_tokens(src, find_stray_fix_targets(raw, src, is_bes))
+        fixed += got
+        raw = _encode(src, was_crlf)
     if not opted_out and auto_fix and "E402" not in disabled:
         src, got = fix_outdated_unzip(src, find_fix_targets(raw, src, is_bes))
         fixed += got
@@ -820,6 +1119,14 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
             src, find_network_fix_targets(raw, src, is_bes), network_cache
         )
         fixed += got
+        raw = _encode(src, was_crlf)
+    if not opted_out and auto_fix_network and "W407" not in disabled:
+        # after E401, so a sha256 just added is one more hash to verify against
+        src, got, https_failed = fix_http_urls(
+            src, find_https_fix_targets(raw, src, is_bes), network_cache
+        )
+        fixed += got
+        failed += https_failed
         raw = _encode(src, was_crlf)
     if raw != original:
         with open(path, "wb") as handle:
@@ -916,7 +1223,8 @@ def main(argv=None):
         choices=["yes", "no"],
         default=None,
         help=(
-            "rewrite the retired unzip-5.52.exe prefetches (E402) in place "
+            "rewrite the retired unzip-5.52.exe prefetches (E402) and fix "
+            "`sha2:` / a space in the URL (E403) in place "
             "(default: yes when files are given, no when auto-discovering)"
         ),
     )
@@ -926,8 +1234,9 @@ def main(argv=None):
         default="no",
         help=(
             "add a sha256 to the prefetches that have none (E401) by "
-            "DOWNLOADING each file to hash it; off by default, since it "
-            "fetches whatever URLs the content names"
+            "DOWNLOADING each file to hash it, and switch http prefetch URLs "
+            "to https once the https copy's size and hashes match (W207); off "
+            "by default, since it fetches whatever URLs the content names"
         ),
     )
     parser.add_argument(

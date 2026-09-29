@@ -437,6 +437,20 @@ def test_main_does_not_auto_fix_when_discovering(tmp_path, monkeypatch):
 
 # --- the --auto-fix-network sha256 fix ---------------------------------------
 #
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """Keep the W207 https check from ever reaching a real host.
+
+    A test that exercises it installs `https_server` over this. Stubbing the
+    HEAD is enough: nothing is downloaded unless it succeeds.
+    """
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("network disabled in tests")
+
+    monkeypatch.setattr(validator, "https_head", refuse)
+
+
 # Nothing here touches the network: `sha256_added_prefetch` is the one function
 # that downloads, and it is stubbed. The one test of its own logic stubs
 # bigfix_prefetch's `add_sha256_prefetch` instead, one layer further down.
@@ -836,3 +850,228 @@ def test_comment_glued_onto_the_hash_is_still_e403():
 )
 def test_well_formed_prefetch_is_not_e403(line):
     assert "E403" not in codes(validator.validate_actionscript(line))
+
+
+# --- E403 offline auto-fix: `sha2:` for `sha256:`, a space in the URL --------
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        (GOOD_STATEMENT.replace("sha256:", "sha2:"), GOOD_STATEMENT),
+        (GOOD_BLOCK_ITEM.replace("sha256=", "SHA2="), GOOD_BLOCK_ITEM),
+        (
+            GOOD_STATEMENT.replace("7za920.exe sha256", "7za 920.exe sha256"),
+            GOOD_STATEMENT.replace("7za920.exe sha256", "7za%20920.exe sha256"),
+        ),
+        (
+            GOOD_BLOCK_ITEM.replace("7za920.exe sha256", "My 7za 920.exe sha256"),
+            GOOD_BLOCK_ITEM.replace("7za920.exe sha256", "My%207za%20920.exe sha256"),
+        ),
+        (  # a URL ending the statement, with a trailing comment kept
+            f"prefetch a.exe sha1:{SHA1} size:5 sha256:{SHA256} https://e/a b.exe // x",
+            f"prefetch a.exe sha1:{SHA1} size:5 sha256:{SHA256} https://e/a%20b.exe // x",
+        ),
+    ],
+)
+def test_e403_auto_fix(tmp_path, before, after):
+    path = write(tmp_path, "x.bes", bes(before))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["E403"]
+    assert "E403" not in codes(issues)
+    assert f"<![CDATA[{after}]]>" in open(path, encoding="utf-8").read()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # a stray token next to the name: which name was meant is unknown
+        GOOD_STATEMENT.replace("7za920.exe sha1", "7za920.exe x.exe sha1"),
+        # sha2 with a value that is not a sha256
+        GOOD_STATEMENT.replace(f"sha256:{SHA256}", f"sha2:{SHA1}"),
+        # a stray token not directly after the URL
+        GOOD_BLOCK_ITEM.replace(" size=", " junk size="),
+    ],
+)
+def test_e403_auto_fix_leaves_other_stray_text(tmp_path, line):
+    path = write(tmp_path, "x.bes", bes(line))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert "E403" not in codes(fixed) and "E403" in codes(issues)
+    assert f"<![CDATA[{line}]]>" in open(path, encoding="utf-8").read()
+
+
+def test_e403_auto_fix_respects_disable_and_marker(tmp_path):
+    line = GOOD_STATEMENT.replace("sha256:", "sha2:")
+    path = write(tmp_path, "x.bes", bes(line))
+    assert validator.check_file(path, {"E403"}, auto_fix=True)[1] == []
+    path = write(tmp_path, "y.bes", bes(line, marker=validator.PREFETCH_MARKER))
+    assert validator.check_file(path, auto_fix=True) == ([], [])
+
+
+# --- W207 network fix: http -> https when the https copy is the same file -----
+
+HTTP_STATEMENT = GOOD_STATEMENT.replace("https://", "http://")
+HTTP_BLOCK_ITEM = GOOD_BLOCK_ITEM.replace("https://", "http://")
+
+
+@pytest.fixture(name="https_server")
+def https_server_fixture(monkeypatch):
+    """Stub the HEAD and the hashing download; record what was asked."""
+    state = {
+        "head": ("final", 167936),  # "final" means: the URL itself
+        "hashes": (167936, SHA1, SHA256),
+        "heads": [],
+        "downloads": [],
+    }
+
+    def fake_head(url):
+        state["heads"].append(url)
+        final, length = state["head"]
+        if isinstance(final, Exception):
+            raise final
+        return (url if final == "final" else final), length
+
+    def fake_hash(url, limit):
+        state["downloads"].append((url, limit))
+        return state["hashes"]
+
+    monkeypatch.setattr(validator, "https_head", fake_head)
+    monkeypatch.setattr(validator, "https_hashes", fake_hash)
+    return state
+
+
+@pytest.mark.parametrize(
+    "line", [HTTP_STATEMENT, HTTP_BLOCK_ITEM], ids=["statement", "block"]
+)
+def test_w207_network_fix_upgrades_to_https(tmp_path, https_server, line):
+    path = write(tmp_path, "x.bes", bes(line))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert codes(fixed) == ["W207"] and issues == []
+    assert https_server["heads"] == [URL]
+    assert https_server["downloads"] == [(URL, 167936)]
+    text = open(path, encoding="utf-8").read()
+    assert f"<![CDATA[{line.replace('http://', 'https://')}]]>" in text
+
+
+def test_w207_size_mismatch_never_downloads(tmp_path, https_server):
+    https_server["head"] = ("final", 999)
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert fixed == [] and codes(issues) == ["W407"]
+    assert https_server["downloads"] == []
+    assert "Content-Length" in issues[0][2]
+    assert HTTP_STATEMENT in open(path, encoding="utf-8").read()
+
+
+def test_w207_missing_content_length_never_downloads(tmp_path, https_server):
+    https_server["head"] = ("final", None)
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    issues, _fixed = validator.check_file(path, auto_fix_network=True)
+    assert codes(issues) == ["W407"] and https_server["downloads"] == []
+
+
+def test_w207_redirect_back_to_http_is_refused(tmp_path, https_server):
+    https_server["head"] = ("http://elsewhere/7za920.exe", 167936)
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert fixed == [] and codes(issues) == ["W407"]
+    assert https_server["downloads"] == []
+
+
+@pytest.mark.parametrize(
+    "hashes",
+    [(167936, "0" * 40, SHA256), (167936, SHA1, "0" * 64), (167935, SHA1, SHA256)],
+    ids=["sha1", "sha256", "size"],
+)
+def test_w207_hash_mismatch_changes_nothing(tmp_path, https_server, hashes):
+    https_server["hashes"] = hashes
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert fixed == [] and codes(issues) == ["W407"]
+    assert HTTP_STATEMENT in open(path, encoding="utf-8").read()
+
+
+def test_w207_https_unreachable_is_w407(tmp_path, https_server):
+    https_server["head"] = (OSError("connection refused"), None)
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert fixed == [] and codes(issues) == ["W407"]
+    assert "connection refused" in issues[0][2]
+
+
+def test_w207_sha256_only_statement_is_verified_by_sha256(tmp_path, https_server):
+    line = HTTP_STATEMENT.replace(f"sha1:{SHA1} ", "")
+    path = write(tmp_path, "x.bes", bes(line))
+    issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert codes(fixed) == ["W207"]
+    assert codes(issues) == ["W405"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        GOOD_STATEMENT,  # already https
+        "add nohash prefetch item name=x size=5 url=http://e/x",  # hashless
+        "prefetch a.exe sha1:"
+        + SHA1
+        + ' size:5 http://e/{parameter "x"} sha256:'
+        + SHA256,
+    ],
+)
+def test_w207_is_not_attempted(tmp_path, https_server, line):
+    path = write(tmp_path, "x.bes", bes(line))
+    _issues, fixed = validator.check_file(path, auto_fix_network=True)
+    assert "W207" not in codes(fixed) and https_server["heads"] == []
+
+
+def test_w207_off_by_default_and_respects_disable_and_marker(tmp_path, https_server):
+    path = write(tmp_path, "x.bes", bes(HTTP_STATEMENT))
+    assert validator.check_file(path, auto_fix=True) == ([], [])
+    assert validator.check_file(path, {"W407"}, auto_fix_network=True) == ([], [])
+    path = write(
+        tmp_path, "y.bes", bes(HTTP_STATEMENT, marker=validator.PREFETCH_MARKER)
+    )
+    assert validator.check_file(path, auto_fix_network=True) == ([], [])
+    assert https_server["heads"] == []
+
+
+def test_w207_each_url_checked_once_per_run(tmp_path, https_server):
+    paths = [write(tmp_path, n, bes(HTTP_STATEMENT)) for n in ("a.bes", "b.bes")]
+    results = validator.check_files(paths, auto_fix_network=True)
+    assert [codes(f) for _p, _i, f in results] == [["W207"], ["W207"]]
+    assert len(https_server["heads"]) == 1 and len(https_server["downloads"]) == 1
+
+
+def test_https_hashes_stops_past_the_expected_size(monkeypatch):
+    """Cap the download one byte past `limit`.
+
+    A server sending more than `limit` bytes is cut off there rather than
+    streamed to the end.
+    """
+    import hashlib
+
+    class FakeResponse:
+        def __init__(self):
+            self.remaining = 10_000_000
+
+        def geturl(self):
+            return "https://e/x"
+
+        def read(self, amount):
+            amount = min(amount, self.remaining)
+            self.remaining -= amount
+            return b"a" * amount
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        validator.urllib.request, "urlopen", lambda *a, **k: FakeResponse()
+    )
+    size, sha1, sha256 = validator.https_hashes("https://e/x", 100)
+    assert size == 101
+    assert sha1 == hashlib.sha1(b"a" * 101).hexdigest()
+    assert sha256 == hashlib.sha256(b"a" * 101).hexdigest()

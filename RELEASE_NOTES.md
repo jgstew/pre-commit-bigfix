@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### Removed (auto-fix review)
+
+- **`bes-actionscript-validate-script` `W504`** is retired. It warned that the
+  `dos` verb was deprecated, but the
+  [BigFix reference](https://developer.bigfix.com/action-script/reference/execution/dos.html)
+  doesn't deprecate it. Its suggested replacement, `waithidden cmd.exe /c`,
+  also behaves differently: `dos` shows its window and ends the action
+  script when the command fails. `dos` is no longer reported, and the code
+  won't be reused. A leftover `--disable W504` now only prints the
+  unknown-code notice.
+
+### Fixed (auto-fix review)
+
+- **`bes-relevance-lint` `W605`** (an ActionScript substitution whose value is
+  an opaque object with no text form) was reported but missing from the
+  module docstring and the hook description. It is now documented in both,
+  and a test fails if any reported code is missing from the docstring, the
+  hook description, or the README table.
+
+### Added (auto-fix review)
+
+A review of every check without an auto-fix. A fix was added only where the
+right rewrite can be worked out from the file itself and keeps the author's
+intent. Each new fix was run over jgstew/bigfix-content and a 2,987-file
+server export, and a second run changed nothing.
+
+- **`bes-conventions-check`**:
+  - `E200`: a missing ActionScript MIMEType is set to the Windows-Shell
+    default, and an allowed MIMEType in the wrong case is respelled. Text
+    inside a CDATA body is never touched.
+  - `E201`: an unambiguous year-first SourceReleaseDate (`2026-7-4`,
+    `2026/07/14`, `2026-07-14T...`) becomes `YYYY-MM-DD`. A month/day-first
+    date is never guessed at.
+  - `E202`/`E216`: a timestamp that is only badly formatted is respelled.
+    That covers padding, capitalization, full month or day names, and a
+    `GMT`/`UTC`/`Z` zone or a `+HH:MM` offset. A day-of-week that is wrong
+    for the date is **dropped**, not recomputed.
+  - `E209`: a `cve-` prefix is uppercased. Several `<CVENames>` elements are
+    not merged.
+  - `E219`: an evaluation period is zero-padded (`6:00:00` -> `06:00:00`).
+  - `W216`: a case-only mismatch (`HIGH` -> `High`) is respelled.
+  - `W220`: DownloadSize is set to the knowable prefetch total, with unzip
+    left out.
+- **`bes-actionscript-validate-script`**:
+  - `E524`: `else if` is joined into `elseif`, unless a stray `endif` shows
+    that an `if` really was nested inside the `else`.
+  - `W505`: a waiting cmd.exe's `/k` becomes `/c`, or a missing `/c` is
+    inserted after cmd's leading switches. `/r` and unknown switches are left
+    alone.
+  - `E521`: a bracketed but unquoted registry key is quoted.
+- **`bes-actionscript-lint-schclass`**: new `--auto-fix` (on by default when
+  files are given) lowercases `W302` verbs and `W303` override options. This
+  hook's first and only fix, and it changes case only.
+- **`bes-actionscript-validate-prefetch`**:
+  - `E403`: `sha2:` in front of a 64-hex value becomes `sha256:`, and a space
+    directly after the URL becomes `%20`.
+  - Under the opt-in `--auto-fix-network`, an `http://` prefetch URL is
+    switched to `https://` (the fix for conventions-check's `W207`). This
+    happens only when the https copy is proven identical: its HEAD
+    `Content-Length` must equal the line's size, checked before anything is
+    downloaded, and then the size and every hash on the line must match.
+    Otherwise the new warning **`W407`** is reported and the line stays on
+    http.
+
 Found by a false-positive/false-negative sweep of a BigFix server export
 (2,987 `.bes` files), each change compared before/after against it,
 bigfix/CommunityContent and jgstew/bigfix-content.

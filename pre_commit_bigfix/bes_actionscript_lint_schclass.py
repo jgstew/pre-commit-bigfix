@@ -17,7 +17,10 @@ grammar cannot express but which decide whether a line is a command at all:
 blocks (E303). ActionScript checks that need knowledge neither carries
 (per-verb argument shapes, if/endif and prefetch-block pairing, the
 `]]></ActionScript>` closing-tag whitespace trap, http-vs-https escalation,
-and any auto-fixes) belong in a sibling ActionScript hook, not here. Keeping the split means this hook stays a thin,
+and any content-changing auto-fixes) belong in a sibling ActionScript hook,
+not here. The one exception is lowercasing (W302/W303): the grammar already
+knows exactly which text is the verb or option, and the rewrite changes only
+its case. Keeping the split means this hook stays a thin,
 mechanical consumer of the grammar files and needs no edits when BigFix ships
 new command verbs -- only the vendored schclass does.
 
@@ -58,14 +61,22 @@ Checks:
           `regset64` value, written in .reg-file syntax, where `\\"` and `\\\\`
           are escapes. `appendfile` content lines are raw file text and exempt
     W302  a matched command verb is not lowercase (e.g. `RUN`; valid but
-          unconventional)
+          unconventional; fixable -> lowercased)
     W303  an override option keyword or value is not lowercase (e.g. `RunAs`;
-          valid but unconventional)
+          valid but unconventional; fixable -> lowercased, a `{...}` value
+          never touched)
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
-fail the hook unless --strict is given. This hook has no auto-fixes and is not
-expected to grow any: rewriting content is beyond what a lexical grammar can
-justify (see SCOPE above).
+fail the hook unless --strict is given.
+
+--auto-fix (W302, W303), on by default when files are given (as pre-commit
+does) and off when auto-discovering, lowercases each non-lowercase command
+verb and override option keyword/value in place; nothing else is rewritten,
+since anything more is beyond what a lexical grammar can justify (see SCOPE
+above). The file's line endings are kept, and an auto-fixed file fails the
+hook so the change is reviewed and re-staged. `--disable W302` or the
+`actionscript-case-ok` marker (W303: `actionscript-override-case-ok`) turns
+the check and its fix off together.
 
 XML bodies are extracted with lxml, so the linted text is the REAL
 ActionScript exactly as the agent sees it: entities decoded, adjacent CDATA
@@ -73,7 +84,8 @@ sections merged, with lxml's sourceline mapping issues back to file line
 numbers.
 
 Usage:
-    bes_actionscript_lint_schclass.py [--strict] [--disable E300,W302] [file ...]
+    bes_actionscript_lint_schclass.py [--strict] [--disable E300,W302]
+                                      [--auto-fix=yes|no] [file ...]
 
 With no file arguments, all *.bes files in the current folder and below are
 checked. Non-.bes/.ojo paths given explicitly are linted as raw ActionScript
@@ -106,8 +118,10 @@ only variants the grammar and the BigFix documentation carry
 (jgstew/pre-commit-bigfix#15).
 
 Exit codes:
-    0  no E-code issues (and, without --strict, regardless of warnings)
-    1  an E-code issue was found, or a warning was found while --strict is set
+    0  no E-code issues and nothing auto-fixed (and, without --strict,
+       regardless of warnings)
+    1  an E-code issue was found, a file was auto-fixed, or a warning was found
+       while --strict is set
 """
 
 import argparse
@@ -558,11 +572,41 @@ def _mask_brace_escapes(line):
     return "".join(chars)
 
 
-def lint_actionscript(body, tokenizer=None):
+def _override_case_rewrite(line, keyword, raw_value):
+    """Return (old, new) lowercasing an override option line, or None.
+
+    The keyword is lowercased when it is a known option; the value only when
+    it is one of that option's documented values (W303's own rule) -- never
+    a `{...}` substitution, an integer, or free text like a user name.
+    """
+    canonical = keyword.lower()
+    if canonical not in OVERRIDE_OPTIONS:
+        return None
+    old = line.strip()
+    new = canonical + old[len(keyword) :] if old.startswith(keyword) else old
+    value = _override_value(raw_value)
+    allowed = OVERRIDE_OPTIONS[canonical]
+    if (
+        value
+        and "{" not in value
+        and canonical not in OVERRIDE_INTEGER_OPTIONS
+        and allowed is not None
+        and value.lower() in allowed
+        and value != value.lower()
+    ):
+        at = new.find(value, new.find("=") + 1)
+        if at != -1:
+            new = new[:at] + value.lower() + new[at + len(value) :]
+    return (old, new) if new != old else None
+
+
+def lint_actionscript(body, tokenizer=None, fixes=None):
     """Lint one ActionScript body; return sorted [(lineno, code, message)].
 
     Line numbers are local to the body, 1-based. `tokenizer` defaults to the
-    shared tokenizer over the vendored ActionScript grammar.
+    shared tokenizer over the vendored ActionScript grammar. When `fixes` is
+    a list, a (lineno, code, old, new) rewrite is appended to it for every
+    W302/W303 case-only finding -- the only auto-fixes this hook makes.
     """
     tokenizer = tokenizer or _default_tokenizer()
     body = body.replace("\r\n", "\n").replace("\r", "\n")
@@ -606,6 +650,8 @@ def lint_actionscript(body, tokenizer=None):
             continue  # neither opens nor closes an override block
         if token.keyword is not None:
             if token.text != token.keyword:
+                if fixes is not None:
+                    fixes.append((lineno, "W302", token.text, token.keyword))
                 issues.append(
                     (
                         lineno,
@@ -626,7 +672,15 @@ def lint_actionscript(body, tokenizer=None):
         if option is not None:
             keyword, raw_value = option.group(1), option.group(2)
             if in_override:
-                issues.extend(_check_override_option(lineno, keyword, raw_value))
+                found = _check_override_option(lineno, keyword, raw_value)
+                issues.extend(found)
+                rewrite = _override_case_rewrite(line, keyword, raw_value)
+                if (
+                    fixes is not None
+                    and rewrite
+                    and any(code == "W303" for _l, code, _m in found)
+                ):
+                    fixes.append((lineno, "W303") + rewrite)
                 continue
             if keyword.lower() in OVERRIDE_OPTIONS:
                 issues.append(
@@ -681,8 +735,12 @@ def lint_actionscript(body, tokenizer=None):
     return sorted(issues)
 
 
-def _lint_bes_xml(raw, src):
-    """Lint every ActionScript in a BES document; return file-lineno issues."""
+def _lint_bes_xml(raw, src, fixes=None):
+    """Lint every ActionScript in a BES document; return file-lineno issues.
+
+    `fixes`, when a list, collects lint_actionscript's rewrites with their
+    line numbers mapped to the file the same way.
+    """
     try:
         root = etree.fromstring(raw)
     except etree.XMLSyntaxError as err:
@@ -693,18 +751,60 @@ def _lint_bes_xml(raw, src):
         if mimetype is not None and mimetype != ACTIONSCRIPT_MIMETYPE:
             continue
         body = element.text or ""
-        for lineno, code, message in lint_actionscript(body):
+        body_fixes = [] if fixes is not None else None
+        for lineno, code, message in lint_actionscript(body, fixes=body_fixes):
             issues.append((element.sourceline + lineno - 1, code, message))
+        for lineno, code, old, new in body_fixes or []:
+            fixes.append((element.sourceline + lineno - 1, code, old, new))
     return issues
 
 
-def check_file(path, disabled=frozenset(), strict=False):
+# the opening tag (and CDATA start) a body's first line may share its line with
+_ACTIONSCRIPT_OPEN_RE = re.compile(r"<ActionScript\b[^>]*>(?:<!\[CDATA\[)?")
+
+_FIX_MESSAGES = {
+    "W302": "lowercased the command verb",
+    "W303": "lowercased the override option",
+}
+
+
+def _apply_fixes(src, fixes, codes):
+    """Apply (file_lineno, code, old, new) case rewrites to `src`, in place.
+
+    Each `old` is replaced once on its line -- as written, or with `"`
+    escaped as `&quot;` in an entity-escaped body; a rewrite whose text is
+    not found there is skipped rather than guessed at. Only `codes` are
+    applied. Returns (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    for lineno, code, old, new in fixes:
+        if code not in codes or not 1 <= lineno <= len(lines):
+            continue
+        line = lines[lineno - 1]
+        # a body's first line may share the file line with its opening tag;
+        # search only the ActionScript text after it
+        opening = _ACTIONSCRIPT_OPEN_RE.search(line)
+        start = opening.end() if opening else 0
+        if old not in line[start:] and "&quot;" in line:
+            old, new = old.replace('"', "&quot;"), new.replace('"', "&quot;")
+        at = line.find(old, start)
+        if at == -1:
+            continue
+        lines[lineno - 1] = line[:at] + new + line[at + len(old) :]
+        fixed.append((lineno, code, _FIX_MESSAGES[code]))
+    return "\n".join(lines), fixed
+
+
+def check_file(path, disabled=frozenset(), strict=False, auto_fix=False):
     """Check one file; return (issues, fixed) like the sibling checkers.
 
-    `fixed` is always [] (this hook has no auto-fixes yet); the tuple shape
-    stays parallel with bes_conventions_check.check_file. `strict` is
-    accepted for the same parity and does not change what is reported (the
-    caller decides whether warnings fail).
+    With `auto_fix`, each non-lowercase command verb (W302) and override
+    option keyword/value (W303) is lowercased in place, unless the code is in
+    `disabled` or the file carries that check's opt-out marker; the file's
+    line endings are preserved. Nothing else is ever rewritten. `strict` is
+    accepted for parity with the siblings and does not change what is
+    reported (the caller decides whether warnings fail).
     """
     del strict  # reported issues are the same either way
     if not os.path.isfile(path):
@@ -712,6 +812,7 @@ def check_file(path, disabled=frozenset(), strict=False):
 
     with open(path, "rb") as handle:
         raw = handle.read()
+    was_crlf = b"\r\n" in raw
     src = (
         raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
     )
@@ -721,7 +822,26 @@ def check_file(path, disabled=frozenset(), strict=False):
     if MUSTACHE_RE.search(src):
         return [], []
 
-    if path.endswith(BES_EXTENSIONS):
+    is_bes = path.endswith(BES_EXTENSIONS)
+    fix_codes = {
+        code
+        for code in ("W302", "W303")
+        if auto_fix and code not in disabled and CHECK_MARKERS[code] not in src
+    }
+    fixed = []
+    if fix_codes:
+        fixes = []
+        if is_bes:
+            _lint_bes_xml(raw, src, fixes)
+        else:
+            lint_actionscript(src, fixes=fixes)
+        src, fixed = _apply_fixes(src, fixes, fix_codes)
+        if fixed:
+            raw = (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
+            with open(path, "wb") as handle:
+                handle.write(raw)
+
+    if is_bes:
         issues = _lint_bes_xml(raw, src)
     else:
         issues = lint_actionscript(src)
@@ -731,16 +851,17 @@ def check_file(path, disabled=frozenset(), strict=False):
         for lineno, code, message in issues
         if code not in disabled and CHECK_MARKERS.get(code, "\0") not in src
     ]
-    return sorted(issues), []
+    return sorted(issues), fixed
 
 
-def check_files(paths, disabled=frozenset(), strict=False):
+def check_files(paths, disabled=frozenset(), strict=False, auto_fix=False):
     """Check several files; return a list of (path, issues, fixed) tuples.
 
     This is the programmatic entry point: it does no printing.
     """
     return [
-        (path, *check_file(path, disabled=disabled, strict=strict)) for path in paths
+        (path, *check_file(path, disabled=disabled, strict=strict, auto_fix=auto_fix))
+        for path in paths
     ]
 
 
@@ -779,6 +900,16 @@ def main(argv=None):
         help="comma-separated check IDs to skip entirely, e.g. --disable W302",
     )
     parser.add_argument(
+        "--auto-fix",
+        choices=["yes", "no"],
+        default=None,
+        help=(
+            "lowercase non-lowercase command verbs (W302) and override option "
+            "keywords/values (W303), in place (default: yes when files are "
+            "given, no when auto-discovering)"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help=(
@@ -798,13 +929,24 @@ def main(argv=None):
             f"warning: ignoring unknown --disable code(s): {', '.join(sorted(unknown))}"
         )
 
+    # auto-fix defaults to yes for explicit files, no when auto-discovering; an
+    # explicit --auto-fix always wins -- the sibling hooks' rule, and pre-commit
+    # always passes files, so under pre-commit the default is yes.
+    if args.auto_fix is not None:
+        auto_fix = args.auto_fix == "yes"
+    else:
+        auto_fix = bool(args.files)
     paths = args.files if args.files else discover_bes_files(".")
 
     issue_count = 0
     warning_count = 0
-    for path, issues, _fixed in check_files(
-        paths, disabled=disabled, strict=args.strict
+    fix_count = 0
+    for path, issues, fixed in check_files(
+        paths, disabled=disabled, strict=args.strict, auto_fix=auto_fix
     ):
+        for lineno, check_id, message in fixed:
+            fix_count += 1
+            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
         for lineno, check_id, message in issues:
             if check_id.startswith("W"):
                 warning_count += 1
@@ -813,11 +955,14 @@ def main(argv=None):
                 issue_count += 1
                 print(f"{path}:{lineno}: [{check_id}] {message}")
 
+    if fix_count:
+        print(f"\nauto-fixed {fix_count} issue(s); review and re-stage the changes.")
     if warning_count:
         print(f"{warning_count} ActionScript warning(s).")
     if issue_count:
         print(f"{issue_count} ActionScript issue(s).")
-    return 1 if (issue_count or (warning_count and args.strict)) else 0
+    # E-codes and any fix always fail; warnings fail only under --strict
+    return 1 if (issue_count or fix_count or (warning_count and args.strict)) else 0
 
 
 if __name__ == "__main__":

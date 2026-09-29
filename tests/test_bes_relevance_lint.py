@@ -334,3 +334,24 @@ def test_a_missing_analyzer_on_a_new_enough_interpreter_still_fails(
 
     assert linter.main([]) == 1
     assert "skipped" not in capsys.readouterr().out
+
+
+def test_every_code_is_documented():
+    """List every code in CODES in all three places it is documented.
+
+    The module docstring, the hook description, and the README table -- so a
+    rule the analyzer adds cannot be reported without being documented (W605
+    once was).
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    # read as text, like tests/test_hook_declarations.py: PyYAML is not a
+    # test dependency. The hook's entry runs to the next `- id:` or the end.
+    hooks = (root / ".pre-commit-hooks.yaml").read_text()
+    description = hooks.split("- id: bes-relevance-lint\n", 1)[1].split("\n- id:")[0]
+    readme = (root / "README.md").read_text()
+    for code in sorted(linter.CODES.values()):
+        assert f"    {code}  " in linter.__doc__, f"{code} missing from the docstring"
+        assert code in description, f"{code} missing from .pre-commit-hooks.yaml"
+        assert f"| `{code}` |" in readme, f"{code} missing from the README table"
