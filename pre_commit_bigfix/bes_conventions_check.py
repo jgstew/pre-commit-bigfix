@@ -924,6 +924,7 @@ PREFETCH_LINE_RE = re.compile(
     r"^[ \t]*(?:prefetch\s|add\s+(?:nohash\s+)?prefetch\s+item\b)", re.IGNORECASE
 )
 PREFETCH_SIZE_RE = re.compile(r"\bsize[:=](\S+)", re.IGNORECASE)
+PREFETCH_HASH_RE = re.compile(r"\bsha(?:1|256)[:=]([0-9A-Fa-f]+)", re.IGNORECASE)
 IF_OPEN_RE = re.compile(r"^[ \t]*if\b", re.IGNORECASE)
 IF_CLOSE_RE = re.compile(r"^[ \t]*endif\b", re.IGNORECASE)
 # the BigFix unzip utility, which the console leaves out of DownloadSize
@@ -935,9 +936,12 @@ def _prefetch_total(body):
 
     None when the total is unknowable: no prefetch at all, a prefetch inside
     an `if` (which one runs depends on the endpoint), a size that is not a
-    literal integer, or a dynamic `download` statement.
+    literal integer, or a dynamic `download` statement. A prefetch with the
+    same sha1/sha256 and size as one already counted is a mirror URL for the same file and
+    is not counted again.
     """
     depth, total, unzip, seen = 0, 0, 0, False
+    counted = set()  # (hashes, size) already summed: a mirror URL is the same file
     for line in body.split("\n"):
         if IF_OPEN_RE.match(line):
             depth += 1
@@ -950,6 +954,11 @@ def _prefetch_total(body):
             if depth or not size or not size.group(1).isdigit():
                 return None
             seen = True
+            hashes = frozenset(h.lower() for h in PREFETCH_HASH_RE.findall(line))
+            key = (hashes, size.group(1))
+            if hashes and key in counted:
+                continue  # the same file (hashes and size) from another URL
+            counted.add(key)
             total += int(size.group(1))
             if UNZIP_PREFETCH_RE.search(line):
                 unzip += int(size.group(1))

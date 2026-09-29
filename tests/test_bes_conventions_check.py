@@ -2273,6 +2273,25 @@ def test_w220_skips_totals_it_cannot_know(tmp_path, body):
     assert "W220" not in codes(tmp_path, task(download_size="999", body=body))
 
 
+def test_w220_same_file_from_two_urls_counts_once(tmp_path):
+    """A second prefetch of the identical file (same hash, another URL) is a
+    mirror, not a second download (real server-export shape).
+    """
+    body = (
+        f"\nprefetch Setup.exe sha1:{SHA1} size:466413280 https://a/Setup.exe "
+        f"sha256:{SHA256}\nprefetch Setup.exe sha1:{SHA1} size:466413280 "
+        f"https://b/Setup.exe sha256:{SHA256}\n"
+    )
+    assert "W220" not in codes(tmp_path, task(download_size="466413280", body=body))
+
+
+def test_w220_two_different_files_still_sum(tmp_path):
+    body = (
+        "\n" + _pf("a.zip", 10) + "\n" + _pf("b.zip", 10).replace(SHA1, "c" * 40) + "\n"
+    )
+    assert "W220" in codes(tmp_path, task(download_size="10", body=body))
+
+
 def test_w220_marker_opts_out(tmp_path):
     body = "\n" + _pf("a.zip", 10) + "\n"
     content = task(download_size="999", body=body, marker="download-size-ok")
