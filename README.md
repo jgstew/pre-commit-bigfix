@@ -315,8 +315,11 @@ the command, so the action reports success having done nothing. `/k` is
 likewise flagged: it does run the command, but leaves the shell open
 afterward, so the action hangs instead of completing.
 
-A `move`/`copy` of `__createfile`/`__appendfile` onto a destination that is
-not deleted earlier in the body warns `W506`. Both verbs fail when the
+A `move`/`copy` of any source (a `__createfile`/`__appendfile` scratch file,
+a download, ...) onto a destination that is not cleared earlier in the body
+warns `W506` - cleared meaning a `delete` of it (including one that looks the
+same file up by relevance), a shell `rm`/`del` naming it, or a `move` of it
+elsewhere. Both verbs fail when the
 destination already exists, so such an action works the first time and fails
 on every later run; the documented pattern is to `delete` the destination
 first. A destination inside the action's own download folder is exempt, being
@@ -335,11 +338,12 @@ any `if`) can never run and warns `W501` (first unreachable line only); an
 `action parameter query` after the first execution command warns `W502` -
 these are console-time prompts and belong at the top.
 
-`--auto-fix` (`W503`), on by default when files are given (as pre-commit
-does) and off when auto-discovering, rewrites every wrong-case
+`--auto-fix` (`W503`, `W506`), on by default when files are given (as
+pre-commit does) and off when auto-discovering, rewrites every wrong-case
 `__download`/`__createfile`/`__appendfile` reference to its canonical
-spelling in place; an auto-fixed file fails the hook so the change is
-reviewed and re-staged. No other check here has an auto-fix: a hook has no
+spelling and inserts a `delete <destination>` before each `W506` move/copy,
+in place; an auto-fixed file fails the hook so the change is reviewed and
+re-staged. No other check here has an auto-fix: a hook has no
 way to know where a missing `endif` or `end prefetch block` was meant to go,
 and guessing could silently change what the action does.
 

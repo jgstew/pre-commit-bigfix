@@ -18,6 +18,7 @@ exit codes.
 """
 
 import pytest
+from lxml import etree
 
 from pre_commit_bigfix import bes_actionscript_validate_script as validator
 
@@ -693,6 +694,7 @@ def test_unshaped_download_line_suppresses_w507():
     body = (
         'parameter "u" = "http://169.254.169.254/latest/document"\n'
         'download now {parameter "u"}\n'
+        "delete /tmp/out.json\n"
         "copy __Download/document /tmp/out.json"
     )
     assert validator.check_actionscript(body) == []
@@ -771,7 +773,7 @@ def test_move_renaming_one_download_to_another_registers_the_new_name():
 
 def test_move_of_an_undeclared_download_with_no_createfile_is_still_w507():
     """A single __Download ref with no __createfile source is a plain typo."""
-    body = "move __Download\\typo.exe elsewhere"
+    body = "delete elsewhere\nmove __Download\\typo.exe elsewhere"
     issues = validator.check_actionscript(body)
     assert codes(issues) == ["W507"]
 
@@ -782,6 +784,7 @@ def test_redirection_into_download_registers_the_target():
         "move __createfile __Download\\WUA_Search.vbs\n"
         "waithidden cmd /c cscript __Download\\WUA_Search.vbs "
         "> __Download\\results_WindowsUpdates.ini\n"
+        'delete "C:\\out.ini"\n'
         "move __Download\\results_WindowsUpdates.ini "
         '"C:\\out.ini"'
     )
@@ -871,13 +874,17 @@ def test_move_into_download_from_elsewhere_registers_the_destination():
     """The one __Download ref is the destination -- the file is being put there."""
     body = (
         'move {parameter "Temp"}\\ScreenShot.png __Download\\ScreenShot.png\n'
+        "delete C:\\out.png\n"
         "copy __Download\\ScreenShot.png C:\\out.png"
     )
     assert validator.check_actionscript(body) == []
 
 
 def test_move_out_of_download_with_one_ref_is_still_a_reference():
-    body = 'copy "__Download\\user.png" "C:\\ProgramData\\user.png"'
+    body = (
+        'delete "C:\\ProgramData\\user.png"\n'
+        'copy "__Download\\user.png" "C:\\ProgramData\\user.png"'
+    )
     assert codes(validator.check_actionscript(body)) == ["W507"]
 
 
@@ -1580,9 +1587,10 @@ def test_a_download_folder_destination_is_not_w506():
     assert validator.check_actionscript(body) == []
 
 
-def test_move_of_a_non_scratch_source_is_not_w506():
+def test_move_of_a_non_scratch_source_is_also_w506():
+    """A download moved onto a persistent path fails the same way on a rerun."""
     body = "move __Download/x.deb /var/tmp/x.deb"
-    assert codes(validator.check_actionscript(body)) == ["W507"]
+    assert codes(validator.check_actionscript(body)) == ["W506", "W507"]
 
 
 def test_scratch_dest_marker_silences_w506(tmp_path):
@@ -1596,6 +1604,135 @@ def test_scratch_dest_marker_silences_w506(tmp_path):
 def test_disable_w506_silences_it(tmp_path):
     content = bes("createfile until _EOF_\nx\n_EOF_\nmove __createfile setup.reg")
     assert issues_for(tmp_path, content, disabled={"W506"}) == []
+
+
+PREFETCH_A = "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'move __Download\\a.exe "C:\\app\\a.exe"',
+        'copy __Download\\a.exe "{parameter "Logs"}results.json"',
+        "copy __Download/a.exe /etc/app/a.exe",
+    ],
+)
+def test_copy_or_move_of_any_source_onto_an_undeleted_destination_is_w506(line):
+    """`copy`/`move` fail when the destination exists whatever the source
+    is, so the action works once and fails on every later run.
+    """
+    issues = validator.check_actionscript(PREFETCH_A + line)
+    assert codes(issues) == ["W506"]
+    assert issues[0][0] == 2
+
+
+def test_any_source_with_a_prior_delete_is_fine():
+    body = (
+        PREFETCH_A + 'delete "C:\\app\\a.exe"\nmove __Download\\a.exe "C:\\app\\a.exe"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_any_source_onto_a_download_folder_destination_is_not_w506():
+    body = (
+        PREFETCH_A + "move __Download\\a.exe __Download\\b.exe\nwait __Download\\b.exe"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_backup_move_destination_needs_its_own_delete():
+    """`move <file> <file>.bak` is itself a move onto `<file>.bak`."""
+    move = 'move "C:\\app\\x.conf" "C:\\app\\x.conf.bak"'
+    assert codes(validator.check_actionscript(move)) == ["W506"]
+    body = 'delete "C:\\app\\x.conf.bak"\n' + move
+    assert validator.check_actionscript(body) == []
+
+
+def test_delete_of_the_same_file_looked_up_by_relevance_clears_it():
+    """`{pathname of file "x.jar" of folder (parameter "Dir")}` names the
+    same file as `{parameter "Dir"}/x.jar` (real bigfix-content shape).
+    """
+    body = (
+        "prefetch x.jar sha1:x size:1 http://x/x.jar\n"
+        'delete "{pathname of file "x.jar" of folder (parameter "Dir")}"\n'
+        'copy __Download/x.jar "{parameter "Dir"}/x.jar"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_relevance_lookup_of_a_different_file_does_not_clear_it():
+    body = (
+        "prefetch x.jar sha1:x size:1 http://x/x.jar\n"
+        'delete "{pathname of file "other.jar" of folder (parameter "Dir")}"\n'
+        'copy __Download/x.jar "{parameter "Dir"}/x.jar"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+@pytest.mark.parametrize(
+    "folder_delete",
+    [
+        'folder delete "{ parameter "RunFolder" }"',  # spaces inside the braces
+        'folder delete "{parameter "RunFolder"}"',
+        'folder delete "{parameter "RunFolder"}\\"',
+    ],
+)
+def test_folder_delete_of_a_substituted_parent_clears_it(folder_delete):
+    body = (
+        "prefetch KVRT.exe sha1:x size:1 http://x/KVRT.exe\n"
+        f"{folder_delete}\n"
+        'copy __Download\\KVRT.exe "{parameter "RunFolder"}\\KVRT.exe"'
+    )
+    assert validator.check_actionscript(body) == []
+
+
+def test_folder_delete_of_a_different_substituted_folder_does_not_clear_it():
+    body = (
+        "prefetch KVRT.exe sha1:x size:1 http://x/KVRT.exe\n"
+        'folder delete "{parameter "OtherFolder"}"\n'
+        'copy __Download\\KVRT.exe "{parameter "RunFolder"}\\KVRT.exe"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+@pytest.mark.parametrize(
+    "shell_delete, destination",
+    [
+        # real CommunityContent shapes (macOS /tmp is /private/tmp)
+        ("wait /bin/sh -c \"rm '/private/tmp/a.pkg' \"", '"/tmp/a.pkg"'),
+        ('wait sh -c "rm \'/tmp/{parameter "D"}\'"', '"/tmp/{parameter "D"}"'),
+        ("wait /bin/rm -f /opt/app/a.pkg", "/opt/app/a.pkg"),
+        ('waithidden cmd /c del /f "C:\\app\\a.pkg"', '"C:\\app\\a.pkg"'),
+    ],
+)
+def test_shell_delete_of_the_destination_clears_it(shell_delete, destination):
+    body = (
+        "prefetch a.pkg sha1:x size:1 http://x/a.pkg\n"
+        f"{shell_delete}\nmove __Download/a.pkg {destination}"
+    )
+    assert validator.check_actionscript(body) == []
+
+
+@pytest.mark.parametrize(
+    "shell_line",
+    [
+        "wait sh -c \"rm '/tmp/other.pkg'\"",  # a different file
+        'wait sh -c "echo /tmp/a.pkg"',  # names it but does not delete it
+        "wait sh -c \"rm '/tmp/a.pkg.old'\"",  # a longer name, not the file
+    ],
+)
+def test_shell_line_that_does_not_delete_the_destination_keeps_w506(shell_line):
+    body = (
+        "prefetch a.pkg sha1:x size:1 http://x/a.pkg\n"
+        f'{shell_line}\nmove __Download/a.pkg "/tmp/a.pkg"'
+    )
+    assert codes(validator.check_actionscript(body)) == ["W506"]
+
+
+def test_copy_whose_arguments_cannot_be_split_is_not_w506():
+    """Three unquoted words: which is the destination is unknowable."""
+    body = PREFETCH_A + "copy __Download\\a.exe C:\\Program Files\\a.exe"
+    assert "W506" not in codes(validator.check_actionscript(body))
 
 
 def test_parameter_of_action_matches_the_bare_parameter():
@@ -1623,6 +1760,7 @@ def test_copying_the_destination_elsewhere_does_not_clear_it():
     """A `copy` leaves its source in place, so the destination still exists."""
     body = (
         "appendfile new content\n"
+        'delete "{parameter "server"}.bak"\n'
         'copy "{parameter "server"}" "{parameter "server"}.bak"\n'
         'move __appendfile "{parameter "server"}"'
     )
@@ -1632,6 +1770,7 @@ def test_copying_the_destination_elsewhere_does_not_clear_it():
 def test_moving_a_different_file_away_does_not_clear_it():
     body = (
         "appendfile new content\n"
+        'delete "C:\\app\\server.conf.bak"\n'
         'move "C:\\app\\server.conf" "C:\\app\\server.conf.bak"\n'
         'move __appendfile "C:\\app\\web.conf"'
     )
@@ -2042,3 +2181,119 @@ def test_double_slash_arguments_of_a_command_are_not_a_comment():
 )
 def test_strip_trailing_comment(line, expected):
     assert validator._strip_trailing_comment(line) == expected
+
+
+# --- W506 auto-fix: insert `delete <destination>` before the move/copy ----------
+
+
+def _action_texts(path):
+    """Decoded ActionScript text of every action in the BES file at `path`."""
+    with open(path, "rb") as handle:
+        root = etree.fromstring(handle.read())
+    return [element.text for element in root.iter("ActionScript")]
+
+
+def test_w506_auto_fix_inserts_delete_before_the_copy(tmp_path):
+    body = (
+        "prefetch a.exe sha1:x size:1 http://x/a.exe\n"
+        '    copy __Download\\a.exe "C:\\app\\a.exe"\nwait "C:\\app\\a.exe"'
+    )
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert "W506" not in codes(issues)
+    assert codes(fixed) == ["W506"]
+    [text] = _action_texts(path)
+    assert (
+        '\n    delete "C:\\app\\a.exe"\n    copy __Download\\a.exe "C:\\app\\a.exe"'
+        in text
+    )
+
+
+def test_w506_auto_fix_on_the_first_line_of_the_body(tmp_path):
+    """The body starts on the <ActionScript> tag line: the delete goes after
+    the tag, inside the script, not before it.
+    """
+    path = write(tmp_path, "x.bes", bes('move __Download\\a.exe "C:\\a.exe"'))
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W506"]
+    [text] = _action_texts(path)
+    assert text == 'delete "C:\\a.exe"\nmove __Download\\a.exe "C:\\a.exe"'
+
+
+def test_w506_auto_fix_in_an_entity_escaped_body(tmp_path):
+    """Outside CDATA the inserted delete must be escaped the same way."""
+    content = bes("x").replace(
+        "<![CDATA[x]]>",
+        "\nmove __Download\\a.exe &quot;C:\\a &amp; b\\a.exe&quot;\n",
+    )
+    path = write(tmp_path, "x.bes", content)
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W506"]
+    raw = open(path, encoding="utf-8").read()
+    assert "delete &quot;C:\\a &amp; b\\a.exe&quot;" in raw
+    [text] = _action_texts(path)
+    assert '\ndelete "C:\\a & b\\a.exe"\nmove __Download' in text
+
+
+def test_w506_auto_fix_copies_a_cdata_destination_with_ampersand_verbatim(tmp_path):
+    """Inside CDATA a relevance `&` concatenation is literal and legal."""
+    move = 'copy __Download\\a.dll "{(pathname of windows folder & "\\a.dll")}"'
+    path = write(tmp_path, "x.bes", bes("wait x\n" + move))
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W506"]
+    [text] = _action_texts(path)
+    assert (
+        text == 'wait x\ndelete "{(pathname of windows folder & "\\a.dll")}"\n' + move
+    )
+
+
+def test_w506_auto_fix_handles_several_targets_and_keeps_crlf(tmp_path):
+    body = (
+        'copy __Download\\a.exe "C:\\a.exe"\n'
+        "wait x\n"
+        'copy __Download\\b.exe "C:\\b.exe"'
+    )
+    path = write(tmp_path, "x.bes", bes(body))
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["W506", "W506"]
+    assert "W506" not in codes(issues)
+    [text] = _action_texts(path)
+    assert text.split("\n") == [
+        'delete "C:\\a.exe"',
+        'copy __Download\\a.exe "C:\\a.exe"',
+        "wait x",
+        'delete "C:\\b.exe"',
+        'copy __Download\\b.exe "C:\\b.exe"',
+    ]
+    raw = open(path, "rb").read()
+    assert raw.count(b"\n") == raw.count(b"\r\n")
+
+
+def test_w506_auto_fix_is_idempotent(tmp_path):
+    path = write(tmp_path, "x.bes", bes('copy __Download\\a.exe "C:\\a.exe"'))
+    validator.check_file(path, auto_fix=True)
+    once = open(path, "rb").read()
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == []
+    assert open(path, "rb").read() == once
+
+
+@pytest.mark.parametrize(
+    "kwargs, marker",
+    [({"disabled": {"W506"}}, None), ({}, validator.SCRATCH_DEST_MARKER)],
+)
+def test_w506_auto_fix_respects_disable_and_marker(tmp_path, kwargs, marker):
+    content = bes('copy __Download\\a.exe "C:\\a.exe"', marker=marker)
+    path = write(tmp_path, "x.bes", content)
+    before = open(path, "rb").read()
+    _issues, fixed = validator.check_file(path, auto_fix=True, **kwargs)
+    assert "W506" not in codes(fixed)
+    assert open(path, "rb").read() == before
+
+
+def test_w506_is_not_fixed_without_auto_fix(tmp_path):
+    path = write(tmp_path, "x.bes", bes('copy __Download\\a.exe "C:\\a.exe"'))
+    before = open(path, "rb").read()
+    issues, fixed = validator.check_file(path)
+    assert "W506" in codes(issues) and fixed == []
+    assert open(path, "rb").read() == before

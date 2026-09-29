@@ -217,8 +217,8 @@
     `wait`/`run` of cmd.exe that passes a command line but no `/c` warns
     W505 -- without the switch cmd.exe opens a shell and never runs the
     command. `/k` is likewise flagged: it runs the command but leaves the
-    shell open, so the action hangs instead of completing. A `move`/`copy` of `__createfile`/`__appendfile` onto a
-    destination not deleted earlier in the body warns W506: both verbs fail
+    shell open, so the action hangs instead of completing. A `move`/`copy` (of any source) onto a
+    destination not cleared earlier in the body warns W506: both verbs fail
     when the destination already exists, so the action works once and fails on
     every later run (a destination inside the action's own download folder is
     exempt, being action-scoped rather than persistent). An
@@ -229,11 +229,12 @@
     pairing check that hook's state machine cannot express. A command after
     an unconditional exit/restart/shutdown is unreachable and warns W501; an
     `action parameter query` after execution began warns W502. E-codes
-    fail the hook. --auto-fix (W503), on by default when files are given (as
-    pre-commit does) and off when auto-discovering, rewrites every
-    wrong-case scratch reference to its canonical spelling in place; an
-    auto-fixed file fails the hook so the change is reviewed and re-staged.
-    No other check here has an auto-fix, since a hook has no way to know
+    fail the hook. --auto-fix (W503, W506), on by default when files are given
+    (as pre-commit does) and off when auto-discovering, rewrites every
+    wrong-case scratch reference to its canonical spelling and inserts a
+    `delete` before each W506 move/copy, in place; an auto-fixed file fails
+    the hook so the change is reviewed and re-staged. No other check here
+    has an auto-fix, since a hook has no way to know
     where a missing `endif` or `end prefetch block` was meant to go, and
     guessing could silently change what the action does. Only
     application/x-Fixlet-Windows-Shell (matched case-insensitively) or

@@ -112,11 +112,15 @@ Checks:
     W505  a `wait`/`run` of cmd.exe passes a command line but no `/c` (cmd.exe
           opens a shell and never runs the command), or uses `/k` instead (the
           command runs but the shell never exits, so the action hangs)
-    W506  a `move`/`copy` of `__createfile`/`__appendfile` onto a destination
-          that is not deleted earlier in the body. Both verbs fail when the
-          destination already exists, so the action works once and fails on
-          every later run; a destination inside the action's own download
-          folder is exempt, being action-scoped rather than persistent
+    W506  a `move`/`copy` (of any source: a scratch file, a download, ...)
+          onto a destination that is not cleared earlier in the body -- by a
+          `delete` (also one that looks the same file up by relevance), a
+          `folder delete` of an ancestor, a `move` of it elsewhere, or a
+          shell `rm`/`del` naming it. Both verbs fail when the destination
+          already exists, so the action works once and fails on every later
+          run; a destination inside the action's own download folder is
+          exempt, being action-scoped rather than persistent (fixable ->
+          `delete <destination>` inserted before the command)
     W507  a command references `__Download\\<name>` but nothing prefetches or
           downloads a file of that name (a typo catcher; skipped entirely
           when any producer's names are unknowable -- see below. `delete` and
@@ -147,13 +151,15 @@ structure (an `endif`, an `end prefetch block`, ...) a hook has no way to
 know the right place for, and guessing could silently change what the action
 does.
 
---auto-fix (W503), on by default (yes when files are given, as pre-commit
-does; no when auto-discovering). Every wrong-case `__download`,
+--auto-fix (W503, W506), on by default (yes when files are given, as
+pre-commit does; no when auto-discovering). Every wrong-case `__download`,
 `__createfile`, or `__appendfile` reference is rewritten in place to its
-canonical spelling -- this is purely a case correction of a reference this
-hook already resolved to a known scratch-file token, so there is nothing to
-guess. An auto-fixed file fails the hook so the change is reviewed and
-re-staged.
+canonical spelling -- purely a case correction of a reference this hook
+already resolved to a known scratch-file token, so there is nothing to
+guess -- and a `delete <destination>` line (same indentation, same XML
+escaping as the body) is inserted before each W506 move/copy, the
+documented pattern. An auto-fixed file fails the hook so the change is
+reviewed and re-staged.
 
 Only <ActionScript> elements with MIMEType application/x-Fixlet-Windows-Shell
 (matched case-insensitively; a mixed-case MIMEType is still valid BigFix
@@ -426,9 +432,18 @@ _FOLDER_DELETE_RE = re.compile(r"^folder\s+delete\s+(.+?)\s*$", re.IGNORECASE)
 _SCRATCH_MOVE_RE = re.compile(
     r'^(move|copy)\s+"?(__createfile|__appendfile)"?\s+(.+?)\s*$', re.IGNORECASE
 )
+# `move`/`copy <source> <target>` with the verb and argument text captured
+_MOVE_COPY_ARGS_RE = re.compile(r"^(move|copy)\s+(.+?)\s*$", re.IGNORECASE)
 # `move <source> <target>` with the argument text captured, for W506: moving
 # a destination away (to back it up) clears it just as a delete does
 _MOVE_ARGS_RE = re.compile(r"^move\s+(.+?)\s*$", re.IGNORECASE)
+# a launch line that runs a shell/OS delete (`sh -c "rm ..."`, `/bin/rm`,
+# `cmd /c del`); W506 counts it as clearing a destination it names
+_SHELL_DELETE_RE = re.compile(
+    r"^(?:wait|waithidden|run|runhidden|dos)\b.*?(?:^|[\s\"'/\\])"
+    r"(?:rm|del|erase)(?:\.exe)?(?=[\s\"'])",
+    re.IGNORECASE,
+)
 # `{parameter "X" of action}` names the same parameter as `{parameter "X"}`
 _PARAMETER_OF_ACTION_RE = re.compile(
     r'(\bparameter\s+"[^"]*")\s+of\s+action\b', re.IGNORECASE
@@ -1059,7 +1074,26 @@ def _normalize_path(text):
     text = text.strip().strip('"')
     windows = bool(_WINDOWS_PATH_RE.search(text))
     text = _PARAMETER_OF_ACTION_RE.sub(r"\1", text).replace("\\", "/").rstrip("/")
+    # `{ parameter "x" }` and `{parameter "x"}` are the same substitution
+    text = re.sub(r"\{\s+", "{", re.sub(r"\s+\}", "}", text))
     return text.lower() if windows else text
+
+
+def _deletes_by_lookup(deleted, destination):
+    """True if `deleted` is a relevance lookup of the destination's file.
+
+    `{pathname of file "x.jar" of folder (parameter "Dir")}` names the file
+    `{parameter "Dir"}/x.jar`: the substitution must name the destination's
+    file and contain its folder expression, so a lookup of another file, or
+    of the same name in some other folder, does not count.
+    """
+    match = re.fullmatch(r"\{(.*)\}", deleted)
+    if not match:
+        return False
+    lookup = match.group(1).lower()
+    folder, _sep, name = destination.lower().rpartition("/")
+    names = re.findall(r'\bfiles?\s+"([^"]+)"', lookup)
+    return name in names and folder.strip("{}") in lookup
 
 
 def _split_arguments(text):
@@ -1094,11 +1128,33 @@ def _clears_destination(line, destination):
         # a substituted prefix is unknowable, so compare the trailing literal
         # segment: `folder delete "{client folder...}/__Local/Upgrade"` covers
         # `__Local/Upgrade/besclientupgrade`
+        # the whole folder, substitutions and all, contains it; a Windows-style
+        # destination was case-folded by _normalize_path, so fold to match
+        if folder and (destination.startswith((folder + "/", folder.lower() + "/"))):
+            return True
         tail = folder.split("}")[-1].strip("/")
         return bool(tail) and "/" + tail + "/" in "/" + destination
     match = _FILE_DELETE_RE.match(stripped)
     if match:
-        return _normalize_path(match.group(1)) == destination
+        deleted = _normalize_path(match.group(1))
+        return deleted == destination or _deletes_by_lookup(deleted, destination)
+    if _SHELL_DELETE_RE.match(stripped):
+        # the destination named anywhere on the delete command line; macOS
+        # `/tmp` is a symlink to `/private/tmp`, so either spelling counts
+        def unquoted(text):
+            return text.replace('"', "").replace("'", "")
+
+        text = unquoted(_normalize_path(stripped))
+        if _WINDOWS_PATH_RE.search(stripped):
+            text = text.lower()
+        spellings = {unquoted(destination)}
+        if destination.startswith("/tmp/"):
+            spellings.add("/private" + unquoted(destination))
+        # the whole path, not a prefix of a longer name (`a.pkg` vs `a.pkg.old`)
+        return any(
+            re.search(re.escape(spelling) + r"(?![\w.-])", text)
+            for spelling in spellings
+        )
     # `move <destination> <elsewhere>` -- backing the old file up -- leaves
     # the destination empty (a `copy` does not: its source stays in place)
     match = _MOVE_ARGS_RE.match(stripped)
@@ -1108,31 +1164,47 @@ def _clears_destination(line, destination):
     return False
 
 
-def _check_scratch_destinations(lines):
-    """Check that a scratch file is moved/copied onto a cleared destination.
+def _uncleared_destinations(lines):
+    """Yield (index, verb, destination_text) for each W506 target in `lines`.
 
-    Returns W506 for a `move`/`copy` of `__createfile`/`__appendfile` whose
-    destination is not deleted earlier in the body. Both verbs fail when the
-    destination already exists, so such an action works once and then fails
-    on every later run; the documented pattern is `delete <dest>` first.
+    A `move`/`copy` of any source whose destination (the second of exactly
+    two arguments) is not deleted -- or moved away, or inside a deleted
+    folder -- on an earlier line. `destination_text` is the argument as
+    written, quotes included. Shared by the check and its auto-fix.
+    """
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        match = _MOVE_COPY_ARGS_RE.match(stripped)
+        if not match:
+            continue
+        args = _split_arguments(match.group(2))
+        if len(args) != 2:
+            continue  # e.g. an unquoted path with spaces: which is the target?
+        destination = _normalize_path(args[1])
+        if not destination or _DOWNLOAD_DEST_RE.search(destination):
+            continue
+        if any(_clears_destination(line, destination) for line in lines[:index]):
+            continue
+        yield index, match.group(1).lower(), args[1]
+
+
+def _check_scratch_destinations(lines):
+    """Check that a move/copy lands on a cleared destination.
+
+    Returns W506 for a `move`/`copy` -- of a `__createfile`/`__appendfile`
+    scratch file, a download, or anything else -- whose destination is not
+    deleted earlier in the body. Both verbs fail when the destination already
+    exists, so such an action works once and then fails on every later run;
+    the documented pattern is `delete <dest>` first (auto-fixable).
 
     A destination inside the action's own download folder is exempt: that
     folder is action-scoped rather than a persistent location.
     """
     issues = []
-    for index, raw_line in enumerate(lines):
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("//"):
-            continue
-        match = _SCRATCH_MOVE_RE.match(stripped)
-        if not match:
-            continue
-        verb, destination = match.group(1).lower(), _normalize_path(match.group(3))
-        if not destination or _DOWNLOAD_DEST_RE.search(destination):
-            continue
-        if any(_clears_destination(line, destination) for line in lines[:index]):
-            continue
-        shown = match.group(3).strip().strip('"')
+    for index, verb, destination_text in _uncleared_destinations(lines):
+        shown = destination_text.strip().strip('"')
         issues.append(
             (
                 index + 1,
@@ -1140,8 +1212,8 @@ def _check_scratch_destinations(lines):
                 (
                     f'`{verb}` onto "{shown}" without deleting it first; '
                     f"`{verb}` fails when the destination already exists, so this "
-                    f"action cannot run twice; add `{SCRATCH_DEST_MARKER}` if "
-                    "intentional"
+                    f"action cannot run twice (auto-fixable); add "
+                    f"`{SCRATCH_DEST_MARKER}` if intentional"
                 ),
             )
         )
@@ -1254,6 +1326,76 @@ def _scratch_case_targets(raw, src, is_bes):
                 canonical = _SCRATCH_CANONICAL[match.group(1).lower()]
                 if matched_text != canonical:
                     yield sourceline + index, matched_text, canonical
+
+
+def _destination_targets(raw, src, is_bes):
+    """Yield (file_lineno, verb, destination_text) for every W506 fix target.
+
+    The same `_uncleared_destinations` walk the check itself uses, over the
+    same heredoc-masked, comment-normalized lines, mapped to file lines the
+    way `_scratch_case_targets` does.
+    """
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return  # already reported as W500; nothing safe to rewrite
+    else:
+        bodies = [(1, src)]
+    for sourceline, body in bodies:
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        lines = _ignore_structural_comments(masked_lines)
+        for index, verb, destination in _uncleared_destinations(lines):
+            yield sourceline + index, verb, destination
+
+
+# an entity reference: the line sits in an entity-escaped (non-CDATA) body
+_ENTITY_RE = re.compile(r"&(?:quot|amp|lt|gt|apos|#\d+|#x[0-9a-fA-F]+);")
+# the opening tag (and CDATA start) a body's first line shares with its text
+_ACTIONSCRIPT_OPEN_RE = re.compile(r"<ActionScript\b[^>]*>(?:<!\[CDATA\[)?")
+
+
+def fix_scratch_destinations(src, targets):
+    """W506: insert `delete <destination>` before each uncleared move/copy.
+
+    `targets` is `_destination_targets`' (file_lineno, verb, destination)
+    triples. The delete takes the command line's indentation. A destination
+    that appears byte-for-byte on the file line (a CDATA body, or one with
+    nothing to escape) is copied as written; otherwise, in an entity-escaped
+    body it is escaped the same way, and a destination whose escaping cannot
+    be told is left alone. When the
+    command shares its line with the `<ActionScript>` opening tag, the delete
+    goes right after the tag. Returns (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    # bottom-up, so an insertion does not shift the lines still to be fixed
+    for lineno, verb, destination in sorted(targets, reverse=True):
+        if not 1 <= lineno <= len(lines):
+            continue
+        raw_line = lines[lineno - 1]
+        text = destination
+        if destination in raw_line:
+            pass  # already written this way on the line (e.g. CDATA): copy it
+        elif _ENTITY_RE.search(raw_line):
+            text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            if "&quot;" in raw_line:
+                text = text.replace('"', "&quot;")
+        elif any(char in text for char in "&<>"):
+            continue
+        opening = _ACTIONSCRIPT_OPEN_RE.search(raw_line)
+        if opening:
+            cut = opening.end()
+            command = raw_line[cut:]
+            indent = command[: len(command) - len(command.lstrip())]
+            lines[lineno - 1] = raw_line[:cut] + f"{indent}delete {text}\n" + command
+        else:
+            indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            lines.insert(lineno - 1, f"{indent}delete {text}")
+        fixed.append(
+            (lineno, "W506", f"inserted `delete {destination}` before the `{verb}`")
+        )
+    return "\n".join(lines), sorted(fixed)
 
 
 def _replace_on_line(lines, lineno, text, replacement):
@@ -1985,8 +2127,11 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     With `auto_fix`, every wrong-case `__download`/`__createfile`/
     `__appendfile` reference (W503) is rewritten in place to its canonical
     spelling, unless "W503" is in `disabled` or the file opts out with the
-    `actionscript-scratch-ok` marker. The file's line endings are preserved
-    (CRLF in, CRLF out). No other check here has an auto-fix.
+    `actionscript-scratch-ok` marker; and a `delete <destination>` is
+    inserted before each W506 move/copy, unless "W506" is disabled or the
+    `actionscript-scratch-dest-ok` marker is present. The file's line
+    endings are preserved (CRLF in, CRLF out). No other check has an
+    auto-fix.
     """
     if not os.path.isfile(path):
         return [(1, "W500", "file not found; skipping")], []
@@ -2011,9 +2156,15 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     if auto_fix and "W503" not in disabled and SCRATCH_MARKER not in src:
         src, fixed = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
         raw = _encode(src, was_crlf)
-        if raw != original:
-            with open(path, "wb") as handle:
-                handle.write(raw)
+    if auto_fix and "W506" not in disabled and SCRATCH_DEST_MARKER not in src:
+        src, got = fix_scratch_destinations(
+            src, list(_destination_targets(raw, src, is_bes))
+        )
+        fixed += got
+        raw = _encode(src, was_crlf)
+    if raw != original:
+        with open(path, "wb") as handle:
+            handle.write(raw)
 
     if is_bes:
         issues = _validate_bes_xml(raw)
@@ -2100,7 +2251,8 @@ def main(argv=None):
         default=None,
         help=(
             "rewrite wrong-case __download/__createfile/__appendfile "
-            "references (W503) in place to their canonical spelling "
+            "references (W503) to their canonical spelling and insert a "
+            "`delete` before each uncleared move/copy (W506), in place "
             "(default: yes when files are given, no when auto-discovering)"
         ),
     )
