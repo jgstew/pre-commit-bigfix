@@ -251,7 +251,10 @@ nest.
 
 Within a single line, a `{...}` relevance substitution that is never closed
 before end of line is `E508`, and a `}` reached with no substitution open is
-`E509`: a substitution is evaluated per line and cannot span lines. `{{` (and
+`E509`: a substitution is evaluated per line and cannot span lines. `E508`
+also applies to `createfile until` content, which the agent substitutes too,
+so a literal `{` in an embedded script must be written `{{` (a lone `}` there
+is literal and is not `E509`). `{{` (and
 `}}`) is an escape that passes a literal brace through to the command, so it
 neither opens nor closes a substitution, and a later lone `}` pairs with that
 escape instead of being reported as stray. The `}}` escape holds *inside* an

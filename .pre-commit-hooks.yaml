@@ -172,7 +172,8 @@
     second `else` for the same `if`, is E506; and an `if` opened inside a
     prefetch block that is still open at that block's `end prefetch block` is
     E507, since blocks interleave rather than nest. Within a single line, a
-    `{...}` relevance substitution left unclosed at end of line is E508 and a
+    `{...}` relevance substitution left unclosed at end of line is E508 (also
+    on `createfile until` content lines, which are substituted too) and a
     `}` with no substitution open is E509 -- a substitution cannot span lines;
     `{{` (and `}}`) passes a literal brace through rather than opening or
     closing a substitution (the `}}` escape holds inside an open substitution

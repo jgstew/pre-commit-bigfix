@@ -403,10 +403,13 @@ def test_braces_in_a_comment_line_are_ignored():
     assert validator.check_actionscript("// see {name of operating system") == []
 
 
-def test_braces_inside_createfile_block_are_ignored():
+def test_stray_close_brace_inside_createfile_block_is_ignored():
+    """A `}` with nothing open is literal createfile text (an unclosed `{`
+    there is E508 -- see the createfile E508 tests).
+    """
     body = (
         "createfile until END_OF_FILE\n"
-        "some } file { content\n"
+        "some } file content\n"
         "END_OF_FILE\n"
         "wait cmd /c echo a"
     )
@@ -2297,3 +2300,54 @@ def test_w506_is_not_fixed_without_auto_fix(tmp_path):
     issues, fixed = validator.check_file(path)
     assert "W506" in codes(issues) and fixed == []
     assert open(path, "rb").read() == before
+
+
+# --- E508 inside `createfile until` content --------------------------------------
+
+
+def test_unclosed_brace_in_createfile_content_is_e508():
+    """Createfile content is relevance-substituted line by line, so a literal
+    `{` must be written `{{` there too (real bigfix-content shape: the same.
+
+    script escapes `@{{Metadata="true"}` correctly two lines later).
+    """
+    body = (
+        "createfile until END_OF_FILE\n"
+        "try {\n"
+        '$r = Invoke-RestMethod -Headers @{{Metadata="true"} -Uri "{parameter "u"}"\n'
+        "} catch {\n"
+        "    exit 1\n"
+        "}\n"
+        "END_OF_FILE\n"
+        "move __createfile __Download\\get.ps1"
+    )
+    issues = validator.check_actionscript(body)
+    assert [(lineno, code) for lineno, code, _ in issues] == [(2, "E508"), (4, "E508")]
+    assert "createfile" in issues[0][2] and "{{" in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "content_line",
+    [
+        "}",  # a lone `}` is literal text
+        'echo {parameter "x"}',  # a closed substitution
+        "function f {{ return 1 }",  # escaped
+        "if (\"$x\" -match '\\d{3}') {{ exit }",  # regex quantifier + escape
+    ],
+)
+def test_balanced_or_literal_createfile_content_is_fine(content_line):
+    body = (
+        "createfile until EOF\n"
+        f"{content_line}\n"
+        "EOF\n"
+        "move __createfile __Download\\x.ps1"
+    )
+    assert "E508" not in codes(validator.check_actionscript(body))
+
+
+def test_substitution_marker_silences_createfile_e508(tmp_path):
+    content = bes(
+        "createfile until EOF\ntry {\nEOF\nmove __createfile __Download\\x.ps1",
+        marker=validator.SUBSTITUTION_MARKER,
+    )
+    assert "E508" not in codes(issues_for(tmp_path, content))

@@ -27,7 +27,9 @@ Checks:
           do not nest, so this cannot close cleanly
     E508  a `{` relevance substitution has no closing `}` before the end of
           its line (a substitution cannot span lines); `}}` inside the
-          substitution is a literal `}` and does not close it
+          substitution is a literal `}` and does not close it. Also checked
+          on `createfile until` content lines, which the agent substitutes
+          too (a literal `{` there must be `{{`; a lone `}` is literal)
     E509  a `}` with no `{` relevance substitution open on that line.
           `appendfile <content>` lines are exempt from both E508 and E509 --
           everything after the verb is one line of raw file content written
@@ -1755,6 +1757,39 @@ def _ignore_structural_comments(lines):
     return result
 
 
+def _check_heredoc_braces(raw_lines, masked_lines):
+    """E508 for a `{` left open on a `createfile until` content line.
+
+    Heredoc content is blanked out for every other check (it is file text,
+    not commands), but the agent still performs relevance substitution on
+    it line by line, so a literal `{` there must be written `{{` just as on
+    a command line. Only an unclosed `{` is reported: a `}` with nothing
+    open is literal text in createfile content, so E509 does not apply.
+    """
+    issues = []
+    for index, (raw, masked) in enumerate(zip(raw_lines, masked_lines)):
+        if raw == masked:
+            continue  # not heredoc content
+        for lineno, code, message in _check_substitution_braces(index + 1, raw):
+            if code != "E508":
+                continue
+            column = message.split("column ", 1)[1].split(" ", 1)[0]
+            issues.append(
+                (
+                    lineno,
+                    "E508",
+                    (
+                        f"unbalanced {{ at column {column} inside `createfile "
+                        "until` content -- the agent substitutes relevance "
+                        "there too, so this opens a substitution that never "
+                        "closes; write a literal brace as `{{`; add "
+                        f"`{SUBSTITUTION_MARKER}` if intentional"
+                    ),
+                )
+            )
+    return issues
+
+
 def check_actionscript(body, first_line=1):
     """Check a single ActionScript body for balanced blocks and substitutions.
 
@@ -1769,11 +1804,13 @@ def check_actionscript(body, first_line=1):
     first, so lines that only look like commands inside one are ignored (its
     own E302 belongs to the sibling schclass hook, not here).
     """
-    lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+    raw_lines = body.split("\n")
+    lines, _createfile_issues = _mask_heredocs(raw_lines)
     # a trailing `// comment` is valid ActionScript; on a fixed-syntax line
     # (endif, else, ...) it must not change how the line is parsed
     lines = _ignore_structural_comments(lines)
-    issues = _check_download_names(lines, first_line)  # E512 / W507
+    issues = _check_heredoc_braces(raw_lines, lines)  # E508 in createfile content
+    issues.extend(_check_download_names(lines, first_line))  # E512 / W507
     issues.extend(_check_parameters(lines, first_line))  # E516 / E517
     issues.extend(_check_scratch_references(lines))  # E519 / W503
     issues.extend(_check_scratch_destinations(lines))  # W506
