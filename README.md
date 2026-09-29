@@ -56,7 +56,9 @@ overridable with `--severity-values`; `Unspecified` is auto-fixed to empty), des
 descriptions, a Description `<script>` block free of `//` line comments
 (lost when the file is converted to FXF, since Description newlines are
 collapsed), and Task/Fixlet release-date / modification-time presence and order
-(a SourceReleaseDate later than the modification time warns `W219`).
+(a SourceReleaseDate later than the modification time warns `W219`), and a
+`DownloadSize` that does not match the prefetches' total (`W220`, only when
+that total is knowable).
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`

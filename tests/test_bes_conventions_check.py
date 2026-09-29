@@ -2212,3 +2212,68 @@ def test_w219_marker_opts_out(tmp_path):
         marker="source-release-date-ok",
     )
     assert "W219" not in codes(tmp_path, content)
+
+
+# --- W220 DownloadSize vs the prefetches' total ------------------------------
+
+SHA1 = "a" * 40
+SHA256 = "b" * 64
+
+
+def _pf(name, size):
+    return f"prefetch {name} sha1:{SHA1} size:{size} https://e/{name} sha256:{SHA256}"
+
+
+def test_w220_download_size_does_not_match_the_prefetch(tmp_path):
+    """Real bigfix-content shape: a stale value copied from another fixlet."""
+    body = "\n" + _pf("WmiExplorer.zip", 226095) + "\nwait x\n"
+    got = codes(tmp_path, task(download_size="249327", body=body))
+    assert "W220" in got
+
+
+def test_w220_zero_download_size_with_prefetches(tmp_path):
+    body = "\n" + _pf("a.zip", 10) + "\n" + _pf("b.cab", 20) + "\n"
+    assert "W220" in codes(tmp_path, task(download_size="0", body=body))
+
+
+@pytest.mark.parametrize(
+    "download_size, body",
+    [
+        ("30", "\n" + _pf("a.zip", 10) + "\n" + _pf("b.cab", 20) + "\n"),
+        # the unzip.exe utility is left out of the total by the console
+        ("30", "\n" + _pf("a.zip", 30) + "\n" + _pf("unzip.exe", 204800) + "\n"),
+        # an `if` elsewhere does not make the prefetch conditional
+        ("10", "\n" + _pf("a.zip", 10) + "\nif {true}\nwait x\nendif\n"),
+        (
+            "10",
+            "\nbegin prefetch block\nadd prefetch item name=a.zip sha1="
+            + SHA1
+            + " size=10 url=https://e/a.zip sha256="
+            + SHA256
+            + "\nend prefetch block\n",
+        ),
+    ],
+)
+def test_w220_matching_download_size_is_clean(tmp_path, download_size, body):
+    assert "W220" not in codes(tmp_path, task(download_size=download_size, body=body))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # which prefetch runs depends on the endpoint: no single total
+        "\nif {windows of operating system}\n" + _pf("a.zip", 10) + "\nendif\n",
+        # a size decided at runtime
+        "\nprefetch a.zip sha1:" + SHA1 + ' size:{parameter "s"} https://e/a.zip\n',
+        # a dynamic download's size is unknowable
+        "\n" + _pf("a.zip", 10) + "\ndownload now https://e/b.zip\n",
+    ],
+)
+def test_w220_skips_totals_it_cannot_know(tmp_path, body):
+    assert "W220" not in codes(tmp_path, task(download_size="999", body=body))
+
+
+def test_w220_marker_opts_out(tmp_path):
+    body = "\n" + _pf("a.zip", 10) + "\n"
+    content = task(download_size="999", body=body, marker="download-size-ok")
+    assert "W220" not in codes(tmp_path, content)

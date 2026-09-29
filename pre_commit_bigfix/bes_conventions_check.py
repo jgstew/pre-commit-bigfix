@@ -127,6 +127,11 @@ Checks:
           the two was likely missed in a hand edit or copied from another
           file (compared with the later of the timestamp's local and UTC
           dates, so a late-evening edit is not flagged)
+    W220  a <DownloadSize> that does not match the total of the prefetches'
+          sizes (the unzip.exe utility may be left out) -- a stale value,
+          often copied from another fixlet. Checked only when the total is
+          knowable: one action prefetches, none of its prefetches sits in an
+          `if`, every size is a literal, and there is no dynamic `download`
 
 Timestamp fields (E202, E216): x-fixlet-modification-time and
 x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
@@ -220,7 +225,7 @@ file, e.g. in an XML comment):
     source-release-date-ok  (E201, W202, and W219)
     modification-time-ok     (E202 and W201)
     first-propagation-ok    (E216)
-    download-size-ok        (E203 and W203)
+    download-size-ok        (E203, W203, and W220)
     description-ok          (E204)
     cpe-ok                  (E205)
     action-ui-metadata-ok   (E206)
@@ -280,7 +285,7 @@ MIMETYPE_MARKER = "mimetype-ok"  # E200
 SOURCE_RELEASE_DATE_MARKER = "source-release-date-ok"  # E201, W202, W219
 MODIFICATION_TIME_MARKER = "modification-time-ok"  # E202, W201
 FIRST_PROPAGATION_MARKER = "first-propagation-ok"  # E216
-DOWNLOAD_SIZE_MARKER = "download-size-ok"  # E203, W203
+DOWNLOAD_SIZE_MARKER = "download-size-ok"  # E203, W203, W220
 DESCRIPTION_MARKER = "description-ok"  # E204
 CPE_MARKER = "cpe-ok"  # E205
 ACTION_UI_METADATA_MARKER = "action-ui-metadata-ok"  # E206
@@ -597,6 +602,7 @@ KNOWN_CODES = frozenset(
         "E220",  # duplicate Analysis <Property> Name or ID
         "W218",  # action link text has a run of 2+ spaces
         "W219",  # SourceReleaseDate later than x-fixlet-modification-time
+        "W220",  # DownloadSize does not match the prefetches' total
         "E211",  # Title is a default placeholder value
         "E212",  # Relevance is the literal `true`
         "E213",  # Relevance is empty / whitespace only
@@ -911,6 +917,84 @@ def check_first_propagation_format(src):
                 )
             )
     return issues
+
+
+# W220: a prefetch statement / block item, its size, and if-structure lines
+PREFETCH_LINE_RE = re.compile(
+    r"^[ \t]*(?:prefetch\s|add\s+(?:nohash\s+)?prefetch\s+item\b)", re.IGNORECASE
+)
+PREFETCH_SIZE_RE = re.compile(r"\bsize[:=](\S+)", re.IGNORECASE)
+IF_OPEN_RE = re.compile(r"^[ \t]*if\b", re.IGNORECASE)
+IF_CLOSE_RE = re.compile(r"^[ \t]*endif\b", re.IGNORECASE)
+# the BigFix unzip utility, which the console leaves out of DownloadSize
+UNZIP_PREFETCH_RE = re.compile(r"\bunzip[\w.-]*\.exe\b", re.IGNORECASE)
+
+
+def _prefetch_total(body):
+    """Return (total, unzip_total) of a body's prefetch sizes, or None.
+
+    None when the total is unknowable: no prefetch at all, a prefetch inside
+    an `if` (which one runs depends on the endpoint), a size that is not a
+    literal integer, or a dynamic `download` statement.
+    """
+    depth, total, unzip, seen = 0, 0, 0, False
+    for line in body.split("\n"):
+        if IF_OPEN_RE.match(line):
+            depth += 1
+        elif IF_CLOSE_RE.match(line):
+            depth = max(depth - 1, 0)
+        elif DOWNLOAD_STMT_RE.match(line):
+            return None
+        elif PREFETCH_LINE_RE.match(line):
+            size = PREFETCH_SIZE_RE.search(line)
+            if depth or not size or not size.group(1).isdigit():
+                return None
+            seen = True
+            total += int(size.group(1))
+            if UNZIP_PREFETCH_RE.search(line):
+                unzip += int(size.group(1))
+    return (total, unzip) if seen else None
+
+
+def check_download_size_total(src):
+    """W220: <DownloadSize> does not match the prefetches' total size.
+
+    Only when the total is knowable: exactly one action prefetches, none of
+    its prefetches is conditional, and every size is a literal integer. The
+    unzip.exe utility may be counted or left out (the console leaves it
+    out). A stale value -- often copied from another fixlet -- shows the
+    wrong download size in the console.
+    """
+    size_match = DOWNLOAD_SIZE_TAG_RE.search(src)
+    if not size_match:
+        return []
+    declared = _strip_cdata(size_match.group(1))
+    if not DOWNLOAD_SIZE_RE.match(declared):
+        return []  # E203's business
+    totals = []
+    for match in ACTIONSCRIPT_FULL_RE.finditer(src):
+        body = match.group(2)
+        cdata = CDATA_RE.match(body.strip())
+        body = cdata.group(1) if cdata else _xml_unescape(body)
+        if PREFETCH_LINE_RE.search(body) or any(
+            PREFETCH_LINE_RE.match(line) for line in body.split("\n")
+        ):
+            totals.append(_prefetch_total(body))
+    if len(totals) != 1 or totals[0] is None:
+        return []
+    total, unzip = totals[0]
+    if int(declared) in (total, total - unzip):
+        return []
+    return [
+        (
+            _lineno(src, size_match.start()),
+            "W220",
+            (
+                f"DownloadSize {declared} does not match the prefetches' total of "
+                f"{total} bytes; add `{DOWNLOAD_SIZE_MARKER}` if intentional"
+            ),
+        )
+    ]
 
 
 def check_download_size_value(src):
@@ -1912,6 +1996,7 @@ VALUE_CHECKS = (
     (("W219",), SOURCE_RELEASE_DATE_MARKER, check_release_after_modification),
     (("E216",), FIRST_PROPAGATION_MARKER, check_first_propagation_format),
     (("E203",), DOWNLOAD_SIZE_MARKER, check_download_size_value),
+    (("W220",), DOWNLOAD_SIZE_MARKER, check_download_size_total),
     (("E205",), CPE_MARKER, check_cpe23),
     (("E206",), ACTION_UI_METADATA_MARKER, check_action_ui_metadata),
     (("E207",), CDATA_MARKER, check_cdata_required),

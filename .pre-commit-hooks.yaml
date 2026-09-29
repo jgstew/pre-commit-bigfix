@@ -39,7 +39,8 @@
     and empty-Description; a Description <script> block free of `//` line
     comments (which are lost when the file is converted to FXF); and
     Task/Fixlet release-date/modification-time presence and order (W219: a
-    release date later than the modification time) and download actions.
+    release date later than the modification time), DownloadSize against the
+    prefetches' total (W220), and download actions.
     Auto-fixes the fixable ones in place (DownloadSize -> 0, missing dates ->
     now, blank-line collapse, Title trim, Relevance whitespace trim,
     trailing-whitespace strip, XML-declaration insert/normalize, Description
