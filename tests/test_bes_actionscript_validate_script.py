@@ -2489,3 +2489,25 @@ def test_e525_with_a_stray_quote_is_reported_but_not_fixed(tmp_path):
     path = write(tmp_path, "x.bes", bes('folder create C:\\x\\"'))
     issues, fixed = validator.check_file(path, auto_fix=True)
     assert "E525" in codes(issues) and "E525" not in codes(fixed)
+
+
+# --- E512: `>>` appends to a file, it does not re-create it --------------------
+
+
+def test_appending_twice_to_the_same_download_file_is_not_e512():
+    """Real server-export shape: two steps both append to one log."""
+    body = (
+        "wait cmd /C run.bat >> __Download/run.log 2>&1\n"
+        "wait cmd /C run2.bat >> __Download/run.log 2>&1\n"
+        "wait cmd /c type __Download\\run.log"
+    )
+    assert "E512" not in codes(validator.check_actionscript(body))
+
+
+def test_overwriting_redirect_after_a_redirect_is_still_e512():
+    body = (
+        "wait cmd /c a.bat > __Download/out.txt\n"
+        "wait cmd /c b.bat > __Download/out.txt\n"
+        "wait cmd /c type __Download\\out.txt"
+    )
+    assert "E512" in codes(validator.check_actionscript(body))

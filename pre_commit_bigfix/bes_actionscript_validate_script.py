@@ -929,7 +929,11 @@ def _check_download_names(lines, first_line=1):
 
         match = _REDIRECT_TARGET_RE.search(stripped)
         if match:
-            produce(lineno, match.group(1))
+            appends = match.group(0).startswith(">>")
+            if not (appends and match.group(1).strip("\"'").lower() in producers):
+                # `>>` onto a file that already exists adds to it rather
+                # than replacing it, so it is not a second declaration
+                produce(lineno, match.group(1))
             # fall through: the line may still hold other __Download refs
             # (a command being redirected, say) to check as consumers below
 
