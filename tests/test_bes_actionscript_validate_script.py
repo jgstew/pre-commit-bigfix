@@ -2351,3 +2351,71 @@ def test_substitution_marker_silences_createfile_e508(tmp_path):
         marker=validator.SUBSTITUTION_MARKER,
     )
     assert "E508" not in codes(issues_for(tmp_path, content))
+
+
+# --- W508: a parameter referenced once and never set anywhere in the file -------
+
+
+def test_parameter_named_nowhere_else_in_the_file_is_w508(tmp_path):
+    """Copy-paste from a sibling fixlet that set it (real bigfix-content
+    shape): the name occurs exactly once in the whole file.
+    """
+    body = "wait echo x\nappendfile rm -rf '{parameter \"JREFolder\"}'"
+    issues = issues_for(tmp_path, bes(body))
+    assert codes(issues) == ["W508"]
+    content = bes(body).split("\n")
+    assert "JREFolder" in content[issues[0][0] - 1]
+    assert validator.PARAMETER_MARKER in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        # a Description page that supplies it (secure/prompted parameters)
+        (
+            "<Title>Example</Title>",
+            "<Title>Example</Title><Description>"
+            '&lt;input id="JREFolder"&gt;</Description>',
+        ),
+        # set by a second action in the same file
+        (
+            "</DefaultAction>",
+            '</DefaultAction><Action ID="Action2"><ActionScript>'
+            'parameter "JREFolder" = "/opt"</ActionScript></Action>',
+        ),
+    ],
+)
+def test_parameter_named_elsewhere_in_the_file_is_not_w508(tmp_path, extra):
+    content = bes('wait echo {parameter "JREFolder"}').replace(*extra)
+    assert "W508" not in codes(issues_for(tmp_path, content))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'parameter "d" = "/opt"\nwait echo {parameter "d"}',
+        'action parameter query "d" with description "Dir"\nwait echo {parameter "d"}',
+        # two references: named elsewhere, so the narrow rule stays quiet
+        'wait echo {parameter "d"}\nwait echo {parameter "d"}',
+    ],
+)
+def test_assigned_queried_or_repeated_parameter_is_not_w508(tmp_path, body):
+    assert "W508" not in codes(issues_for(tmp_path, bes(body)))
+
+
+def test_builtin_action_issue_date_parameter_is_not_w508(tmp_path):
+    """`action issue date` is supplied by the platform itself -- the console
+    writes `setting ... on "{parameter "action issue date" of action}"`.
+    """
+    body = (
+        'setting "_BESClient_Log_Days"="30" on '
+        '"{parameter "action issue date" of action}" for client'
+    )
+    assert "W508" not in codes(issues_for(tmp_path, bes(body)))
+
+
+def test_parameter_marker_silences_w508(tmp_path):
+    content = bes(
+        'wait echo {parameter "JREFolder"}', marker=validator.PARAMETER_MARKER
+    )
+    assert issues_for(tmp_path, content) == []

@@ -132,6 +132,11 @@ Checks:
           at runtime, not this checker). Downgraded from E513 to advisory
           (2026-08-26): validation against real content threw too many false
           positives for a hard failure
+    W508  a `parameter "X"` reference whose name occurs nowhere else in the
+          whole file -- not assigned, queried, or mentioned in a Description
+          form -- so the substitution fails at runtime; usually copy-paste
+          from a sibling fixlet that set it. A name the file mentions
+          anywhere else is assumed to be supplied from outside
 
 W507 is conservative: it is skipped for a whole body whenever any producer's
 names cannot be known statically -- an `extract`/`unarchive`/`archive now`/
@@ -193,7 +198,7 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-substitution-ok   (E508, E509)
     actionscript-prefetch-placement-ok (E510, E511, E515)
     actionscript-download-ok       (E512, W507)
-    actionscript-parameter-ok      (E516, E517)
+    actionscript-parameter-ok      (E516, E517, W508)
     actionscript-scratch-ok        (E519, W503)
     actionscript-scratch-dest-ok   (W506)
     actionscript-command-shape-ok  (E520, E521, E523, W504)
@@ -218,6 +223,7 @@ Exit codes:
 """
 
 import argparse
+import html
 import os
 import re
 import sys
@@ -253,7 +259,7 @@ BLOCK_NESTING_MARKER = "actionscript-block-nesting-ok"  # E507
 SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E508, E509
 PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, E515
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, W507
-PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517
+PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517, W508
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
 COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, W504
 CMD_MARKER = "actionscript-cmd-ok"  # W505
@@ -296,6 +302,7 @@ CHECK_MARKERS = {
     "W505": CMD_MARKER,
     "W506": SCRATCH_DEST_MARKER,
     "W507": DOWNLOAD_MARKER,
+    "W508": PARAMETER_MARKER,
 }
 
 KNOWN_CODES = frozenset(
@@ -332,6 +339,7 @@ KNOWN_CODES = frozenset(
         "W505",
         "W506",
         "W507",
+        "W508",
     ]
 )
 
@@ -2135,6 +2143,56 @@ def _iter_actionscript_bodies(raw):
         yield element.sourceline, element.text or ""
 
 
+# action parameters the platform itself supplies to every action; the console
+# writes `setting ... on "{parameter "action issue date" of action}"`
+_BUILTIN_ACTION_PARAMETERS = frozenset(["action issue date"])
+
+
+def _check_lone_parameters(bodies, document):
+    """W508 for a `parameter "X"` reference whose name occurs nowhere else.
+
+    `bodies` is [(sourceline, body)], `document` the whole file's decoded
+    text. A parameter that is referenced but never assigned or queried is
+    normally supplied from outside the script (a secure parameter, a
+    Description-page form, a REST-created action), so E517 does not flag it
+    -- but then its name shows up somewhere else in the file too. A name that
+    occurs exactly once in the entire file is almost always copy-paste from
+    a sibling that set it, and the substitution fails at runtime. An
+    `exists parameter "X"` presence test is not counted as a reference.
+    """
+    issues = []
+    for sourceline, body in bodies:
+        for index, line in enumerate(body.split("\n")):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            assign = _PARAMETER_ASSIGN_RE.match(stripped)
+            for match in _PARAMETER_REF_RE.finditer(
+                stripped, assign.end() if assign else 0
+            ):
+                if _EXISTS_BEFORE_RE.search(stripped[: match.start()]):
+                    continue
+                name = match.group(1)
+                if name.lower() in _BUILTIN_ACTION_PARAMETERS:
+                    continue
+                pattern = r"(?<![\w-])" + re.escape(name) + r"(?![\w-])"
+                if len(re.findall(pattern, document, re.IGNORECASE)) != 1:
+                    continue
+                issues.append(
+                    (
+                        sourceline + index,
+                        "W508",
+                        (
+                            f'`parameter "{name}"` is never assigned, queried, or '
+                            "named anywhere else in this file, so the "
+                            "substitution fails at runtime; add "
+                            f"`{PARAMETER_MARKER}` if it is supplied from outside"
+                        ),
+                    )
+                )
+    return issues
+
+
 def _validate_bes_xml(raw):
     """Check block balance in every ActionScript of a BES document."""
     try:
@@ -2145,6 +2203,8 @@ def _validate_bes_xml(raw):
     for sourceline, body in bodies:
         for lineno, code, message in check_actionscript(body, sourceline):
             issues.append((sourceline + lineno - 1, code, message))
+    document = html.unescape(raw.decode("utf-8", errors="replace"))
+    issues.extend(_check_lone_parameters(bodies, document))
     return issues
 
 

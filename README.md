@@ -290,8 +290,11 @@ Two `parameter "name" = ...` assignments to the same name that can co-execute
 are write-once, and the second assignment silently overwrites the first. A
 `parameter "name"` reference before that name's assignment elsewhere in the
 body is `E517`; a name never assigned in-script (a secure parameter supplied
-from the Description page, say) is not flagged at all, since this hook cannot
-see it. A `continue if` or `pause while` condition that is not a `{...}`
+from the Description page, say) is not `E517`, since this hook cannot see it -
+but if the name occurs nowhere else in the whole file (not assigned, queried,
+or mentioned by a Description form) it warns `W508`: that is almost always
+copy-paste from a sibling fixlet, and the substitution fails at runtime. The
+platform-supplied `action issue date` is exempt. A `continue if` or `pause while` condition that is not a `{...}`
 relevance substitution is `E518` - the same rule `E514` applies to `if`/
 `elseif`, extended to these two other condition-bearing verbs.
 
@@ -368,7 +371,7 @@ or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
 its `E301`, so one marker covers both hooks),
 `actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
 `actionscript-download-ok` (`E512`, `W507`), `actionscript-parameter-ok`
-(`E516`, `E517`), `actionscript-scratch-ok` (`E519`, `W503`),
+(`E516`, `E517`, `W508`), `actionscript-scratch-ok` (`E519`, `W503`),
 `actionscript-scratch-dest-ok` (`W506`),
 `actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `W504`),
 `actionscript-cmd-ok` (`W505`),

@@ -198,7 +198,8 @@
     assignment silently overwrites the first; a `parameter "name"`
     reference before that name's assignment elsewhere in the body is E517
     (a name never assigned in-script, e.g. a secure parameter from the
-    Description page, is not flagged at all). A `continue if` or
+    Description page, is not E517) -- but one whose name occurs nowhere else
+    in the whole file warns W508, as it can only fail. A `continue if` or
     `pause while` condition that is not a `{...}` substitution is E518,
     the same E514 rule extended to those two verbs. A command referencing
     `__createfile` or `__appendfile` with no matching `createfile until` /
@@ -253,7 +254,7 @@
     bes-actionscript-lint-schclass also uses for its E301),
     `actionscript-prefetch-placement-ok` (E510, E511, E515),
     `actionscript-download-ok` (E512, W507), `actionscript-parameter-ok`
-    (E516, E517), `actionscript-scratch-ok` (E519, W503),
+    (E516, E517, W508), `actionscript-scratch-ok` (E519, W503),
     `actionscript-scratch-dest-ok` (W506),
     `actionscript-command-shape-ok` (E520, E521, E523, W504),
     `actionscript-cmd-ok` (W505),
