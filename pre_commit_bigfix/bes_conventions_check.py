@@ -132,6 +132,12 @@ Checks:
           often copied from another fixlet. Checked only when the total is
           knowable: one action prefetches, none of its prefetches sits in an
           `if`, every size is a literal, and there is no dynamic `download`
+    W221  a Relevance that is true *until* a client setting has value V --
+          `not exists settings "N" whose ("V" = value of it) of client`, or
+          `value of setting "N" of client != "V"` -- while the action sets N
+          to something else, so the content stays relevant after it runs (a
+          typo, or a value edited in one place only). A positive test of the
+          current value, and a value set from a substitution, are not compared
 
 Timestamp fields (E202, E216): x-fixlet-modification-time and
 x-fixlet-first-propagation are both RFC 5322 date-times, e.g.
@@ -226,6 +232,7 @@ file, e.g. in an XML comment):
     modification-time-ok     (E202 and W201)
     first-propagation-ok    (E216)
     download-size-ok        (E203, W203, and W220)
+    setting-value-ok        (W221)
     description-ok          (E204)
     cpe-ok                  (E205)
     action-ui-metadata-ok   (E206)
@@ -286,6 +293,7 @@ SOURCE_RELEASE_DATE_MARKER = "source-release-date-ok"  # E201, W202, W219
 MODIFICATION_TIME_MARKER = "modification-time-ok"  # E202, W201
 FIRST_PROPAGATION_MARKER = "first-propagation-ok"  # E216
 DOWNLOAD_SIZE_MARKER = "download-size-ok"  # E203, W203, W220
+SETTING_VALUE_MARKER = "setting-value-ok"  # W221
 DESCRIPTION_MARKER = "description-ok"  # E204
 CPE_MARKER = "cpe-ok"  # E205
 ACTION_UI_METADATA_MARKER = "action-ui-metadata-ok"  # E206
@@ -603,6 +611,7 @@ KNOWN_CODES = frozenset(
         "W218",  # action link text has a run of 2+ spaces
         "W219",  # SourceReleaseDate later than x-fixlet-modification-time
         "W220",  # DownloadSize does not match the prefetches' total
+        "W221",  # relevance's target setting value differs from what is set
         "E211",  # Title is a default placeholder value
         "E212",  # Relevance is the literal `true`
         "E213",  # Relevance is empty / whitespace only
@@ -1004,6 +1013,99 @@ def check_download_size_total(src):
             ),
         )
     ]
+
+
+# W221: an action `setting "N"="V" on ...` line, and the two relevance shapes
+# that mean "relevant until setting N is V"
+SETTING_SET_RE = re.compile(
+    r'^[ \t]*setting\s+"([^"]+)"\s*=\s*"([^"]*)"\s+on\b', re.IGNORECASE | re.MULTILINE
+)
+_VALUE_IT = r"value\s+of\s+it"
+SETTING_UNTIL_RES = (
+    re.compile(
+        r'\bnot\s+exists\s+settings?\s+"([^"]+)"\s+whose\s*\(\s*'
+        r'(?:"([^"]*)"\s*=\s*' + _VALUE_IT + r"|" + _VALUE_IT + r'\s*=\s*"([^"]*)")'
+        r"\s*\)\s+of\s+client\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'\bvalue\s+of\s+setting\s+"([^"]+)"\s+of\s+client\s*!=\s*"([^"]*)"',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'(?<![\w"])"([^"]*)"\s*!=\s*value\s+of\s+setting\s+"([^"]+)"\s+of\s+client\b',
+        re.IGNORECASE,
+    ),
+)
+
+
+def _setting_targets(relevance):
+    """Yield (setting name, value) for each "relevant until N is V" test."""
+    first, second, third = SETTING_UNTIL_RES
+    for match in first.finditer(relevance):
+        yield match.group(1), (
+            match.group(2) if match.group(2) is not None else match.group(3)
+        )
+    for match in second.finditer(relevance):
+        yield match.group(1), match.group(2)
+    for match in third.finditer(relevance):
+        yield match.group(2), match.group(1)
+
+
+def check_setting_value_target(src):
+    """W221: the relevance waits for a setting value the action never sets.
+
+    `not exists settings "N" whose ("V" = value of it) of client` (or
+    `value of setting "N" of client != "V"`) is relevant *until* N is V, so
+    the action that fixes it must set exactly V; an action setting N to
+    anything else leaves the content relevant forever after it runs --
+    usually a typo or a value edited in one place only. Relevance branches
+    may wait for several values; it is enough that the action sets one of
+    them (e.g. each under its own `if`). A positive test of
+    the current value (`exists setting ... = "bad"`) is legitimate and not
+    compared, nor is a value set from a `{...}` substitution.
+    """
+    targets = {}
+    for match in RELEVANCE_TAG_RE.finditer(src):
+        inner = match.group(1)
+        cdata = CDATA_RE.match(inner.strip())
+        relevance = cdata.group(1) if cdata else _xml_unescape(inner)
+        for name, value in _setting_targets(relevance):
+            entry = targets.setdefault(
+                name.lower(), [name, set(), _lineno(src, match.start())]
+            )
+            entry[1].add(value)
+    if not targets:
+        return []
+    set_values = {}  # lowercased name -> values the actions set
+    for match in ACTIONSCRIPT_FULL_RE.finditer(src):
+        body = match.group(2)
+        cdata = CDATA_RE.match(body.strip())
+        body = cdata.group(1) if cdata else _xml_unescape(body)
+        for set_match in SETTING_SET_RE.finditer(body):
+            set_values.setdefault(set_match.group(1).lower(), set()).add(
+                set_match.group(2)
+            )
+    issues = []
+    for key, (name, wanted, lineno) in targets.items():
+        values = set_values.get(key)
+        # set from a substitution: unknowable; any match: some branch fixes it
+        if not values or any("{" in value for value in values) or values & wanted:
+            continue
+        issues.append(
+            (
+                lineno,
+                "W221",
+                (
+                    f'Relevance is true until setting "{name}" is '
+                    f'{" or ".join(sorted(repr(v) for v in wanted))}, but the '
+                    f'action sets it to {" or ".join(sorted(repr(v) for v in values))}, '
+                    "so the content stays relevant after it runs; add "
+                    f"`{SETTING_VALUE_MARKER}` if intentional"
+                ),
+            )
+        )
+    return issues
 
 
 def check_download_size_value(src):
@@ -2006,6 +2108,7 @@ VALUE_CHECKS = (
     (("E216",), FIRST_PROPAGATION_MARKER, check_first_propagation_format),
     (("E203",), DOWNLOAD_SIZE_MARKER, check_download_size_value),
     (("W220",), DOWNLOAD_SIZE_MARKER, check_download_size_total),
+    (("W221",), SETTING_VALUE_MARKER, check_setting_value_target),
     (("E205",), CPE_MARKER, check_cpe23),
     (("E206",), ACTION_UI_METADATA_MARKER, check_action_ui_metadata),
     (("E207",), CDATA_MARKER, check_cdata_required),

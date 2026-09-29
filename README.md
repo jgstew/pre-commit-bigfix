@@ -58,7 +58,8 @@ descriptions, a Description `<script>` block free of `//` line comments
 collapsed), and Task/Fixlet release-date / modification-time presence and order
 (a SourceReleaseDate later than the modification time warns `W219`), and a
 `DownloadSize` that does not match the prefetches' total (`W220`, only when
-that total is knowable).
+that total is knowable), and a Relevance that waits for a client setting value
+the action never sets (`W221`).
 
 Auto-fixes the fixable ones in place and exits 1 when anything was fixed so
 the change is reviewed and re-staged. E-codes fail the hook; pass `--strict`

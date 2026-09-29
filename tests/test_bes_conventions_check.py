@@ -2296,3 +2296,99 @@ def test_w220_marker_opts_out(tmp_path):
     body = "\n" + _pf("a.zip", 10) + "\n"
     content = task(download_size="999", body=body, marker="download-size-ok")
     assert "W220" not in codes(tmp_path, content)
+
+
+# --- W221 relevance's target setting value vs the value the action sets ------
+
+
+def _setting_task(tmp_path, relevance, action_line):
+    body = "\n" + action_line + "\n"
+    return codes(tmp_path, task(relevance=relevance, body=body))
+
+
+@pytest.mark.parametrize(
+    "relevance, action_line",
+    [
+        # real server-export shapes
+        (
+            'not exists settings "_BESClient_ArchiveManager_MaxArchiveSize" '
+            'whose("500000000" = value of it) of client',
+            'setting "_BESClient_ArchiveManager_MaxArchiveSize"="400000000" on '
+            '"{parameter "action issue date" of action}" for client',
+        ),
+        (
+            'not exists settings "_BESClient_RelaySelect_FailoverRelay" '
+            'whose("http:/_FQDN_:52311" = value of it) of client',
+            'setting "_BESClient_RelaySelect_FailoverRelay"="http://_FQDN_:52311" '
+            'on "{parameter "action issue date" of action}" for client',
+        ),
+        (
+            'value of setting "_BESClient_Log_Days" of client != "30"',
+            'setting "_BESClient_Log_Days"="35" on "{now}" for client',
+        ),
+        (
+            'not exists setting "X" whose (value of it = "1") of client',
+            'setting "X"="0" on "{now}" for client',
+        ),
+    ],
+)
+def test_w221_relevance_target_differs_from_the_value_set(
+    tmp_path, relevance, action_line
+):
+    """A relevance true until the setting is V, and an action that sets
+    something else: the fixlet stays relevant forever after it runs.
+    """
+    assert "W221" in _setting_task(tmp_path, relevance, action_line)
+
+
+@pytest.mark.parametrize(
+    "relevance, action_line",
+    [
+        (  # the matching pair
+            'not exists settings "S" whose("400000000" = value of it) of client',
+            'setting "S"="400000000" on "{now}" for client',
+        ),
+        (  # names compare case-insensitively
+            'not exists setting "_besclient_x" whose (value of it = "1") of client',
+            'setting "_BESClient_X"="1" on "{now}" for client',
+        ),
+        (  # a positive test of the CURRENT (bad) value, then fixed: legitimate
+            'exists setting "X" whose (value of it = "1") of client',
+            'setting "X"="0" on "{now}" for client',
+        ),
+        (  # a value decided at runtime
+            'not exists setting "X" whose (value of it = "1") of client',
+            'setting "X"="{parameter "v"}" on "{now}" for client',
+        ),
+        (  # a different setting
+            'not exists setting "X" whose (value of it = "1") of client',
+            'setting "Y"="0" on "{now}" for client',
+        ),
+    ],
+)
+def test_w221_not_flagged(tmp_path, relevance, action_line):
+    assert "W221" not in _setting_task(tmp_path, relevance, action_line)
+
+
+def test_w221_branches_that_set_each_target_value_are_fine(tmp_path):
+    """Real CommunityContent shape: a time-based relevance waits for 125 in
+    one branch and 10 in the other, and the action sets each under an if.
+    """
+    relevance = (
+        'if (x) then (value of setting "W" of client != "125") '
+        'else (value of setting "W" of client != "10")'
+    )
+    body = (
+        '\nif {x}\nsetting "W"="125" on "{now}" for client\n'
+        'else\nsetting "W"="10" on "{now}" for client\nendif\n'
+    )
+    assert "W221" not in codes(tmp_path, task(relevance=relevance, body=body))
+
+
+def test_w221_marker_opts_out(tmp_path):
+    content = task(
+        relevance='not exists setting "X" whose (value of it = "1") of client',
+        body='\nsetting "X"="0" on "{now}" for client\n',
+        marker="setting-value-ok",
+    )
+    assert "W221" not in codes(tmp_path, content)
