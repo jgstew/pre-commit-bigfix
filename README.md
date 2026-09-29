@@ -158,7 +158,14 @@ optional can turn just that off:
 
 A prefetch block item with no sha1 warns (`W402`); a prefetch *statement* with
 no sha1 warns (`W405`) instead of failing the line - current BigFix clients
-accept a statement with sha256 alone, so this is unusual but valid. An
+accept a statement with sha256 alone, so this is unusual but valid. A
+declared name whose extension differs from the extension of the URL's file
+warns (`W406`) - e.g. `<sha1>.msi` fetched from `ccsetup531.exe` - since the
+extension decides how the file is run or unpacked. An extension is a trailing
+`.` plus 1-4 characters including a letter; names or URLs without one, and
+server-side script URLs such as `download.php`, are not compared, and a URL
+that is the declared name with one more extension appended (`7z.dll.txt`, a
+way past web filtering) counts as a match. An
 `add nohash prefetch item` line is reported rather than validated (`W403`),
 since it is hashless by definition and its download cannot be verified.
 

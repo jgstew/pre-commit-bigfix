@@ -713,3 +713,72 @@ def test_main_discovers_bes_files(tmp_path, monkeypatch):
     write(tmp_path, "bad.bes", bes("prefetch bad size:0 http://example.com/x"))
     monkeypatch.chdir(tmp_path)
     assert validator.main([]) == 1
+
+
+# --- W406: the declared name's extension disagrees with the URL's ------------
+
+
+def _statement(name, url):
+    return f"prefetch {name} sha1:{SHA1} size:10 {url} sha256:{SHA256}"
+
+
+def _item(name, url):
+    return (
+        f"add prefetch item name={name} sha1={SHA1} size=10 url={url} "
+        f"sha256={SHA256}"
+    )
+
+
+@pytest.mark.parametrize("shape", [_statement, _item])
+@pytest.mark.parametrize(
+    "name, url",
+    [
+        # real CommunityContent shapes
+        (f"{SHA1}.msi", "https://download.ccleaner.com/ccsetup531.exe"),
+        ("Deleter.ZIP", "https://example.com/Deleter292619.exe"),
+        ("jre.tar.gz", "https://example.com/ibm-java-jre-8.0-7.0-s390x-archive.bin"),
+        ("tool.exe", "https://example.com/files/tool.zip?raw=1"),  # query ignored
+        # the extension replaced rather than appended is still a mismatch
+        ("Newtonsoft.Json.dll", "https://example.com/Newtonsoft.Json.txt"),
+    ],
+)
+def test_extension_mismatch_between_name_and_url_is_w406(shape, name, url):
+    """The name's extension decides how the file is handled (`msiexec` vs a
+    direct launch, which unzip, ...), so a name that disagrees with what the.
+
+    URL serves is almost always a copy-paste slip.
+    """
+    issues = validator.validate_actionscript(shape(name, url))
+    assert codes(issues) == ["W406"]
+    assert validator.PREFETCH_MARKER in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "name, url",
+    [
+        ("7za920.exe", "https://example.com/7za920.EXE"),  # case-blind
+        ("a.tgz", "https://example.com/a.tar.gz"),  # tgz is tar.gz
+        ("page.htm", "https://example.com/page.html"),
+        (SHA1, "https://example.com/setup.exe"),  # a sha1 name has no extension
+        ("setup.exe", "https://example.com/download.php?id=1"),  # a script URL
+        ("setup.exe", "https://example.com/download.aspx"),
+        ("setup.dmg", "https://download.mozilla.org/?product=firefox"),  # bare host
+        ("setup.exe", "https://example.com/files/"),  # no file segment
+        ("setup.exe", "https://example.com/latest"),  # no URL extension
+        ("app.zip", "https://example.com/app/1.2"),  # a version, not an extension
+        ("setup.exe", "https://example.com/setup.exe#frag"),
+        # the real file name with an extension appended to get it past web
+        # filtering (real CommunityContent shape): the name is exactly right
+        ("hashmyfiles.exe", "https://example.com/hashmyfiles.exe.txt"),
+        ("7z.dll", "https://example.com/7z.dll.txt"),
+    ],
+)
+def test_matching_or_unknowable_extensions_are_not_w406(name, url):
+    assert "W406" not in codes(validator.validate_actionscript(_statement(name, url)))
+
+
+def test_w406_marker_and_disable(tmp_path):
+    body = _statement(f"{SHA1}.msi", "https://example.com/ccsetup531.exe")
+    assert "W406" in codes(issues_for(tmp_path, bes(body)))
+    assert "W406" not in codes(issues_for(tmp_path, bes(body), disabled={"W406"}))
+    assert issues_for(tmp_path, bes(body, marker=validator.PREFETCH_MARKER)) == []

@@ -21,6 +21,15 @@ jgstew/bigfix-content, each change compared before/after against both.
 - **`bes-conventions-check` `W219`**: a `<SourceReleaseDate>` later than the
   `x-fixlet-modification-time`, which is a sign of a hand edit that missed a
   field.
+- **`bes-actionscript-validate-prefetch` `W406`**: a prefetch whose declared
+  name ends in a different extension from the URL's file, e.g. `<sha1>.msi`
+  fetched from `ccsetup531.exe`. The extension decides how the file is run or
+  unpacked, so this is usually a copy-paste slip. An extension is any
+  trailing `.` plus 1-4 characters that include a letter. Not compared: names
+  or URLs without an extension (such as sha1-named prefetches), server-side
+  script URLs (`download.php`), and a URL that is the name with one more
+  extension appended (`7z.dll.txt`, to get past web filtering). Found 12
+  CCleaner fixlets and both Inkscape fixlets in CommunityContent.
 - **`bes-conventions-check` `W220`**: a `<DownloadSize>` that doesn't match
   the total of the prefetch sizes. Only checked when that total is knowable:
   a single prefetching action, no conditional prefetch, literal sizes, and no

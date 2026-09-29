@@ -45,6 +45,12 @@ Checks:
           and failed the line as E400 with a misleading "could not be parsed"
           message; it is now its own advisory code, same footing as W402's
           block-item case.
+    W406  a prefetch's declared name and its URL's file end in different
+          extensions (`<sha1>.msi` fetched from `ccsetup531.exe`). The
+          extension decides how the file is run or unpacked, so a mismatch
+          is usually a copy-paste slip. An extension is a trailing `.` + 1-4
+          characters with a letter in them; a name or URL without one, and
+          a server-side script URL (`download.php`), are not compared
 
 E-codes are real issues and fail the hook. W-codes are advisory and do NOT
 fail the hook unless --strict is given.
@@ -128,6 +134,7 @@ import re
 import socket
 import sys
 import warnings
+from urllib.parse import urlsplit
 
 from bigfix_prefetch.prefetch import add_sha256_prefetch
 from bigfix_prefetch.prefetch_from_dictionary import prefetch_from_dictionary
@@ -155,8 +162,25 @@ SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-prefetch"
 PREFETCH_MARKER = "prefetch-ok"
 
 KNOWN_CODES = frozenset(
-    ["E400", "E401", "E402", "W400", "W402", "W403", "W404", "W405"]
+    ["E400", "E401", "E402", "W400", "W402", "W403", "W404", "W405", "W406"]
 )
+
+# W406: a trailing `.` + 1-4 characters, at least one a letter, is taken as a
+# file extension -- `.7z` and `.gz` are, a version like `/1.2` is not
+EXTENSION_RE = re.compile(r"\.((?=[0-9]*[A-Za-z])[A-Za-z0-9]{1,4})$")
+# server-side script endpoints: the URL's extension says nothing about the
+# file served (`download.php?id=...`)
+SCRIPT_EXTENSIONS = frozenset(
+    ["php", "asp", "aspx", "ashx", "cgi", "jsp", "pl", "py", "do", "cfm"]
+)
+# spellings of the same file type
+EXTENSION_ALIASES = {
+    "tgz": "gz",
+    "jpeg": "jpg",
+    "tiff": "tif",
+    "htm": "html",
+    "yaml": "yml",
+}
 
 # Seconds any one --auto-fix-network download may stall for. bigfix_prefetch
 # calls urlopen() without a timeout, which can hang a commit indefinitely, so
@@ -445,6 +469,45 @@ def validate_prefetch_line(line):
     return issues
 
 
+def _extension(name):
+    """Return `name`'s lowercased, alias-normalized extension, or None."""
+    match = EXTENSION_RE.search(name)
+    if not match:
+        return None
+    extension = match.group(1).lower()
+    return EXTENSION_ALIASES.get(extension, extension)
+
+
+def extension_mismatch(line):
+    """W406: return (name, url_file) if their extensions disagree, else None.
+
+    The URL's file is the last segment of its *path* (query and fragment
+    dropped; a bare host has none). Both must carry an extension -- a
+    sha1-named prefetch, a URL with none, or a server-side script endpoint
+    (`download.php`) says nothing either way -- and the comparison ignores
+    case and treats spellings like `tgz`/`gz` alike. A URL file that is the
+    declared name plus one more extension (`7z.dll.txt`, a common way to get
+    a binary past web filtering) is the right file, not a slip.
+    """
+    to_parse = _with_placeholder_sha1(line) if statement_missing_sha1(line) else line
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            parsed = parse_prefetch(to_parse)
+        except (AttributeError, TypeError, ValueError, KeyError):
+            return None
+    name, url = parsed.get("file_name"), parsed.get("download_url")
+    if not name or not url or "{" in name + url:
+        return None
+    url_file = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+    name_ext, url_ext = _extension(name), _extension(url_file)
+    if not name_ext or not url_ext or url_ext in SCRIPT_EXTENSIONS:
+        return None
+    if url_file.lower().startswith(name.lower() + "."):
+        return None  # `x.exe.txt`: the real name plus an extension to pass filters
+    return None if name_ext == url_ext else (name, url_file)
+
+
 def validate_actionscript(body):
     """Validate every prefetch line in one ActionScript body.
 
@@ -463,6 +526,21 @@ def validate_actionscript(body):
                         "prefetch downloads the retired unzip-5.52.exe; "
                         f"{CURRENT_UNZIP['download_url']} is the current one"
                         f"{fixable}; add `{PREFETCH_MARKER}` if intentional"
+                    ),
+                )
+            )
+        mismatch = extension_mismatch(line)
+        if mismatch:
+            issues.append(
+                (
+                    lineno,
+                    "W406",
+                    (
+                        f'prefetch names the file "{mismatch[0]}" but the URL '
+                        f'serves "{mismatch[1]}"; the extension decides how the '
+                        "file is run or unpacked (msiexec vs a direct launch, "
+                        "which extractor), so this is usually a copy-paste "
+                        f"slip; add `{PREFETCH_MARKER}` if intentional"
                     ),
                 )
             )
