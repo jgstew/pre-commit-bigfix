@@ -313,8 +313,8 @@
     <Relevance>, or a plural `{...}` substitution); E609 client-only and
     session-only inspectors in one statement; W600 a name no inspector dump
     defines; W601 a singular property over a possibly-plural object; W602 a
-    `whose` filter written on a singular spelling where the plural reads
-    safer; W603 two version-looking strings compared as strings; W604 a
+    singular spelling mid-chain where the plural reads safer (a safe
+    whole-statement rewrite is printed as a suggested fix); W603 two version-looking strings compared as strings; W604 a
     version comparison that truncates to the shorter operand; W605 an ordinary
     ActionScript `{...}` substitution whose value is an opaque object with no
     text form (a `bes *` object, a bare `registry`, ...). W601 is disabled

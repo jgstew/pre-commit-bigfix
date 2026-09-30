@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Changed (bigfix-relevance-analyzer 1.13.3)
+
+- **`bes-relevance-lint`** now requires `bigfix-relevance-analyzer >= 1.13.3`.
+- **`W602`** reports more: besides a `whose` filter on a singular spelling, it
+  now flags an unfiltered singular in the middle of a chain where a plural is
+  built from it, such as `exists values of setting "x" of client`. That form
+  errors when the setting is absent; `settings "x"` answers False. Expect new
+  W602 warnings after upgrading. They are advisory unless `--strict` is set.
+
+### Added (bigfix-relevance-analyzer 1.13.3)
+
+- **`bes-relevance-lint` suggested fixes.** When the analyzer can safely
+  rewrite a whole statement (today, the singular spellings behind `W602`), the
+  fixed statement is printed once under that statement's first finding as
+  `suggested fix: ...`. Files are not rewritten.
+
 ### Removed (auto-fix review)
 
 - **`bes-actionscript-validate-script` `W504`** is retired. It warned that the

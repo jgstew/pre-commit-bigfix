@@ -36,8 +36,8 @@ Checks:
           Disabled by default in .pre-commit-hooks.yaml: it fires ~6 times per
           file across real content, which drowns everything else. Enable it
           deliberately with --enable W601
-    W602  a `whose` filter written on a singular spelling, where the plural
-          reads safer
+    W602  a singular spelling mid-chain -- under a `whose` filter, or where a
+          plural is built from it -- where the plural reads safer
     W603  two version-looking strings compared as strings, not as versions
     W604  a version comparison that truncates to the shorter operand's
           components
@@ -62,8 +62,11 @@ anywhere in it, the same marker the sibling hooks honor. There is no per-rule
 marker: --disable takes the code repo-wide, and a single file that legitimately
 needs relevance this complex is what --max-score is for.
 
-There is no auto-fix. Nothing this hook reports has a mechanical rewrite --
-every one of them needs a human to decide what the relevance was meant to say.
+There is no auto-fix: files are never rewritten. Where the analyzer can work
+out a safe rewrite of a whole statement (today, the singular spellings behind
+W602), the fixed statement is printed once under that statement's first
+finding as `suggested fix: ...`, for a human to copy in. Everything else needs
+a human to decide what the relevance was meant to say.
 
 Usage:
     bes-relevance-lint [--strict] [--disable E604] [--enable W601] [FILES...]
@@ -207,11 +210,21 @@ def _report(findings):
     Returns (errors, warnings).
     """
     errors = warnings = 0
+    # Every fixable finding from one statement carries the same whole-statement
+    # rewrite, so print it once per statement rather than once per finding.
+    suggested = set()
     for finding in findings:
         code = CODES[finding.code]
         where = f"{finding.path}:{finding.line}"
         label = "warning: " if finding.severity is Severity.WARNING else ""
         print(f"{where}: [{code}] {label}{finding.message} ({finding.code})")
+        fix = getattr(finding, "autofix", None)
+        if fix is not None:
+            site_line = finding.site.line if finding.site is not None else None
+            key = (str(finding.path), site_line, fix.original)
+            if key not in suggested:
+                suggested.add(key)
+                print(f"    suggested fix: {fix.fixed}")
         if finding.severity is Severity.WARNING:
             warnings += 1
         else:

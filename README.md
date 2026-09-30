@@ -459,7 +459,7 @@ of the file.
 | `E609` | inspectors exclusive to client relevance and to session relevance in one statement, which no engine can answer |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
-| `W602` | a `whose` filter written on a singular spelling, where the plural reads safer |
+| `W602` | a singular spelling mid-chain (under a `whose` filter, or where a plural is built from it), where the plural reads safer |
 | `W603` | two version-looking strings compared as strings, not as versions |
 | `W604` | a version comparison that truncates to the shorter operand's components |
 | `W605` | an ordinary ActionScript substitution's value is an opaque object with no text form |
@@ -477,9 +477,11 @@ says the relevance that could be extracted is sound, not that the file parses.
 A file opts out of every check here with
 `<!-- pre-commit-skip: bes-relevance-lint -->` anywhere in it. There is no
 per-rule marker: `--disable` takes a code repo-wide, and a single file that
-legitimately needs relevance this complex is what `--max-score` is for. There
-is no auto-fix - nothing this hook reports has a mechanical rewrite. E-codes
-fail the hook; pass `--strict` to also fail on warnings.
+legitimately needs relevance this complex is what `--max-score` is for. Files
+are never rewritten, but where the analyzer can work out a safe rewrite of a
+whole statement (today, the singular spellings behind `W602`) the fixed
+statement is printed once under its first finding as `suggested fix: ...`.
+E-codes fail the hook; pass `--strict` to also fail on warnings.
 
 This hook needs **Python 3.11 or newer** - the analyzer requires it, while the
 rest of this package still runs on 3.8. No specific interpreter is pinned, since

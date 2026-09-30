@@ -355,3 +355,27 @@ def test_every_code_is_documented():
         assert f"    {code}  " in linter.__doc__, f"{code} missing from the docstring"
         assert code in description, f"{code} missing from .pre-commit-hooks.yaml"
         assert f"| `{code}` |" in readme, f"{code} missing from the README table"
+
+
+def test_a_fixable_finding_prints_the_suggested_fix(tmp_path, capsys):
+    """The analyzer's whole-statement rewrite is printed under the finding."""
+    status, out = run(tmp_path, 'exists values of setting "x" of client', capsys=capsys)
+    assert "W602" in codes_in(out)
+    assert '    suggested fix: exists values of settings "x" of client' in out
+    assert status == 0  # a suggestion does not change the exit status
+
+
+def test_a_suggested_fix_is_printed_once_per_statement(tmp_path, capsys):
+    """Every fixable finding in a statement carries the same rewrite."""
+    relevance = (
+        'exists values of setting "x" of client '
+        'and exists values of setting "y" of client'
+    )
+    _, out = run(tmp_path, relevance, capsys=capsys)
+    assert codes_in(out).count("W602") == 2
+    assert len([line for line in out if "suggested fix:" in line]) == 1
+
+
+def test_an_unfixable_finding_prints_no_suggestion(tmp_path, capsys):
+    _, out = run(tmp_path, "exists bogusinspectorname", capsys=capsys)
+    assert not any("suggested fix:" in line for line in out)
