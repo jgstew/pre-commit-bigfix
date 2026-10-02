@@ -19,6 +19,7 @@ repos:
       - id: bes-actionscript-validate-prefetch
       - id: bes-actionscript-validate-script
       - id: bes-relevance-lint
+      - id: bes-relevance-convert-group
 ```
 
 The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
@@ -87,6 +88,13 @@ See the docstring in
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
+Auto-fixes are checked against BES.xsd in three groups: all the per-block
+fixes together, the trailing-whitespace strip, and the XML declaration. A
+group that would turn a schema-valid file into an invalid one is not written
+and is reported as `E222`; the other groups still are (`--disable E222` writes
+it anyway). Because the per-block fixes are one group, one bad block fix holds
+back every block fix in the file.
+
 ### bes-actionscript-lint-schclass
 
 Lints every `<ActionScript>` body in BES files against the BigFix console's
@@ -142,6 +150,10 @@ place, and an auto-fixed file fails the hook so it is reviewed and re-staged;
 See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
+
+The case fixes are checked against BES.xsd together. If they would turn a
+schema-valid file into an invalid one, none of them are written and `E304` is
+reported (`--disable E304` writes them anyway).
 
 ### bes-actionscript-validate-prefetch
 
@@ -268,6 +280,11 @@ files are skipped (`bes-schema-validate` owns validity).
 See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
+
+Auto-fixes are checked against BES.xsd one pass at a time, in the order
+`E403`, `E402`, `E401`, `W407`. A pass that would turn a schema-valid file
+into an invalid one is not written and is reported as `E404`; the other passes
+still are (`--disable E404` writes it anyway).
 
 ### bes-actionscript-validate-script
 
@@ -429,6 +446,12 @@ See the docstring in
 [bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
 
+Auto-fixes are checked against BES.xsd one pass at a time: `W503`, `W506`,
+`E525`, then the `E524`/`W505`/`E521` line rewrites as one pass. A pass that
+would turn a schema-valid file into an invalid one is not written and is
+reported as `E526`; the other passes still are (`--disable E526` writes it
+anyway).
+
 ### bes-relevance-lint
 
 Every other hook here treats relevance as opaque - `{...}` is a lexer state
@@ -497,6 +520,42 @@ analyzer is a broken install, and the hook still fails.
 See the docstring in
 [bes_relevance_lint.py](pre_commit_bigfix/bes_relevance_lint.py) for the full
 list of check codes and options.
+
+### bes-relevance-convert-group
+
+The BigFix console can save applicability as a computer-group style
+`<GroupRelevance>`: a list of search components, each already carrying its own
+`<Relevance>`, joined by intersection or union. BES.xsd allows either that or a
+run of `<Relevance>` elements in the same place, and plain relevance is what
+reads and diffs well, so this hook rewrites each `/BES/*/GroupRelevance` in
+place:
+
+| `JoinByIntersection` | components | becomes |
+| --- | --- | --- |
+| `true` | any | one `<Relevance>` per component (sibling Relevance must all hold) |
+| `false` | one | `<Relevance>s1</Relevance>` |
+| `false` | two or more | `<Relevance>(s1) OR (s2) OR ...</Relevance>` |
+
+Each component's relevance is copied verbatim - CDATA stays CDATA, escaped
+stays escaped - except an OR-join of several, which is decoded, joined, and
+written once: as CDATA when any input was CDATA or the text holds `<`, `>` or
+`&`, and entity-escaped if it contains `]]>`. The splice leaves everything
+outside the replaced block byte-identical, line endings included. A long union
+can become one large statement; `bes-relevance-lint` may then report `E604`.
+
+| code | meaning |
+| --- | --- |
+| `E700` | a GroupRelevance was converted (under `--check`: needs converting) |
+| `E701` | a GroupRelevance holds a `SearchComponentGroupReference`; group membership is not converted yet, so it is left unchanged |
+| `E702` | `JoinByIntersection` is not a boolean, or is missing with two or more components (BES.xsd documents no default; a single component converts either way); left unchanged |
+| `E703` | a GroupRelevance has no components, or one with an empty Relevance; left unchanged |
+| `E704` | the converted file would turn a schema-valid file invalid, so nothing is written |
+| `W700` | skipped: file missing or not parseable XML, or a GroupRelevance that could not be located |
+
+The hook converts by default and exits 1 when it changed anything, so the
+rewrite shows up for review; `--check` only reports. With no files given it
+checks every `*.bes` below the current folder and never rewrites. A file opts
+out with `<!-- pre-commit-skip: bes-relevance-convert-group -->`.
 
 ## Development
 

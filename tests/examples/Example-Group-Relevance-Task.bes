@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="BES.xsd">
+	<Task>
+		<Title>Custom Task</Title>
+		<Description><![CDATA[&lt;enter a description of the task here&gt; ]]></Description>
+		<GroupRelevance JoinByIntersection="false">
+			<SearchComponentPropertyReference PropertyName="ID" Comparison="Contains">
+				<SearchText>133454</SearchText>
+				<Relevance>exists (computer id) whose (it as string as lowercase contains "133454" as lowercase)</Relevance>
+			</SearchComponentPropertyReference>
+		</GroupRelevance>
+		<Category></Category>
+		<Source>Internal</Source>
+		<SourceID></SourceID>
+		<SourceReleaseDate>2026-10-02</SourceReleaseDate>
+		<SourceSeverity></SourceSeverity>
+		<CVENames></CVENames>
+		<SANSID></SANSID>
+		<MIMEField>
+			<Name>x-fixlet-modification-time</Name>
+			<Value>Fri, 02 Oct 2026 13:12:22 +0000</Value>
+		</MIMEField>
+		<Domain>BESC</Domain>
+		<DefaultAction ID="Action1">
+			<Description>
+				<PreLink>Click </PreLink>
+				<Link>here</Link>
+				<PostLink> to deploy this action.</PostLink>
+			</Description>
+			<ActionScript MIMEType="application/x-Fixlet-Windows-Shell">// Enter your action script here</ActionScript>
+		</DefaultAction>
+	</Task>
+</BES>

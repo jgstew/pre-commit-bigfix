@@ -93,6 +93,11 @@ Checks:
           `/* */` block comment is flagged; a comment whose text itself
           contains `*/` cannot be wrapped in a single block comment and is
           left as an unfixed error
+    E222  a group of auto-fixes was not written, because it would make a
+          schema-valid file fail BES.xsd validation; the groups are all the
+          per-block fixes, the trailing-whitespace strip, and the XML
+          declaration, and the other groups are still written (--disable
+          E222 writes it anyway)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -310,6 +315,15 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from xml.etree import ElementTree
+
+if __package__ in (None, ""):  # run directly as a script, not as a module
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pre_commit_bigfix import bes_common
+from pre_commit_bigfix.bes_common import MUSTACHE_RE, read_source
+
+# the fixers' name for the shared helper
+_lineno = bes_common.lineno
 
 SKIP_MARKER = "pre-commit-skip: bes-conventions-check"
 
@@ -579,18 +593,6 @@ CONTENT_BLOCK_RE = re.compile(r"(<(Task|Fixlet)\b[^>]*>)(.*?)(</\2>)", re.DOTALL
 CONTENT_OBJECT_SPAN_RE = re.compile(
     r"<(" + "|".join(sorted(CONTENT_TAGS)) + r")\b[^>]*>.*?</\1>", re.DOTALL
 )
-# an unrendered mustache template ({{ placeholder }}) is not real content yet.
-# Only an identifier-like placeholder counts: `{{` is also the ActionScript
-# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
-# around arbitrary content and must not be mistaken for a template.
-# Kept identical in all four hooks -- see the lockstep test in
-# tests/test_bes_actionscript_validate_script.py.
-# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
-# literal `{` in front of an MSI product code.
-MUSTACHE_RE = re.compile(
-    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
-    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
-)
 CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 # 2+ blank lines immediately before a </ActionScript> close (an optional CDATA
 # terminator may sit between the blank lines and the close tag)
@@ -648,6 +650,7 @@ KNOWN_CODES = frozenset(
         "E218",  # duplicate Action ID within one content object
         "E219",  # x-relevance-evaluation-period value not a valid HH:MM:SS duration
         "E221",  # Description <script> block uses a `//` line comment
+        "E222",  # auto-fix not written: it would break BES.xsd validity
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -683,11 +686,6 @@ def _today_str(now=None):
 def _modtime_str(now=None):
     """Return the current time as e.g. `Tue, 14 Jul 2026 18:32:35 +0000`."""
     return (now or _now()).strftime("%a, %d %b %Y %H:%M:%S %z")
-
-
-def _lineno(src, pos):
-    """Return the 1-based line number of character offset `pos` in `src`."""
-    return src.count("\n", 0, pos) + 1
 
 
 def _is_all_crlf(raw):
@@ -3221,13 +3219,9 @@ def check_file(
     if not os.path.isfile(path):
         return [(1, "W200", "file not found; skipping")], []
 
-    with open(path, "rb") as handle:
-        raw = handle.read()
     # normalize to LF in memory so the checks/fixers are line-ending agnostic;
     # `raw` is kept to inspect (and, on auto-fix, rewrite) the real endings.
-    src = (
-        raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-    )
+    raw, src, _was_crlf = read_source(path)
 
     if SKIP_MARKER in src:
         return [], []
@@ -3243,16 +3237,21 @@ def check_file(
     crlf_ok = _is_all_crlf(raw)
 
     fixed = []
+    refusals = []
     if auto_fix:
-        new_src, fixed = _autofix(src, root, disabled, strict, now, severities)
+        # each fix stage is kept only if it leaves a schema-valid file valid
+        # (E222); the per-block fixers in _autofix are one stage
+        guard = bes_common.SchemaGuard(
+            src, "E222", path, validate="E222" not in disabled
+        )
+        guard.apply(*_autofix(src, root, disabled, strict, now, severities))
         # file-level fixers run on the whole document (after the per-block ones):
         # strip trailing whitespace, then ensure the XML declaration.
         if "W210" not in disabled and TRAILING_WS_MARKER not in src:
-            new_src, got = fix_trailing_whitespace(new_src)
-            fixed += got
+            guard.apply(*fix_trailing_whitespace(guard.src))
         if "E214" not in disabled and XML_DECL_MARKER not in src:
-            new_src, got = fix_xml_declaration(new_src)
-            fixed += got
+            guard.apply(*fix_xml_declaration(guard.src))
+        new_src, fixed, refusals = guard.src, guard.fixed, guard.refused
         # CRLF normalization runs LAST: BES files must be entirely CRLF, so any
         # auto-fix leaves the whole file CRLF (rather than preserving endings).
         # If the CRLF rule is disabled, write whatever endings resulted (LF).
@@ -3286,6 +3285,7 @@ def check_file(
         issues += check_trailing_whitespace(src)
     if check_filename and "W217" not in disabled and FILENAME_MARKER not in src:
         issues += check_filename_matches_title(path, src)
+    issues += refusals
     if not auto_fix and check_e208 and not crlf_ok:
         lone_lf = raw.count(b"\n") - raw.count(b"\r\n")
         lone_cr = raw.count(b"\r") - raw.count(b"\r\n")
@@ -3342,17 +3342,7 @@ def check_files(
 
 def discover_bes_files(root="."):
     """Return all BES files under `root`, pruning hidden and noise directories."""
-    skip_dirs = {"__pycache__", "node_modules"}
-    root = os.path.normpath(root)
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if not d.startswith(".") and d not in skip_dirs
-        ]
-        for name in filenames:
-            if is_bes_file(name):
-                found.append(os.path.join(dirpath, name))
-    return sorted(found)
+    return bes_common.discover_bes_files(root, BES_EXTENSIONS)
 
 
 def main(argv=None):
@@ -3465,32 +3455,20 @@ def main(argv=None):
         auto_fix = not discovering
     paths = args.files if args.files else discover_bes_files(".")
 
-    issue_count = 0
-    warning_count = 0
-    fix_count = 0
-    for path, issues, fixed in check_files(
-        paths,
-        disabled=disabled,
-        strict=args.strict,
-        auto_fix=auto_fix,
-        check_filename=args.check_filename,
-        severities=severities,
-        prefetch_url_schemes=prefetch_url_schemes,
-    ):
-        for lineno, check_id, message in fixed:
-            fix_count += 1
-            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
-        for lineno, check_id, message in issues:
-            if check_id.startswith("W"):
-                # --errors-only drops warnings from the report only; the checks
-                # and their fixers already ran (see --disable for skipping them)
-                if args.errors_only:
-                    continue
-                warning_count += 1
-                print(f"{path}:{lineno}: [{check_id}] warning: {message}")
-            else:
-                issue_count += 1
-                print(f"{path}:{lineno}: [{check_id}] {message}")
+    # --errors-only drops warnings from the report only; the checks and their
+    # fixers already ran (see --disable for skipping them)
+    issue_count, warning_count, fix_count = bes_common.report(
+        check_files(
+            paths,
+            disabled=disabled,
+            strict=args.strict,
+            auto_fix=auto_fix,
+            check_filename=args.check_filename,
+            severities=severities,
+            prefetch_url_schemes=prefetch_url_schemes,
+        ),
+        errors_only=args.errors_only,
+    )
 
     if fix_count:
         print(f"\nauto-fixed {fix_count} issue(s); review and re-stage the changes.")

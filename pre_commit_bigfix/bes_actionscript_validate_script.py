@@ -109,6 +109,10 @@ Checks:
           to be, so the rest of the if/endif pairing does not cascade
           (fixable -> joined into `elseif`, unless the body has a stray
           `endif` (E501), which means an `if` really was nested in the `else`)
+    E526  an auto-fix pass (W503, W506, E525, or the E524/W505/E521 line
+          rewrites together) was not written, because it would make a
+          schema-valid file fail BES.xsd validation; the other passes are
+          still written (--disable E526 writes it anyway)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -252,7 +256,9 @@ if __package__ in (None, ""):  # run directly as a script, not as a module
 # `_mask_heredocs` is shared with the sibling ActionScript hook on purpose:
 # both need to know that the lines inside a `createfile until` block are file
 # content rather than commands, and one implementation of that rule is enough.
+from pre_commit_bigfix import bes_common
 from pre_commit_bigfix.bes_actionscript_lint_schclass import _mask_heredocs
+from pre_commit_bigfix.bes_common import MUSTACHE_RE, encode, read_source
 
 # prefetch line-shape prefixes (matched against lowercased lines). These
 # mirror the same-named constants in bes_actionscript_validate_prefetch.py --
@@ -348,6 +354,7 @@ KNOWN_CODES = frozenset(
         "E523",
         "E524",
         "E525",
+        "E526",
         "W500",
         "W501",
         "W502",
@@ -362,18 +369,6 @@ KNOWN_CODES = frozenset(
 BES_EXTENSIONS = (".bes", ".ojo")
 ACTIONSCRIPT_MIMETYPE = "application/x-fixlet-windows-shell"  # compared lowercased
 
-# a mustache template ({{ placeholder }}) is not real content until rendered.
-# Only an identifier-like placeholder counts: `{{` is also the ActionScript
-# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
-# around arbitrary content and must not be mistaken for a template.
-# Kept identical in all four hooks -- see the lockstep test in
-# tests/test_bes_actionscript_validate_script.py.
-# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
-# literal `{` in front of an MSI product code.
-MUSTACHE_RE = re.compile(
-    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
-    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
-)
 
 # the first token of a line, case-insensitively, anchored to line start so a
 # relevance substitution or argument merely containing one of these words does
@@ -2454,11 +2449,6 @@ def is_bes_file(path):
     return path.endswith(BES_EXTENSIONS)
 
 
-def _encode(src, was_crlf):
-    """Turn checked text back into file bytes, restoring CRLF if that is the file."""
-    return (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
-
-
 def check_file(path, disabled=frozenset(), auto_fix=False):
     """Check a single file; return (issues, fixed).
 
@@ -2477,14 +2467,7 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     if not os.path.isfile(path):
         return [(1, "W500", "file not found; skipping")], []
 
-    with open(path, "rb") as handle:
-        original = handle.read()
-    was_crlf = b"\r\n" in original
-    src = (
-        original.decode("utf-8", errors="replace")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-    )
+    original, src, was_crlf = read_source(path)
 
     if SKIP_MARKER in src:
         return [], []
@@ -2493,33 +2476,38 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
 
     is_bes = is_bes_file(path)
     raw = original
-    fixed = []
+    # each fix pass is kept only if it leaves a schema-valid file valid (E526)
+    guard = bes_common.SchemaGuard(
+        src, "E526", path, validate=is_bes and "E526" not in disabled
+    )
     if auto_fix and "W503" not in disabled and SCRATCH_MARKER not in src:
-        src, fixed = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
-        raw = _encode(src, was_crlf)
+        new_src, got = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if auto_fix and "W506" not in disabled and SCRATCH_DEST_MARKER not in src:
-        src, got = fix_scratch_destinations(
+        new_src, got = fix_scratch_destinations(
             src, list(_destination_targets(raw, src, is_bes))
         )
-        fixed += got
-        raw = _encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if auto_fix and "E525" not in disabled and COMMAND_SHAPE_MARKER not in src:
-        src, got = fix_folder_quoting(
+        new_src, got = fix_folder_quoting(
             src, list(_folder_quote_targets(raw, src, is_bes))
         )
-        fixed += got
-        raw = _encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     line_fix_codes = {
         code
         for code in ("E524", "W505", "E521")
         if auto_fix and code not in disabled and CHECK_MARKERS[code] not in src
     }
     if line_fix_codes:
-        src, got = fix_line_rewrites(
+        new_src, got = fix_line_rewrites(
             src, list(_line_fix_targets(raw, src, is_bes, line_fix_codes))
         )
-        fixed += got
-        raw = _encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
+    fixed = guard.fixed
     if raw != original:
         with open(path, "wb") as handle:
             handle.write(raw)
@@ -2528,6 +2516,7 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
         issues = _validate_bes_xml(raw)
     else:
         issues = check_actionscript(src)
+    issues += guard.refused
 
     opt_outs = {marker for code, marker in CHECK_MARKERS.items() if marker in src}
     issues = [
@@ -2552,36 +2541,7 @@ def check_files(paths, disabled=frozenset(), auto_fix=False):
 
 def discover_bes_files(root="."):
     """Return all .bes files under `root`, pruning hidden and noise directories."""
-    skip_dirs = {"__pycache__", "node_modules"}
-    root = os.path.normpath(root)
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if not d.startswith(".") and d not in skip_dirs
-        ]
-        for name in filenames:
-            if name.endswith(".bes"):
-                found.append(os.path.join(dirpath, name))
-    return sorted(found)
-
-
-def _report(results):
-    """Print every fix and issue in `results`; return (issues, warnings, fixes)."""
-    issue_count = 0
-    warning_count = 0
-    fix_count = 0
-    for path, issues, fixed in results:
-        for lineno, check_id, message in fixed:
-            fix_count += 1
-            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
-        for lineno, check_id, message in issues:
-            if check_id.startswith("W"):
-                warning_count += 1
-                print(f"{path}:{lineno}: [{check_id}] warning: {message}")
-            else:
-                issue_count += 1
-                print(f"{path}:{lineno}: [{check_id}] {message}")
-    return issue_count, warning_count, fix_count
+    return bes_common.discover_bes_files(root)
 
 
 def main(argv=None):
@@ -2646,7 +2606,7 @@ def main(argv=None):
         auto_fix = bool(args.files)
     paths = args.files if args.files else discover_bes_files(".")
 
-    issue_count, warning_count, fix_count = _report(
+    issue_count, warning_count, fix_count = bes_common.report(
         check_files(paths, disabled=disabled, auto_fix=auto_fix)
     )
 
