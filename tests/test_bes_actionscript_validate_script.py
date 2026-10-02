@@ -439,18 +439,17 @@ def test_prefetch_prefix_constants_match_the_prefetch_hook():
 
 
 def test_mustache_pattern_matches_every_hook():
-    """All four hooks must agree on what counts as an unrendered template."""
+    """Every hook must agree on what counts as an unrendered template.
+
+    They agree by sharing one compiled pattern from bes_common, not by copies.
+    """
     from pre_commit_bigfix import bes_actionscript_lint_schclass as schclass
     from pre_commit_bigfix import bes_actionscript_validate_prefetch as prefetch
+    from pre_commit_bigfix import bes_common
     from pre_commit_bigfix import bes_conventions_check as conventions
 
-    patterns = {
-        validator.MUSTACHE_RE.pattern,
-        schclass.MUSTACHE_RE.pattern,
-        prefetch.MUSTACHE_RE.pattern,
-        conventions.MUSTACHE_RE.pattern,
-    }
-    assert len(patterns) == 1
+    for hook in (validator, schclass, prefetch, conventions):
+        assert hook.MUSTACHE_RE is bes_common.MUSTACHE_RE, hook.__name__
 
     # placeholders are templates; a literal-brace escape around content is not
     assert validator.MUSTACHE_RE.search("<Title>{{vendor}} {{model}}</Title>")

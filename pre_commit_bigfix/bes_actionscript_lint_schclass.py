@@ -136,7 +136,8 @@ from lxml import etree
 if __package__ in (None, ""):  # run directly as a script, not as a module
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pre_commit_bigfix import schclass
+from pre_commit_bigfix import bes_common, schclass
+from pre_commit_bigfix.bes_common import MUSTACHE_RE, encode, read_source
 from pre_commit_bigfix.schclass_tokenizer import Tokenizer
 
 SKIP_MARKER = "pre-commit-skip: bes-actionscript-lint-schclass"
@@ -218,18 +219,6 @@ _REGSET_RE = re.compile(r"[ \t]*regset(?:64)?\b", re.IGNORECASE)
 
 OVERRIDE_OPTION_RE = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)\Z")
 
-# an unrendered mustache template ({{ placeholder }}) is not real content yet.
-# Only an identifier-like placeholder counts: `{{` is also the ActionScript
-# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
-# around arbitrary content and must not be mistaken for a template.
-# Kept identical in all four hooks -- see the lockstep test in
-# tests/test_bes_actionscript_validate_script.py.
-# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
-# literal `{` in front of an MSI product code.
-MUSTACHE_RE = re.compile(
-    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
-    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
-)
 
 # E300's message quotes the offending LINE, not the first token: a `default`
 # token is one contiguous non-whitespace run (see flush_default in
@@ -810,12 +799,7 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False):
     if not os.path.isfile(path):
         return [(1, "W300", "file not found; skipping")], []
 
-    with open(path, "rb") as handle:
-        raw = handle.read()
-    was_crlf = b"\r\n" in raw
-    src = (
-        raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-    )
+    raw, src, was_crlf = read_source(path)
 
     if SKIP_MARKER in src:
         return [], []
@@ -837,7 +821,7 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False):
             lint_actionscript(src, fixes=fixes)
         src, fixed = _apply_fixes(src, fixes, fix_codes)
         if fixed:
-            raw = (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
+            raw = encode(src, was_crlf)
             with open(path, "wb") as handle:
                 handle.write(raw)
 
@@ -867,17 +851,7 @@ def check_files(paths, disabled=frozenset(), strict=False, auto_fix=False):
 
 def discover_bes_files(root="."):
     """Return all .bes files under `root`, pruning hidden and noise directories."""
-    skip_dirs = {"__pycache__", "node_modules"}
-    root = os.path.normpath(root)
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if not d.startswith(".") and d not in skip_dirs
-        ]
-        for name in filenames:
-            if name.endswith(".bes"):
-                found.append(os.path.join(dirpath, name))
-    return sorted(found)
+    return bes_common.discover_bes_files(root)
 
 
 def main(argv=None):
@@ -938,22 +912,9 @@ def main(argv=None):
         auto_fix = bool(args.files)
     paths = args.files if args.files else discover_bes_files(".")
 
-    issue_count = 0
-    warning_count = 0
-    fix_count = 0
-    for path, issues, fixed in check_files(
-        paths, disabled=disabled, strict=args.strict, auto_fix=auto_fix
-    ):
-        for lineno, check_id, message in fixed:
-            fix_count += 1
-            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
-        for lineno, check_id, message in issues:
-            if check_id.startswith("W"):
-                warning_count += 1
-                print(f"{path}:{lineno}: [{check_id}] warning: {message}")
-            else:
-                issue_count += 1
-                print(f"{path}:{lineno}: [{check_id}] {message}")
+    issue_count, warning_count, fix_count = bes_common.report(
+        check_files(paths, disabled=disabled, strict=args.strict, auto_fix=auto_fix)
+    )
 
     if fix_count:
         print(f"\nauto-fixed {fix_count} issue(s); review and re-stage the changes.")

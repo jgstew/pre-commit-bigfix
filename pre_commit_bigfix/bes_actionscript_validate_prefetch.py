@@ -177,7 +177,9 @@ if __package__ in (None, ""):  # run directly as a script, not as a module
 # `_mask_heredocs` is shared with the sibling ActionScript hook on purpose:
 # both need to know that the lines inside a `createfile until` block are file
 # content rather than commands, and one implementation of that rule is enough.
+from pre_commit_bigfix import bes_common
 from pre_commit_bigfix.bes_actionscript_lint_schclass import _mask_heredocs
+from pre_commit_bigfix.bes_common import MUSTACHE_RE, encode, read_source
 
 SKIP_MARKER = "pre-commit-skip: bes-actionscript-validate-prefetch"
 
@@ -259,19 +261,6 @@ ACTIONSCRIPT_MIMETYPE = "application/x-Fixlet-Windows-Shell"
 NOHASH_PREFETCH = "add nohash prefetch item"
 BLOCK_PREFETCH = "add prefetch item"
 STATEMENT_PREFETCH = "prefetch "
-
-# an unrendered mustache template ({{ placeholder }}) is not real content yet.
-# Only an identifier-like placeholder counts: `{{` is also the ActionScript
-# escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
-# around arbitrary content and must not be mistaken for a template.
-# Kept identical in all four hooks -- see the lockstep test in
-# tests/test_bes_actionscript_validate_script.py.
-# A GUID-shaped "placeholder" is not one: `msiexec /x{{{GUID}}` escapes a
-# literal `{` in front of an MSI product code.
-MUSTACHE_RE = re.compile(
-    r"\{\{(?!\s*[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\s*\}\})"
-    r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
-)
 
 
 def find_prefetch_lines(body):
@@ -1053,11 +1042,6 @@ def fix_missing_sha256(src, targets, cache=None):
     return "\n".join(lines), fixed, failed
 
 
-def _encode(src, was_crlf):
-    """Turn checked text back into file bytes, restoring CRLF if that is the file."""
-    return (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
-
-
 def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     path,
     disabled=frozenset(),
@@ -1084,14 +1068,7 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     if not os.path.isfile(path):
         return [(1, "W400", "file not found; skipping")], []
 
-    with open(path, "rb") as handle:
-        original = handle.read()
-    was_crlf = b"\r\n" in original
-    src = (
-        original.decode("utf-8", errors="replace")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-    )
+    original, src, was_crlf = read_source(path)
 
     if SKIP_MARKER in src:
         return [], []
@@ -1107,11 +1084,11 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     if not opted_out and auto_fix and "E403" not in disabled:
         src, got = fix_stray_tokens(src, find_stray_fix_targets(raw, src, is_bes))
         fixed += got
-        raw = _encode(src, was_crlf)
+        raw = encode(src, was_crlf)
     if not opted_out and auto_fix and "E402" not in disabled:
         src, got = fix_outdated_unzip(src, find_fix_targets(raw, src, is_bes))
         fixed += got
-        raw = _encode(src, was_crlf)
+        raw = encode(src, was_crlf)
     if not opted_out and auto_fix_network and "E401" not in disabled:
         # re-found on the current text: an E402 fix above may already have
         # brought a sha256 with it, leaving nothing here to download.
@@ -1119,7 +1096,7 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
             src, find_network_fix_targets(raw, src, is_bes), network_cache
         )
         fixed += got
-        raw = _encode(src, was_crlf)
+        raw = encode(src, was_crlf)
     if not opted_out and auto_fix_network and "W407" not in disabled:
         # after E401, so a sha256 just added is one more hash to verify against
         src, got, https_failed = fix_http_urls(
@@ -1127,7 +1104,7 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
         )
         fixed += got
         failed += https_failed
-        raw = _encode(src, was_crlf)
+        raw = encode(src, was_crlf)
     if raw != original:
         with open(path, "wb") as handle:
             handle.write(raw)
@@ -1173,36 +1150,7 @@ def check_files(
 
 def discover_bes_files(root="."):
     """Return all .bes files under `root`, pruning hidden and noise directories."""
-    skip_dirs = {"__pycache__", "node_modules"}
-    root = os.path.normpath(root)
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if not d.startswith(".") and d not in skip_dirs
-        ]
-        for name in filenames:
-            if name.endswith(".bes"):
-                found.append(os.path.join(dirpath, name))
-    return sorted(found)
-
-
-def _report(results):
-    """Print every fix and issue in `results`; return (issues, warnings, fixes)."""
-    issue_count = 0
-    warning_count = 0
-    fix_count = 0
-    for path, issues, fixed in results:
-        for lineno, check_id, message in fixed:
-            fix_count += 1
-            print(f"{path}:{lineno}: [{check_id}] auto-fixed: {message}")
-        for lineno, check_id, message in issues:
-            if check_id.startswith("W"):
-                warning_count += 1
-                print(f"{path}:{lineno}: [{check_id}] warning: {message}")
-            else:
-                issue_count += 1
-                print(f"{path}:{lineno}: [{check_id}] {message}")
-    return issue_count, warning_count, fix_count
+    return bes_common.discover_bes_files(root)
 
 
 def main(argv=None):
@@ -1277,7 +1225,7 @@ def main(argv=None):
         auto_fix = bool(args.files)
     paths = args.files if args.files else discover_bes_files(".")
 
-    issue_count, warning_count, fix_count = _report(
+    issue_count, warning_count, fix_count = bes_common.report(
         check_files(
             paths,
             disabled=disabled,
