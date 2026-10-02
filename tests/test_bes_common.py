@@ -97,3 +97,15 @@ def test_schema_regression_does_not_block_an_already_invalid_file():
 
 def test_schema_regression_ignores_files_without_a_schema():
     assert bes_common.schema_regression(b"<NotBigFix/>", b"<NotBigFix/>") == []
+
+
+def test_importing_bes_common_needs_only_the_standard_library():
+    """Bes-conventions-check runs stdlib-only; bes_common must not pull in lxml."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; sys.modules['lxml'] = None; sys.modules['validate_bes_xml'] = None\n"
+        "import pre_commit_bigfix.bes_common, pre_commit_bigfix.bes_conventions_check"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

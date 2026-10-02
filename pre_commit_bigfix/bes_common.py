@@ -12,8 +12,6 @@ import io
 import os
 import re
 
-from lxml import etree
-
 # an unrendered mustache template ({{ placeholder }}) is not real content yet.
 # Only an identifier-like placeholder counts: `{{` is also the ActionScript
 # escape for a literal `{`, so heredoc payloads (YARA, JSON, C#) contain `{{`
@@ -111,9 +109,11 @@ def _schema(name):
     validate_bes_xml is imported here rather than at module level: importing it
     finds and parses every bundled .xsd, which only a fix that writes needs.
     """
-    if name not in _SCHEMAS:
-        import validate_bes_xml  # pylint: disable=import-outside-toplevel
+    # pylint: disable=import-outside-toplevel
+    import validate_bes_xml
+    from lxml import etree
 
+    if name not in _SCHEMAS:
         paths = [path for path in sorted(validate_bes_xml.SCHEMA_FILES) if name in path]
         _SCHEMAS[name] = etree.XMLSchema(etree.parse(paths[0])) if paths else None
     return _SCHEMAS[name]
@@ -125,14 +125,18 @@ def schema_errors(raw):
     Returns a list of "Line N: message" strings (empty when valid), or None
     when no bundled schema applies to the document, so validity is unknown.
     The schema is picked as validate_bes_xml.validate_xml picks it: the root's
-    `*.xsd` attribute, else the root tag's name.
+    `*.xsd` attribute, else the root tag's name. lxml and validate_bes_xml are
+    imported only here, so a hook that never writes (and the stdlib-only
+    bes-conventions-check) need not have them.
     """
+    # pylint: disable=import-outside-toplevel
+    import validate_bes_xml
+    from lxml import etree
+
     try:
         document = etree.parse(io.BytesIO(raw))
     except etree.XMLSyntaxError as err:
         return [f"Line {err.lineno}: {err.msg}"]
-    import validate_bes_xml  # pylint: disable=import-outside-toplevel
-
     schema = _schema(validate_bes_xml.infer_xml_schema(document))
     if schema is None:
         return None
