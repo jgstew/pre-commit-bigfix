@@ -53,6 +53,9 @@ Checks:
           keyword, no value, a value outside the documented set for that
           keyword, a non-integer `timeout_seconds`, or a `keyword=value` option
           line outside any override block
+    E304  an auto-fix was not written because the fixed file would fail
+          BES.xsd validation when the original passed; the file is
+          reported as it stands (--disable E304 writes it anyway)
     W300  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W301  a "..." string has no closing " before line end (often benign in
@@ -162,7 +165,7 @@ CHECK_MARKERS = {
 }
 
 KNOWN_CODES = frozenset(
-    ["E300", "E301", "E302", "E303", "W300", "W301", "W302", "W303"]
+    ["E300", "E301", "E302", "E303", "E304", "W300", "W301", "W302", "W303"]
 )
 
 BES_EXTENSIONS = (".bes", ".ojo")
@@ -813,22 +816,29 @@ def check_file(path, disabled=frozenset(), strict=False, auto_fix=False):
         if auto_fix and code not in disabled and CHECK_MARKERS[code] not in src
     }
     fixed = []
+    refused = None
     if fix_codes:
         fixes = []
         if is_bes:
             _lint_bes_xml(raw, src, fixes)
         else:
             lint_actionscript(src, fixes=fixes)
+        original, original_src = raw, src
         src, fixed = _apply_fixes(src, fixes, fix_codes)
         if fixed:
             raw = encode(src, was_crlf)
-            with open(path, "wb") as handle:
-                handle.write(raw)
+            refused = bes_common.write_unless_schema_breaks(
+                path, original, raw, "E304", validate=is_bes and "E304" not in disabled
+            )
+            if refused:  # report the file as it stands, not the unwritten fixes
+                raw, src, fixed = original, original_src, []
 
     if is_bes:
         issues = _lint_bes_xml(raw, src)
     else:
         issues = lint_actionscript(src)
+    if refused:
+        issues.append(refused)
 
     issues = [
         (lineno, code, message)

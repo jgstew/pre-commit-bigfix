@@ -159,3 +159,30 @@ def schema_regression(original, new):
     if not errors:
         return []
     return errors if schema_errors(original) == [] else []
+
+
+def write_unless_schema_breaks(path, original, new, code, validate=True):
+    """Write `new` over `path` unless that would break BES.xsd validity.
+
+    `original` is the file's bytes as read. Nothing is written when `new` is
+    the same. With `validate`, a `new` that would turn a schema-valid file
+    invalid (see schema_regression) is not written either, and the
+    (lineno, code, message) issue to report under `code` is returned; the
+    caller then reports the file as it stands. Otherwise returns None.
+    """
+    if new == original:
+        return None
+    errors = schema_regression(original, new) if validate else []
+    if errors:
+        return (
+            1,
+            code,
+            (
+                "auto-fix not written: the fixed file would fail BES.xsd "
+                f"validation ({errors[0]}); fix by hand, or --disable {code} "
+                "to write it anyway"
+            ),
+        )
+    with open(path, "wb") as handle:
+        handle.write(new)
+    return None

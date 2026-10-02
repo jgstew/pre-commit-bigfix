@@ -10,9 +10,17 @@
   With `"false"` you get one `(a) OR (b)` `<Relevance>`, or the bare statement
   when there is only one component. Codes `E700`-`E704` and `W700`; see the
   README. A `SearchComponentGroupReference` is not converted yet (`E701`).
-- **Schema guard.** The new hook checks a rewritten file against BES.xsd
-  before writing it. If the rewrite would turn a schema-valid file into an
-  invalid one, nothing is written and `E704` is reported.
+- **Schema guard on every auto-fix.** Each hook that rewrites BES files now
+  checks the result against BES.xsd (via `validate_bes_xml`) before writing
+  it. If the fixes would turn a schema-valid file into an invalid one, the
+  file is not written and the hook reports the file as it stands, plus a new
+  error: `E222` (`bes-conventions-check`), `E304`
+  (`bes-actionscript-lint-schclass`), `E404`
+  (`bes-actionscript-validate-prefetch`), `E526`
+  (`bes-actionscript-validate-script`), or `E704`
+  (`bes-relevance-convert-group`). A file that already fails validation is
+  still fixed, since `bes-schema-validate` reports it either way. Disabling
+  the code (for example `--disable E222`) writes the fix anyway.
 
 ### Changed (bes-relevance-convert-group)
 

@@ -93,6 +93,9 @@ Checks:
           `/* */` block comment is flagged; a comment whose text itself
           contains `*/` cannot be wrapped in a single block comment and is
           left as an unfixed error
+    E222  an auto-fix was not written because the fixed file would fail
+          BES.xsd validation when the original passed; the file is
+          reported as it stands (--disable E222 writes it anyway)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -645,6 +648,7 @@ KNOWN_CODES = frozenset(
         "E218",  # duplicate Action ID within one content object
         "E219",  # x-relevance-evaluation-period value not a valid HH:MM:SS duration
         "E221",  # Description <script> block uses a `//` line comment
+        "E222",  # auto-fix not written: it would break BES.xsd validity
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -3231,6 +3235,7 @@ def check_file(
     crlf_ok = _is_all_crlf(raw)
 
     fixed = []
+    refused = None
     if auto_fix:
         new_src, fixed = _autofix(src, root, disabled, strict, now, severities)
         # file-level fixers run on the whole document (after the per-block ones):
@@ -3250,9 +3255,11 @@ def check_file(
                 fixed.append((1, "E208", "normalized line endings to CRLF"))
         else:
             final_bytes = new_src.encode("utf-8")
-        if final_bytes != raw:
-            with open(path, "wb") as handle:
-                handle.write(final_bytes)
+        refused = bes_common.write_unless_schema_breaks(
+            path, raw, final_bytes, "E222", validate="E222" not in disabled
+        )
+        if refused:  # report the file as it stands, not the unwritten fixes
+            new_src, fixed = src, []
         src = new_src
         try:
             root = ElementTree.fromstring(src)
@@ -3274,7 +3281,9 @@ def check_file(
         issues += check_trailing_whitespace(src)
     if check_filename and "W217" not in disabled and FILENAME_MARKER not in src:
         issues += check_filename_matches_title(path, src)
-    if not auto_fix and check_e208 and not crlf_ok:
+    if refused:
+        issues.append(refused)
+    if (not auto_fix or refused) and check_e208 and not crlf_ok:
         lone_lf = raw.count(b"\n") - raw.count(b"\r\n")
         lone_cr = raw.count(b"\r") - raw.count(b"\r\n")
         issues.append(

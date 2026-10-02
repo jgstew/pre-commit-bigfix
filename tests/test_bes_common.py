@@ -100,7 +100,7 @@ def test_schema_regression_ignores_files_without_a_schema():
 
 
 def test_importing_bes_common_needs_only_the_standard_library():
-    """Bes-conventions-check runs stdlib-only; bes_common must not pull in lxml."""
+    """The stdlib-only bes-conventions-check must not get lxml via bes_common."""
     import subprocess
     import sys
 

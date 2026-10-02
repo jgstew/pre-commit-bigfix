@@ -283,22 +283,16 @@ def check_file(path, disabled=frozenset(), check=False):
             for line, code, message in converted
         ]
     elif converted:
-        new_raw = encode(new_src, was_crlf)
-        errors = bes_common.schema_regression(original, new_raw)
-        if errors:
-            issues.append(
-                (
-                    1,
-                    "E704",
-                    (
-                        "converting would make the file fail BES.xsd validation "
-                        f"({errors[0]}); nothing was written"
-                    ),
-                )
-            )
+        refused = bes_common.write_unless_schema_breaks(
+            path,
+            original,
+            encode(new_src, was_crlf),
+            "E704",
+            validate="E704" not in disabled,
+        )
+        if refused:
+            issues.append(refused)
         else:
-            with open(path, "wb") as handle:
-                handle.write(new_raw)
             fixed = converted
 
     issues = [issue for issue in issues if issue[1] not in disabled]

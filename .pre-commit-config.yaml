@@ -151,6 +151,8 @@ repos:
         name: bes-conventions-check-local
         entry: python pre_commit_bigfix/bes_conventions_check.py
         language: python
+        # isolated venv: the BES.xsd guard on auto-fix writes needs these
+        additional_dependencies: [lxml, validate_bes_xml]
         pass_filenames: True
         args: ["--auto-fix=no"]
         files: \.bes$
@@ -162,8 +164,9 @@ repos:
         name: bes-actionscript-lint-schclass-local
         entry: python pre_commit_bigfix/bes_actionscript_lint_schclass.py
         language: python
-        # isolated venv: declare the third-party import used by the linter
-        additional_dependencies: [lxml]
+        # isolated venv: declare the third-party imports used by the linter
+        # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
+        additional_dependencies: [lxml, validate_bes_xml]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
@@ -174,7 +177,8 @@ repos:
         entry: python pre_commit_bigfix/bes_actionscript_validate_prefetch.py
         language: python
         # isolated venv: declare the third-party imports used by the validator
-        additional_dependencies: [lxml, bigfix_prefetch]
+        # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
+        additional_dependencies: [lxml, bigfix_prefetch, validate_bes_xml]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
@@ -184,8 +188,9 @@ repos:
         name: bes-actionscript-validate-script-local
         entry: python pre_commit_bigfix/bes_actionscript_validate_script.py
         language: python
-        # isolated venv: declare the third-party import used by the validator
-        additional_dependencies: [lxml]
+        # isolated venv: declare the third-party imports used by the validator
+        # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
+        additional_dependencies: [lxml, validate_bes_xml]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes

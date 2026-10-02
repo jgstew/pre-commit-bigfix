@@ -109,6 +109,9 @@ Checks:
           to be, so the rest of the if/endif pairing does not cascade
           (fixable -> joined into `elseif`, unless the body has a stray
           `endif` (E501), which means an `if` really was nested in the `else`)
+    E526  an auto-fix was not written because the fixed file would fail
+          BES.xsd validation when the original passed; the file is
+          reported as it stands (--disable E526 writes it anyway)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -350,6 +353,7 @@ KNOWN_CODES = frozenset(
         "E523",
         "E524",
         "E525",
+        "E526",
         "W500",
         "W501",
         "W502",
@@ -2471,6 +2475,7 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
 
     is_bes = is_bes_file(path)
     raw = original
+    original_src = src
     fixed = []
     if auto_fix and "W503" not in disabled and SCRATCH_MARKER not in src:
         src, fixed = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
@@ -2498,14 +2503,18 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
         )
         fixed += got
         raw = encode(src, was_crlf)
-    if raw != original:
-        with open(path, "wb") as handle:
-            handle.write(raw)
+    refused = bes_common.write_unless_schema_breaks(
+        path, original, raw, "E526", validate=is_bes and "E526" not in disabled
+    )
+    if refused:  # report the file as it stands, not the unwritten fixes
+        raw, src, fixed = original, original_src, []
 
     if is_bes:
         issues = _validate_bes_xml(raw)
     else:
         issues = check_actionscript(src)
+    if refused:
+        issues.append(refused)
 
     opt_outs = {marker for code, marker in CHECK_MARKERS.items() if marker in src}
     issues = [

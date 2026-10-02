@@ -88,6 +88,10 @@ See the docstring in
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
+An auto-fix that would turn a schema-valid file into one that fails
+BES.xsd validation is not written: `E222` is reported instead, along with
+the file's issues as it stands (`--disable E222` writes the fix anyway).
+
 ### bes-actionscript-lint-schclass
 
 Lints every `<ActionScript>` body in BES files against the BigFix console's
@@ -143,6 +147,10 @@ place, and an auto-fixed file fails the hook so it is reviewed and re-staged;
 See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
+
+An auto-fix that would turn a schema-valid file into one that fails
+BES.xsd validation is not written: `E304` is reported instead, along with
+the file's issues as it stands (`--disable E304` writes the fix anyway).
 
 ### bes-actionscript-validate-prefetch
 
@@ -269,6 +277,10 @@ files are skipped (`bes-schema-validate` owns validity).
 See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
+
+An auto-fix that would turn a schema-valid file into one that fails
+BES.xsd validation is not written: `E404` is reported instead, along with
+the file's issues as it stands (`--disable E404` writes the fix anyway).
 
 ### bes-actionscript-validate-script
 
@@ -429,6 +441,10 @@ hook; pass
 See the docstring in
 [bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
+
+An auto-fix that would turn a schema-valid file into one that fails
+BES.xsd validation is not written: `E526` is reported instead, along with
+the file's issues as it stands (`--disable E526` writes the fix anyway).
 
 ### bes-relevance-lint
 

@@ -40,6 +40,9 @@ Checks:
           front of a 64-hex value becomes `sha256`, and tokens directly
           after the URL (an unencoded space in it) are joined with `%20`;
           stray text anywhere else is left for a human
+    E404  an auto-fix was not written because the fixed file would fail
+          BES.xsd validation when the original passed; the file is
+          reported as it stands (--disable E404 writes it anyway)
     W400  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W402  a prefetch block item has no sha1; technically valid, but unusual
@@ -198,6 +201,7 @@ KNOWN_CODES = frozenset(
         "E401",
         "E402",
         "E403",
+        "E404",
         "W400",
         "W402",
         "W403",
@@ -1079,6 +1083,7 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     opted_out = PREFETCH_MARKER in src
 
     raw = original
+    original_src = src
     fixed = []
     failed = []
     if not opted_out and auto_fix and "E403" not in disabled:
@@ -1105,15 +1110,19 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
         fixed += got
         failed += https_failed
         raw = encode(src, was_crlf)
-    if raw != original:
-        with open(path, "wb") as handle:
-            handle.write(raw)
+    refused = bes_common.write_unless_schema_breaks(
+        path, original, raw, "E404", validate=is_bes and "E404" not in disabled
+    )
+    if refused:  # report the file as it stands, not the unwritten fixes
+        raw, src, fixed = original, original_src, []
 
     if is_bes:
         issues = _validate_bes_xml(raw)
     else:
         issues = validate_actionscript(src)
     issues += failed
+    if refused:
+        issues.append(refused)
 
     issues = [
         (lineno, code, message)
