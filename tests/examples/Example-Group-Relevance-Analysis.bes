@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="BES.xsd">
+	<Analysis>
+		<Title>Custom Analysis</Title>
+		<Description><![CDATA[&lt;enter a description of the analysis here&gt; ]]></Description>
+		<GroupRelevance JoinByIntersection="false">
+			<SearchComponentPropertyReference PropertyName="_BESGather_Use_Https" Comparison="Contains">
+				<SearchText>1</SearchText>
+				<Relevance>exists (if exist values of settings "_BESGather_Use_Https" of client then value of setting "_BESGather_Use_Https" of client else error "not set") whose (it as string as lowercase contains "1" as lowercase)</Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="Computer Name" Comparison="Contains">
+				<SearchText>Win</SearchText>
+				<Relevance>exists (computer name) whose (it as string as lowercase contains "Win" as lowercase)</Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="Alert::Hard Drive - Less Than 10 Percent Free" Comparison="Contains">
+				<SearchText>True</SearchText>
+				<Relevance><![CDATA[exists (exists ((free space of it)*100/(total space of it)) whose(it <= 10) of drives whose(exists name of it AND exists free space of it AND exists type of it AND exists total space of it AND type of it = "DRIVE_FIXED" AND total space of it != 0 AND total space of it > 1024*1024*1024)) whose (it as string as lowercase contains "True" as lowercase)]]></Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="User Name" Comparison="Contains">
+				<SearchText>jgstew</SearchText>
+				<Relevance><![CDATA[exists (if exists true whose (if true then exists logged on user else false) then names of logged on users else if exists current user then name of current user else "<none>") whose (it as string as lowercase contains "jgstew" as lowercase)]]></Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="Computer Name" Comparison="Equals">
+				<SearchText>BigFix</SearchText>
+				<Relevance>exists (computer name) whose (it as string as lowercase = "BigFix" as lowercase)</Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="OS" Comparison="Contains">
+				<SearchText>Blah</SearchText>
+				<Relevance>exists (operating system) whose (it as string as lowercase contains "Blah" as lowercase)</Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="CPU" Comparison="DoesNotEqual">
+				<SearchText>i7</SearchText>
+				<Relevance><![CDATA[not exists (if ( exists true whose (if true then exists speed of main processor else false ) ) then ((significant digits 2 of (speed of main processor / mhz)) as string & " MHz " & family name of main processor as string)  else if ( exists true whose (if true then exists main processor else false ) ) then  ( family name of main processor as string ) else "") whose (it as string as lowercase = "i7" as lowercase)]]></Relevance>
+			</SearchComponentPropertyReference>
+			<SearchComponentPropertyReference PropertyName="Free Space on System Drive" Comparison="DoesNotContain">
+				<SearchText>111</SearchText>
+				<Relevance><![CDATA[not exists (if (exists true whose (if true then exists drive of system folder else false)) then ((free space of drive of system folder)/(1024 * 1024)) as string & " MB" else "") whose (it as string as lowercase contains "111" as lowercase)]]></Relevance>
+			</SearchComponentPropertyReference>
+		</GroupRelevance>
+		<Source>Internal</Source>
+		<SourceReleaseDate>2026-10-02</SourceReleaseDate>
+		<MIMEField>
+			<Name>x-fixlet-modification-time</Name>
+			<Value>Fri, 02 Oct 2026 13:05:06 +0000</Value>
+		</MIMEField>
+		<Domain>BESC</Domain>
+		<Property Name="test" ID="1" EvaluationPeriod="P30D">FALSE</Property>
+	</Analysis>
+</BES>

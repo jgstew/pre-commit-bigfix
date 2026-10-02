@@ -32,7 +32,8 @@ repos:
       # (and bump the rev) once a release carrying them is tagged.
       - id: validate-bes
       - id: check-bes-conventions
-        exclude: ^tests/examples/example-test-bad.bes
+        # the bad example and the raw console exports are kept as-is on purpose
+        exclude: ^tests/examples/(example-test-bad|Example-Group-Relevance-[A-Za-z]+)\.bes$
 
   - repo: https://github.com/jgstew/pre-commit-jgstew
     rev: v2.3.0
@@ -153,7 +154,8 @@ repos:
         pass_filenames: True
         args: ["--auto-fix=no"]
         files: \.bes$
-        exclude: ^tests/examples/example-test-bad.bes
+        # the bad example and the raw console exports are kept as-is on purpose
+        exclude: ^tests/examples/(example-test-bad|Example-Group-Relevance-[A-Za-z]+)\.bes$
   - repo: local
     hooks:
       - id: bes-actionscript-lint-schclass-local
@@ -187,6 +189,18 @@ repos:
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
+  - repo: local
+    hooks:
+      - id: bes-relevance-convert-group-local
+        name: bes-relevance-convert-group-local
+        entry: python pre_commit_bigfix/bes_relevance_convert_group.py
+        language: python
+        # isolated venv: declare the third-party imports used by the converter
+        additional_dependencies: [lxml, validate_bes_xml]
+        pass_filenames: True
+        files: \.bes$
+        # the raw console exports are the converter's test inputs
+        exclude: ^tests/examples/(example-test-bad|Example-Group-Relevance-[A-Za-z]+)\.bes$
   - repo: local
     hooks:
       - id: try-repo

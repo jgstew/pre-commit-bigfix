@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="BES.xsd">
+	<Baseline>
+		<Title>Custom Baseline group relevance example</Title>
+		<Description><![CDATA[&lt;enter a description of the baseline here&gt; ]]></Description>
+		<GroupRelevance JoinByIntersection="true">
+			<SearchComponentGroupReference GroupName="Alert - Hard Drive - Less Than 10 Percent Free" Comparison="IsMember"></SearchComponentGroupReference>
+			<SearchComponentGroupReference GroupName="All non-BigFixServers" Comparison="IsMember"></SearchComponentGroupReference>
+			<SearchComponentGroupReference GroupName="CPU is Virtual" Comparison="IsNotMember"></SearchComponentGroupReference>
+			<SearchComponentPropertyReference PropertyName="Computer Name" Comparison="Contains">
+				<SearchText><![CDATA[<blah>]]></SearchText>
+				<Relevance><![CDATA[exists (computer name) whose (it as string as lowercase contains "<blah>" as lowercase)]]></Relevance>
+			</SearchComponentPropertyReference>
+		</GroupRelevance>
+		<Category></Category>
+		<Source>Internal</Source>
+		<SourceID></SourceID>
+		<SourceReleaseDate>2026-10-02</SourceReleaseDate>
+		<SourceSeverity></SourceSeverity>
+		<CVENames></CVENames>
+		<SANSID></SANSID>
+		<MIMEField>
+			<Name>x-fixlet-modification-time</Name>
+			<Value>Fri, 02 Oct 2026 13:30:57 +0000</Value>
+		</MIMEField>
+		<Domain>BESC</Domain>
+		<BaselineComponentCollection>
+			<BaselineComponentGroup></BaselineComponentGroup>
+		</BaselineComponentCollection>
+	</Baseline>
+</BES>

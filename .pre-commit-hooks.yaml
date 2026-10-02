@@ -337,3 +337,27 @@
   # `bes\.xml` is spelled out: the `$` anchor means a bare `bes` alternative
   # never matches `Something.bes.xml`, which the extractor does read as BES XML.
   files: \.(bes|bes\.xml|ojo|besrpt|beswrpt|webreport|bsr|rel)$
+- id: bes-relevance-convert-group
+  name: Convert BigFix GroupRelevance to Relevance
+  description: >
+    Rewrites a console-exported <GroupRelevance> (found at /BES/*/GroupRelevance
+    in a Fixlet, Task, Baseline, Analysis or FixletStream) into plain
+    <Relevance>, in place: JoinByIntersection="true" becomes one <Relevance> per
+    search component, "false" one `(a) OR (b)` <Relevance> (a lone component
+    needs no parentheses). Each component's relevance is copied verbatim, CDATA
+    included; an OR-join is written once as CDATA when an input was CDATA or the
+    text needs escaping. Everything outside the replaced block is left
+    byte-identical, and line endings are preserved. E700 a GroupRelevance was
+    converted (or, under --check, needs converting); E701 it holds a
+    SearchComponentGroupReference, which is not converted yet, so it is left
+    unchanged; E702 JoinByIntersection is missing or not a boolean; E703 no
+    components, or one with an empty Relevance; E704 the converted file would
+    fail BES.xsd validation, so nothing is written; W700 skipped (missing or
+    unparsable file, or a GroupRelevance that could not be located). Exits 1
+    when it converted anything, so the rewrite can be reviewed; --check is a dry
+    run. A file opts out with `pre-commit-skip: bes-relevance-convert-group`.
+  entry: bes-relevance-convert-group
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: \.bes$

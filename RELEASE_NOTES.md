@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added (bes-relevance-convert-group)
+
+- **`bes-relevance-convert-group`**, a new hook. It rewrites a
+  console-exported `<GroupRelevance>` into plain `<Relevance>`. With
+  `JoinByIntersection="true"` you get one `<Relevance>` per search component.
+  With `"false"` you get one `(a) OR (b)` `<Relevance>`, or the bare statement
+  when there is only one component. Codes `E700`-`E704` and `W700`; see the
+  README. A `SearchComponentGroupReference` is not converted yet (`E701`).
+- **Schema guard.** The new hook checks a rewritten file against BES.xsd
+  before writing it. If the rewrite would turn a schema-valid file into an
+  invalid one, nothing is written and `E704` is reported.
+
+### Changed (bes-relevance-convert-group)
+
+- The helpers the hooks used to copy (file reading and writing with
+  line-ending preservation, `.bes` discovery, the report printer, the
+  mustache-template pattern) now live in `pre_commit_bigfix/bes_common.py`.
+  Behavior is unchanged.
+
 ### Changed (bigfix-relevance-analyzer 1.13.3)
 
 - **`bes-relevance-lint`** now requires `bigfix-relevance-analyzer >= 1.13.3`.

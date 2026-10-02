@@ -4,11 +4,15 @@ Each of these was once copied into several hooks and kept identical by hand.
 They live here so a fix to one is a fix to all: reading a file as LF text while
 remembering its line endings, writing it back the same way, finding the BES
 files under a folder when no paths are given, and printing the
-`path:line: [CODE] message` report the hooks share.
+`path:line: [CODE] message` report the hooks share, and checking that an
+auto-fix has not made a schema-valid file fail BES.xsd validation.
 """
 
+import io
 import os
 import re
+
+from lxml import etree
 
 # an unrendered mustache template ({{ placeholder }}) is not real content yet.
 # Only an identifier-like placeholder counts: `{{` is also the ActionScript
@@ -94,3 +98,60 @@ def report(results, errors_only=False):
                 issue_count += 1
                 print(f"{path}:{line}: [{check_id}] {message}")
     return issue_count, warning_count, fix_count
+
+
+# compiled schemas, keyed by inferred schema name (a plain dict rather than
+# functools.cache, which needs Python 3.9+)
+_SCHEMAS = {}
+
+
+def _schema(name):
+    """Return the compiled XMLSchema validate_bes_xml uses for `name`, or None.
+
+    validate_bes_xml is imported here rather than at module level: importing it
+    finds and parses every bundled .xsd, which only a fix that writes needs.
+    """
+    if name not in _SCHEMAS:
+        import validate_bes_xml  # pylint: disable=import-outside-toplevel
+
+        paths = [path for path in sorted(validate_bes_xml.SCHEMA_FILES) if name in path]
+        _SCHEMAS[name] = etree.XMLSchema(etree.parse(paths[0])) if paths else None
+    return _SCHEMAS[name]
+
+
+def schema_errors(raw):
+    """Validate BES XML bytes against BES.xsd the way bes-schema-validate does.
+
+    Returns a list of "Line N: message" strings (empty when valid), or None
+    when no bundled schema applies to the document, so validity is unknown.
+    The schema is picked as validate_bes_xml.validate_xml picks it: the root's
+    `*.xsd` attribute, else the root tag's name.
+    """
+    try:
+        document = etree.parse(io.BytesIO(raw))
+    except etree.XMLSyntaxError as err:
+        return [f"Line {err.lineno}: {err.msg}"]
+    import validate_bes_xml  # pylint: disable=import-outside-toplevel
+
+    schema = _schema(validate_bes_xml.infer_xml_schema(document))
+    if schema is None:
+        return None
+    if schema.validate(document):
+        return []
+    return [f"Line {error.line}: {error.message}" for error in schema.error_log]
+
+
+def schema_regression(original, new):
+    """Return the schema errors an edit introduced, or [] if it introduced none.
+
+    `original` and `new` are a file's bytes before and after an auto-fix. Only
+    a valid-to-invalid change counts: a file that already failed validation
+    is bes-schema-validate's to report, and blocking every fix to it would
+    help nobody. An unknown schema (see schema_errors) also counts as none.
+    """
+    if new == original:
+        return []
+    errors = schema_errors(new)
+    if not errors:
+        return []
+    return errors if schema_errors(original) == [] else []
