@@ -88,10 +88,12 @@ See the docstring in
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
-Fixes are checked against BES.xsd one stage (the per-block fixes, the trailing-whitespace strip, or the XML declaration) at a
-time. One that would turn a schema-valid file into an invalid one is held
-back and reported as `E222`; the other fixes are still written
-(`--disable E222` writes it anyway).
+Auto-fixes are checked against BES.xsd in three groups: all the per-block
+fixes together, the trailing-whitespace strip, and the XML declaration. A
+group that would turn a schema-valid file into an invalid one is not written
+and is reported as `E222`; the other groups still are (`--disable E222` writes
+it anyway). Because the per-block fixes are one group, one bad block fix holds
+back every block fix in the file.
 
 ### bes-actionscript-lint-schclass
 
@@ -149,10 +151,9 @@ See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
 
-Fixes are checked against BES.xsd one set of case fixes at a
-time. One that would turn a schema-valid file into an invalid one is held
-back and reported as `E304`; the other fixes are still written
-(`--disable E304` writes it anyway).
+The case fixes are checked against BES.xsd together. If they would turn a
+schema-valid file into an invalid one, none of them are written and `E304` is
+reported (`--disable E304` writes them anyway).
 
 ### bes-actionscript-validate-prefetch
 
@@ -280,10 +281,10 @@ See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
 
-Fixes are checked against BES.xsd one pass (`E403`, `E402`, `E401` or `W407`) at a
-time. One that would turn a schema-valid file into an invalid one is held
-back and reported as `E404`; the other fixes are still written
-(`--disable E404` writes it anyway).
+Auto-fixes are checked against BES.xsd one pass at a time, in the order
+`E403`, `E402`, `E401`, `W407`. A pass that would turn a schema-valid file
+into an invalid one is not written and is reported as `E404`; the other passes
+still are (`--disable E404` writes it anyway).
 
 ### bes-actionscript-validate-script
 
@@ -445,10 +446,11 @@ See the docstring in
 [bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
 
-Fixes are checked against BES.xsd one pass (`W503`, `W506`, `E525`, or the `E524`/`W505`/`E521` line rewrites) at a
-time. One that would turn a schema-valid file into an invalid one is held
-back and reported as `E526`; the other fixes are still written
-(`--disable E526` writes it anyway).
+Auto-fixes are checked against BES.xsd one pass at a time: `W503`, `W506`,
+`E525`, then the `E524`/`W505`/`E521` line rewrites as one pass. A pass that
+would turn a schema-valid file into an invalid one is not written and is
+reported as `E526`; the other passes still are (`--disable E526` writes it
+anyway).
 
 ### bes-relevance-lint
 

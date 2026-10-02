@@ -365,8 +365,10 @@ def test_empty_component_relevance_is_reported_and_unchanged(inner):
     assert issues == ["E703"]
 
 
-def test_group_relevance_with_no_components_is_reported():
-    src = bes(("Task", '\t\t<GroupRelevance JoinByIntersection="true" />\n'))
+@pytest.mark.parametrize("attr", [' JoinByIntersection="true"', ""])
+def test_group_relevance_with_no_components_is_reported(attr):
+    # with no components, a missing JoinByIntersection is moot: E703, not E702
+    src = bes(("Task", f"\t\t<GroupRelevance{attr} />\n"))
     new_src, fixed, issues = convert(src)
     assert new_src == src
     assert fixed == []

@@ -12,6 +12,7 @@ schema-valid file into one that fails BES.xsd validation.
 
 import os
 import re
+import sys
 
 # an unrendered mustache template ({{ placeholder }}) is not real content yet.
 # Only an identifier-like placeholder counts: `{{` is also the ActionScript
@@ -116,6 +117,24 @@ def _bundled_schemas(validate_bes_xml):
     ]
 
 
+_schema_check_warned = []  # non-empty once the warning below has been printed
+
+
+def _warn_schema_check_unavailable():
+    """Say, once per run, that auto-fixes are written without a schema check.
+
+    It goes to stderr so the `path:line: [CODE]` report on stdout stays clean.
+    """
+    if _schema_check_warned:
+        return
+    _schema_check_warned.append(True)
+    print(
+        "warning: BES.xsd schema check unavailable, so auto-fixes are written "
+        'unchecked; install "validate_bes_xml>=2.2.1" to enable it',
+        file=sys.stderr,
+    )
+
+
 def schema_errors(raw, path=None):
     """Validate BES XML bytes against the schema bes-schema-validate would pick.
 
@@ -124,10 +143,15 @@ def schema_errors(raw, path=None):
     list of "Line N: message" strings, empty when valid. Returns None when no
     bundled schema applies, meaning validity is unknown. validate_bes_xml
     (and so lxml) is imported only here: importing it scans and compiles every
-    schema, which only a fix that writes needs, and the stdlib-only
-    bes-conventions-check must not need it at all.
+    schema, which only a fix that writes needs. When it is not installed (the
+    stdlib-only bes-conventions-check run as a bare script, say), validity is
+    unknown too: a warning says so once, and the fix is written unchecked.
     """
-    import validate_bes_xml  # pylint: disable=import-outside-toplevel
+    try:
+        import validate_bes_xml  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        _warn_schema_check_unavailable()
+        return None
 
     schemas = _bundled_schemas(validate_bes_xml)
     if not schemas:  # an empty list would make upstream fall back to the cwd
@@ -170,8 +194,10 @@ class SchemaGuard:
     its fixes are dropped and one issue is recorded under `code` naming them.
     The passes before and after it still apply, so one bad fix does not cost
     the others. A file that already fails validation is never held back,
-    since bes-schema-validate reports it regardless. Line endings do not
-    affect validity, so the text is checked in whatever form it is given.
+    since bes-schema-validate reports it regardless -- but once a pass makes
+    it valid, the passes after that are checked like any other. Line endings
+    do not affect validity, so the text is checked in whatever form it is
+    given.
 
     Afterwards `src` is the accepted text, `fixed` the accepted fixes, and
     `refused` the issues to report.
@@ -213,6 +239,10 @@ class SchemaGuard:
                     )
                 )
                 return False
+        if self._valid is False and new_src != self.src:
+            # an invalid (or unknown) file may have just been made valid:
+            # re-check before the next pass rather than wave it through
+            self._valid = None
         self.src = new_src
         self.fixed += fixes
         return True

@@ -109,8 +109,9 @@ Checks:
           to be, so the rest of the if/endif pairing does not cascade
           (fixable -> joined into `elseif`, unless the body has a stray
           `endif` (E501), which means an `if` really was nested in the `else`)
-    E526  an auto-fix pass (W503, W506, E525, or the E524/W505/E521 line rewrites) was held back, because it would make a
-          schema-valid file fail BES.xsd validation; the other fixes are
+    E526  an auto-fix pass (W503, W506, E525, or the E524/W505/E521 line
+          rewrites together) was not written, because it would make a
+          schema-valid file fail BES.xsd validation; the other passes are
           still written (--disable E526 writes it anyway)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)

@@ -14,33 +14,48 @@
   a single component, because AND and OR then mean the same thing. With two
   or more components it is `E702`, and the message says which attribute to
   add. BES.xsd makes the attribute optional and documents no default.
-- **Schema guard on every auto-fix.** Each hook that rewrites BES files now
-  checks its fixes against BES.xsd one pass at a time before writing. A pass
-  that would turn a schema-valid file into an invalid one is held back, and
-  the other passes are still written. For example, sha256 values downloaded
-  for `E401` are kept even if an unrelated fix is held back. Each hook
-  reports a held-back pass with a new error: `E222` (`bes-conventions-check`), `E304`
+
+### Changed (BES.xsd check on every auto-fix)
+
+This changes four existing hooks: a commit they used to fix and pass can now
+fail with a new error instead.
+
+- **Each hook that rewrites BES files now checks its fixes against BES.xsd
+  before writing**, one fix pass at a time. A pass that would turn a
+  schema-valid file into an invalid one is not written, and the other passes
+  still are. For example, sha256 values downloaded for `E401` are kept even
+  if an unrelated fix is held back. Each hook reports a held-back pass with a
+  new error: `E222` (`bes-conventions-check`), `E304`
   (`bes-actionscript-lint-schclass`), `E404`
   (`bes-actionscript-validate-prefetch`), `E526`
   (`bes-actionscript-validate-script`), or `E704`
-  (`bes-relevance-convert-group`). A file that already fails validation is
-  still fixed, since `bes-schema-validate` reports it either way. Disabling
-  the code (for example `--disable E222`) writes the fix anyway. The guard
-  calls `validate_bes_xml.validate_bes()` with only the schemas bundled
-  with that package, so a repo-local `.xsd` can neither stand in for
+  (`bes-relevance-convert-group`). In `bes-conventions-check` all the
+  per-block fixes form one pass, and `bes-actionscript-lint-schclass` has only
+  one pass, so there one bad fix holds back the others with it.
+- A file that already fails validation is still fixed, since
+  `bes-schema-validate` reports it either way. Once a pass makes such a file
+  valid, the passes after it are checked as usual. Disabling the code (for
+  example `--disable E222`) writes the fix anyway.
+- The check calls `validate_bes_xml.validate_bes()` with only the schemas
+  bundled with that package, so a repo-local `.xsd` can neither stand in for
   `BES.xsd` nor make an unknown root checkable. `BESOJO.xsd` is used for an
   `.ojo` file and `BESDomain.xsd` for a `.BESDomain` file. Nothing is printed
-  while validating. This needs **`validate_bes_xml >= 2.2.1`** (which brings
-  `lxml >= 5`).
+  while validating.
+- This needs **`validate_bes_xml >= 2.2.1`** (which brings `lxml >= 5`). The
+  published hooks install it. If it is missing, for example when
+  `bes_conventions_check.py` is run as a bare script, the fixes are written
+  unchecked and a one-line warning on stderr says to install it.
 
-### Changed (bes-relevance-convert-group)
+### Changed (shared helpers)
 
 - The helpers the hooks used to copy (file reading and writing with
   line-ending preservation, `.bes` discovery, the report printer, the
   mustache-template pattern) now live in `pre_commit_bigfix/bes_common.py`.
   Behavior is unchanged.
 
-## Unreleased
+## v1.2.2 - v1.8.4
+
+These releases were recorded together and are not split by version.
 
 ### Changed (bigfix-relevance-analyzer 1.13.3)
 

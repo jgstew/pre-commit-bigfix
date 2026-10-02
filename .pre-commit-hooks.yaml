@@ -56,8 +56,9 @@
     that a file's basename matches its first content object's Title. Unparsable
     files are skipped (bes-schema-validate owns validity). E-codes fail the
     hook; pass --strict to also fail on warnings.
-    A fix stage (the per-block fixes, the trailing-whitespace strip, or the XML declaration) that would make a schema-valid file
-    fail BES.xsd validation is held back and the rest are still written
+    Auto-fixes are checked against BES.xsd in three groups (all per-block
+    fixes, the trailing-whitespace strip, the XML declaration); a group that
+    would make a schema-valid file invalid is not written, the others are
     (E222; --disable E222 writes it anyway).
   language: python
   pass_filenames: True
@@ -109,9 +110,9 @@
     keyword/value (W303) is lowercased in place, and an auto-fixed file fails
     the hook so the change is reviewed and re-staged. E-codes fail the hook;
     pass --strict to also fail on warnings. Widen `files` to lint raw ActionScript text files too.
-    A fix set of case fixes that would make a schema-valid file
-    fail BES.xsd validation is held back and the rest are still written
-    (E304; --disable E304 writes it anyway).
+    If the case fixes would make a schema-valid file fail BES.xsd
+    validation, none of them are written (E304; --disable E304 writes them
+    anyway).
   language: python
   pass_filenames: True
   entry: bes-actionscript-lint-schclass
@@ -181,9 +182,9 @@
     and hashes of the real file, and a hook has no way to know which file was
     meant. E-codes and any auto-fix fail the hook; pass --strict to also fail
     on warnings.
-    A fix pass (E403, E402, E401 or W407) that would make a schema-valid file
-    fail BES.xsd validation is held back and the rest are still written
-    (E404; --disable E404 writes it anyway).
+    Auto-fixes are checked against BES.xsd one pass at a time (E403, E402,
+    E401, W407); a pass that would make a schema-valid file invalid is not
+    written, the others are (E404; --disable E404 writes it anyway).
   language: python
   pass_filenames: True
   entry: bes-actionscript-validate-prefetch
@@ -300,9 +301,10 @@
     (W501), or `actionscript-parameter-query-ok` (W502). E-codes fail the
     hook; pass
     --strict to also fail on warnings.
-    A fix pass (W503, W506, E525, or the E524/W505/E521 line rewrites) that would make a schema-valid file
-    fail BES.xsd validation is held back and the rest are still written
-    (E526; --disable E526 writes it anyway).
+    Auto-fixes are checked against BES.xsd one pass at a time (W503, W506,
+    E525, then the E524/W505/E521 line rewrites together); a pass that would
+    make a schema-valid file invalid is not written, the others are (E526;
+    --disable E526 writes it anyway).
   language: python
   pass_filenames: True
   entry: bes-actionscript-validate-script

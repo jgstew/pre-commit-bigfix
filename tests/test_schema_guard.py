@@ -174,3 +174,19 @@ def test_only_the_breaking_pass_is_dropped(
     refusals = [issue for issue in issues if issue[1] == guard]
     assert len(refusals) == 1
     assert codes[0] in refusals[0][2]  # names the fix that was held back
+
+
+# --- review fix: a file made valid is guarded from then on (PR #28) ----------
+
+
+def test_passes_after_one_that_makes_the_file_valid_are_checked():
+    from pre_commit_bigfix import bes_common
+
+    valid = EXAMPLE.read_text(encoding="utf-8")
+    guard = bes_common.SchemaGuard(breaking(valid), "E999", "x.bes")
+    assert guard.apply(valid, [(1, "W1", "repairs the file")])
+    assert not guard.apply(breaking(valid), [(1, "W2", "breaks it again")])
+    assert guard.src == valid
+    assert [code for _l, code, _m in guard.fixed] == ["W1"]
+    assert [code for _l, code, _m in guard.refused] == ["E999"]
+    assert "W2" in guard.refused[0][2]

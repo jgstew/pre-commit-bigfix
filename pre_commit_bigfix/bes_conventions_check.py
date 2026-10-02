@@ -93,10 +93,11 @@ Checks:
           `/* */` block comment is flagged; a comment whose text itself
           contains `*/` cannot be wrapped in a single block comment and is
           left as an unfixed error
-    E222  an auto-fix stage (the per-block fixes, the trailing-whitespace strip, or the XML
-          declaration) was held back, because it would make a
-          schema-valid file fail BES.xsd validation; the other fixes are
-          still written (--disable E222 writes it anyway)
+    E222  a group of auto-fixes was not written, because it would make a
+          schema-valid file fail BES.xsd validation; the groups are all the
+          per-block fixes, the trailing-whitespace strip, and the XML
+          declaration, and the other groups are still written (--disable
+          E222 writes it anyway)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->

@@ -216,3 +216,35 @@ def test_validating_prints_nothing_even_with_a_bad_xsd_in_cwd(tmp_path):
         f"assert bes_common.schema_errors(open({str(EXAMPLE)!r}, 'rb').read()) == []\n",
     )
     assert out.stdout == ""
+
+
+# --- review fix: a missing validate_bes_xml warns, it does not crash ----------
+
+
+def test_missing_validate_bes_xml_means_unknown_and_warns_once(monkeypatch, capsys):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "validate_bes_xml", None)  # import fails
+    monkeypatch.setattr(bes_common, "_schema_check_warned", [])
+    assert bes_common.schema_errors(INVALID) is None
+    assert bes_common.schema_errors(INVALID) is None
+    captured = capsys.readouterr()
+    assert captured.out == ""  # the hook report on stdout stays clean
+    assert captured.err.count("schema check unavailable") == 1
+    assert "validate_bes_xml" in captured.err
+
+
+def test_conventions_auto_fix_without_validate_bes_xml_still_writes(tmp_path):
+    """The stdlib-only hook, run with no validate_bes_xml, fixes unchecked."""
+    path = tmp_path / "x.bes"
+    path.write_bytes(VALID.replace(b"</Title>", b"</Title>   ", 1))
+    result = _run_in(
+        tmp_path,
+        "import sys; sys.modules['validate_bes_xml'] = None\n"
+        "from pre_commit_bigfix import bes_conventions_check as hook\n"
+        "_issues, fixed = hook.check_file('x.bes', auto_fix=True)\n"
+        "assert 'W210' in [code for _l, code, _m in fixed], fixed\n",
+    )
+    assert b"</Title>   " not in path.read_bytes()
+    assert "schema check unavailable" in result.stderr
+    assert "Traceback" not in result.stderr

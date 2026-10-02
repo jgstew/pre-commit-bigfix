@@ -148,6 +148,9 @@ def _refusal(group):
                     "not supported yet, so it was left unchanged"
                 ),
             )
+    # before the join check: with nothing to join, how they join is moot
+    if not components:
+        return "E703", "GroupRelevance has no search components; left unchanged"
     if _intersection(group) is None:
         found = group.get("JoinByIntersection")
         detail = (
@@ -163,8 +166,6 @@ def _refusal(group):
                 'JoinByIntersection="false" (any may hold). Left unchanged'
             ),
         )
-    if not components:
-        return "E703", "GroupRelevance has no search components; left unchanged"
     for number, component in enumerate(components, start=1):
         if not _component_relevance(component).strip():
             return (

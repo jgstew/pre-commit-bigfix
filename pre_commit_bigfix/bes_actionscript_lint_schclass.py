@@ -53,9 +53,9 @@ Checks:
           keyword, no value, a value outside the documented set for that
           keyword, a non-integer `timeout_seconds`, or a `keyword=value` option
           line outside any override block
-    E304  an auto-fix set of case fixes was held back, because it would make a
-          schema-valid file fail BES.xsd validation; the other fixes are
-          still written (--disable E304 writes it anyway)
+    E304  the case fixes were not written, because together they would make
+          a schema-valid file fail BES.xsd validation (--disable E304 writes
+          them anyway)
     W300  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W301  a "..." string has no closing " before line end (often benign in

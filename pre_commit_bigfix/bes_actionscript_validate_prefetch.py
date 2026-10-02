@@ -40,9 +40,10 @@ Checks:
           front of a 64-hex value becomes `sha256`, and tokens directly
           after the URL (an unencoded space in it) are joined with `%20`;
           stray text anywhere else is left for a human
-    E404  an auto-fix pass (E403, E402, E401 or W407) was held back, because it would make a
-          schema-valid file fail BES.xsd validation; the other fixes are
-          still written (--disable E404 writes it anyway)
+    E404  an auto-fix pass (E403, E402, E401 or W407) was not written,
+          because it would make a schema-valid file fail BES.xsd validation;
+          the other passes are still written (--disable E404 writes it
+          anyway)
     W400  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W402  a prefetch block item has no sha1; technically valid, but unusual
