@@ -10,8 +10,6 @@ SchemaGuard also lives here. It is what keeps an auto-fix from turning a
 schema-valid file into one that fails BES.xsd validation.
 """
 
-import importlib.util
-import io
 import os
 import re
 
@@ -101,88 +99,49 @@ def report(results, errors_only=False):
     return issue_count, warning_count, fix_count
 
 
-# compiled schemas, keyed by schema file path (a plain dict rather than
-# functools.cache, which needs Python 3.9+)
-_SCHEMAS = {}
+def _bundled_schemas(validate_bes_xml):
+    """Return the schema files validate_bes_xml ships with, not cwd ones.
 
-
-def _schema_path(name):
-    """Return the path of the schema `name` that validate_bes_xml bundles, or None.
-
-    Only the package's own copy is used. Upstream also picks up any *.xsd in
-    the current folder, which lets a repo-local file stand in for BES.xsd.
-    The package is located with find_spec rather than imported: importing it
-    scans the current folder for schemas, prints a warning for each one it
-    cannot use, and fails outright on one that is not well-formed XML.
+    Upstream's SCHEMA_FILES also holds any *.xsd in the current folder, which
+    would let a repo-local Foo.xsd make <Foo> checkable, or a repo-local
+    BES.xsd stand in for the real one.
     """
-    spec = importlib.util.find_spec("validate_bes_xml")
-    for folder in (spec.submodule_search_locations or []) if spec else []:
-        for candidate in (
-            os.path.join(folder, "schemas", name),
-            os.path.join(folder, name),
-        ):
-            if os.path.isfile(candidate):
-                return candidate
-    return None
-
-
-def _schema(name):
-    """Return the compiled bundled XMLSchema named `name`, or None."""
-    from lxml import etree  # pylint: disable=import-outside-toplevel
-
-    path = _schema_path(name)
-    if path is None:
-        return None
-    if path not in _SCHEMAS:
-        _SCHEMAS[path] = etree.XMLSchema(etree.parse(path))
-    return _SCHEMAS[path]
-
-
-def _schema_name(document, path=None):
-    """Return the schema file name for a parsed `document`.
-
-    Mirrors validate_bes_xml.validate_xml: a `.ojo` path means BESOJO.xsd
-    (an .ojo's root is <BES> too). Otherwise the name comes from a root
-    attribute naming an .xsd (`xsi:noNamespaceSchemaLocation="BES.xsd"`),
-    and failing that from the root tag.
-    """
-    if path and ".ojo" in path.lower():
-        return "BESOJO.xsd"
-    root = document.getroot()
-    for value in root.values():
-        if ".xsd" in value.lower():
-            return value.replace("\\", "/").rsplit("/", 1)[-1]
-    return f"{root.tag}.xsd"
-
-
-def schema_name(raw, path=None):
-    """Return the schema file name BES XML bytes `raw` would be validated with."""
-    from lxml import etree  # pylint: disable=import-outside-toplevel
-
-    return _schema_name(etree.parse(io.BytesIO(raw)), path)
+    bundled = os.path.join(
+        os.path.dirname(os.path.realpath(validate_bes_xml.__file__)), "schemas"
+    )
+    return [
+        path
+        for path in validate_bes_xml.SCHEMA_FILES
+        if os.path.dirname(os.path.realpath(path)) == bundled
+    ]
 
 
 def schema_errors(raw, path=None):
     """Validate BES XML bytes against the schema bes-schema-validate would pick.
 
-    `path`, if given, is the file's name; only its extension matters (see
-    _schema_name). Returns a list of "Line N: message" strings, empty when
-    valid. Returns None when no bundled schema applies, meaning validity is
-    unknown. lxml is imported only here, so a hook that never writes (and the
-    stdlib-only bes-conventions-check) does not need it.
+    `path`, if given, is the file's name; validate_bes_xml uses it only for
+    its extension (.ojo -> BESOJO.xsd, .BESDomain -> BESDomain.xsd). Returns a
+    list of "Line N: message" strings, empty when valid. Returns None when no
+    bundled schema applies, meaning validity is unknown. validate_bes_xml
+    (and so lxml) is imported only here: importing it scans and compiles every
+    schema, which only a fix that writes needs, and the stdlib-only
+    bes-conventions-check must not need it at all.
     """
-    from lxml import etree  # pylint: disable=import-outside-toplevel
+    import validate_bes_xml  # pylint: disable=import-outside-toplevel
 
-    try:
-        document = etree.parse(io.BytesIO(raw))
-    except etree.XMLSyntaxError as err:
-        return [f"Line {err.lineno}: {err.msg}"]
-    schema = _schema(_schema_name(document, path))
-    if schema is None:
+    schemas = _bundled_schemas(validate_bes_xml)
+    if not schemas:  # an empty list would make upstream fall back to the cwd
         return None
-    if schema.validate(document):
+    result = validate_bes_xml.validate_bes(
+        xml=raw, filename=path, schema_pathnames=schemas
+    )
+    if result:
         return []
-    return [f"Line {error.line}: {error.message}" for error in schema.error_log]
+    # upstream reports "no schema applies" as schema=None with line-less
+    # errors; a syntax error also has schema=None, but carries line numbers
+    if result.schema is None and all(line is None for line, _msg in result.errors):
+        return None
+    return [f"Line {line}: {message}" for line, message in result.errors]
 
 
 def schema_regression(original, new, path=None):

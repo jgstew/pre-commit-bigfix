@@ -114,29 +114,85 @@ def test_importing_bes_common_needs_only_the_standard_library():
 # --- review fixes: schema choice and import noise (PR #28) --------------------
 
 
-def test_ojo_files_use_the_besojo_schema():
+@pytest.mark.parametrize("name", ["site/x.ojo", "site/X.OJO"])
+def test_ojo_files_use_the_besojo_schema(name):
     """Upstream maps .ojo to BESOJO.xsd before inferring; so must the guard."""
-    assert bes_common.schema_name(VALID, "site/x.ojo").endswith("BESOJO.xsd")
-    assert bes_common.schema_name(VALID, "site/X.OJO").endswith("BESOJO.xsd")
-    assert bes_common.schema_name(VALID, "site/x.bes") == "BES.xsd"
-    assert bes_common.schema_name(VALID) == "BES.xsd"
-
-
-def test_schema_file_is_matched_by_basename_not_substring(monkeypatch):
-    # a repo-local MyBES.xsd must not stand in for BES.xsd; if it were picked,
-    # parsing the nonexistent file would raise
-    monkeypatch.setattr(bes_common, "_SCHEMAS", {})
-    schemas = set(validate_bes_xml.SCHEMA_FILES) | {"/0/MyBES.xsd"}
-    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", schemas)
+    # the example is a Task, which BES.xsd allows and BESOJO.xsd does not
+    assert bes_common.schema_errors(VALID, name)
+    assert bes_common.schema_errors(VALID, "site/x.bes") == []
     assert bes_common.schema_errors(VALID) == []
 
 
-def test_bundled_schema_wins_over_a_cwd_copy(monkeypatch):
-    bundled = bes_common._schema_path("BES.xsd")
-    assert bundled is not None
-    schemas = set(validate_bes_xml.SCHEMA_FILES) | {"/0/BES.xsd"}
-    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", schemas)
-    assert bes_common._schema_path("BES.xsd") == bundled
+def test_besdomain_files_use_the_besdomain_schema():
+    assert bes_common.schema_errors(VALID, "site/x.BESDomain")
+
+
+def test_schema_errors_delegates_to_validate_bes(monkeypatch):
+    """The schema choice is upstream's: bes_common passes the name through."""
+    calls = []
+    real = validate_bes_xml.validate_bes
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(validate_bes_xml, "validate_bes", spy)
+    assert bes_common.schema_errors(VALID, "site/x.bes") == []
+    assert len(calls) == 1
+    assert calls[0]["xml"] == VALID
+    assert calls[0]["filename"] == "site/x.bes"
+
+
+def test_no_bundled_schemas_means_unknown_not_the_cwd_ones(monkeypatch):
+    # upstream treats an empty schema list as "use SCHEMA_FILES", cwd included
+    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", {"/repo/BES.xsd"})
+    assert bes_common.schema_errors(INVALID) is None
+
+
+def _run_in(folder, code):
+    """Run `code` in a fresh interpreter with `folder` as the current folder."""
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=folder,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_a_cwd_schema_cannot_validate_an_unknown_root(tmp_path):
+    # a repo-local Foo.xsd must not make <Foo> count as checkable BES XML
+    (tmp_path / "Foo.xsd").write_text(
+        '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+        '<xs:element name="Foo"/></xs:schema>',
+        encoding="utf-8",
+    )
+    _run_in(
+        tmp_path,
+        "from pre_commit_bigfix import bes_common\n"
+        "assert bes_common.schema_errors(b'<Foo/>') is None\n",
+    )
+
+
+def test_bundled_schema_wins_over_a_cwd_copy(tmp_path):
+    # a permissive repo-local BES.xsd must not let an invalid file through
+    (tmp_path / "BES.xsd").write_text(
+        '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+        '<xs:element name="BES"><xs:complexType><xs:sequence>'
+        '<xs:any processContents="skip" minOccurs="0" maxOccurs="unbounded"/>'
+        "</xs:sequence></xs:complexType></xs:element></xs:schema>",
+        encoding="utf-8",
+    )
+    invalid = tmp_path / "invalid.bes"
+    invalid.write_bytes(INVALID)
+    _run_in(
+        tmp_path,
+        "from pre_commit_bigfix import bes_common\n"
+        "assert bes_common.schema_errors(open('invalid.bes', 'rb').read())\n",
+    )
 
 
 def test_validating_prints_nothing_even_with_a_bad_xsd_in_cwd(tmp_path):

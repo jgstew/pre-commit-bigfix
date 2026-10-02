@@ -26,10 +26,12 @@
   (`bes-relevance-convert-group`). A file that already fails validation is
   still fixed, since `bes-schema-validate` reports it either way. Disabling
   the code (for example `--disable E222`) writes the fix anyway. The guard
-  uses the schemas bundled with `validate_bes_xml` (`BESOJO.xsd` for an
-  `.ojo` file) and locates them without importing that package. Importing
-  it scans the current folder for `.xsd` files, prints warnings, and fails
-  outright on one that is not well-formed XML.
+  calls `validate_bes_xml.validate_bes()` with only the schemas bundled
+  with that package, so a repo-local `.xsd` can neither stand in for
+  `BES.xsd` nor make an unknown root checkable. `BESOJO.xsd` is used for an
+  `.ojo` file and `BESDomain.xsd` for a `.BESDomain` file. Nothing is printed
+  while validating. This needs **`validate_bes_xml >= 2.2.1`** (which brings
+  `lxml >= 5`).
 
 ### Changed (bes-relevance-convert-group)
 

@@ -152,7 +152,7 @@ repos:
         entry: python pre_commit_bigfix/bes_conventions_check.py
         language: python
         # isolated venv: the BES.xsd guard on auto-fix writes needs these
-        additional_dependencies: [lxml, validate_bes_xml]
+        additional_dependencies: [lxml, "validate_bes_xml>=2.2.1"]
         pass_filenames: True
         args: ["--auto-fix=no"]
         files: \.bes$
@@ -166,7 +166,7 @@ repos:
         language: python
         # isolated venv: declare the third-party imports used by the linter
         # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
-        additional_dependencies: [lxml, validate_bes_xml]
+        additional_dependencies: [lxml, "validate_bes_xml>=2.2.1"]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
@@ -178,7 +178,7 @@ repos:
         language: python
         # isolated venv: declare the third-party imports used by the validator
         # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
-        additional_dependencies: [lxml, bigfix_prefetch, validate_bes_xml]
+        additional_dependencies: [lxml, bigfix_prefetch, "validate_bes_xml>=2.2.1"]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
@@ -190,7 +190,7 @@ repos:
         language: python
         # isolated venv: declare the third-party imports used by the validator
         # (validate_bes_xml for the BES.xsd guard on auto-fix writes)
-        additional_dependencies: [lxml, validate_bes_xml]
+        additional_dependencies: [lxml, "validate_bes_xml>=2.2.1"]
         pass_filenames: True
         files: \.bes$
         exclude: ^tests/examples/example-test-bad.bes
@@ -201,7 +201,7 @@ repos:
         entry: python pre_commit_bigfix/bes_relevance_convert_group.py
         language: python
         # isolated venv: declare the third-party imports used by the converter
-        additional_dependencies: [lxml, validate_bes_xml]
+        additional_dependencies: [lxml, "validate_bes_xml>=2.2.1"]
         pass_filenames: True
         files: \.bes$
         # the raw console exports are the converter's test inputs
@@ -227,4 +227,4 @@ repos:
         additional_dependencies:
           - bigfix_prefetch
           - lxml
-          - validate_bes_xml
+          - "validate_bes_xml>=2.2.1"
