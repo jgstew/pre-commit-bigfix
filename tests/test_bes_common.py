@@ -150,17 +150,29 @@ def test_no_bundled_schemas_means_unknown_not_the_cwd_ones(monkeypatch):
 
 
 def _run_in(folder, code):
-    """Run `code` in a fresh interpreter with `folder` as the current folder."""
+    """Run `code` in a fresh interpreter with `folder` as the current folder.
+
+    The repo root goes on PYTHONPATH: leaving it for `folder` drops it from
+    sys.path, and the package is not installed in every test environment
+    (pre-commit's pytest hook installs only the dependencies).
+    """
+    import os
     import subprocess
     import sys
 
-    return subprocess.run(
+    root = str(Path(__file__).resolve().parent.parent)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [root, env.get("PYTHONPATH")]))
+    result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=folder,
-        check=True,
+        env=env,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
+    return result
 
 
 def test_a_cwd_schema_cannot_validate_an_unknown_root(tmp_path):
@@ -197,19 +209,10 @@ def test_bundled_schema_wins_over_a_cwd_copy(tmp_path):
 
 def test_validating_prints_nothing_even_with_a_bad_xsd_in_cwd(tmp_path):
     """Importing validate_bes_xml warns on stdout; none must reach the report."""
-    import subprocess
-    import sys
-
     (tmp_path / "broken.xsd").write_text("<not a schema", encoding="utf-8")
-    code = (
+    out = _run_in(
+        tmp_path,
         "from pre_commit_bigfix import bes_common\n"
-        f"assert bes_common.schema_errors(open({str(EXAMPLE)!r}, 'rb').read()) == []\n"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-        text=True,
+        f"assert bes_common.schema_errors(open({str(EXAMPLE)!r}, 'rb').read()) == []\n",
     )
     assert out.stdout == ""
