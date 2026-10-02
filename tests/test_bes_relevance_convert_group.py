@@ -561,3 +561,27 @@ def test_every_code_is_documented_everywhere():
         assert code in hook.__doc__, f"{code} missing from the module docstring"
         assert code in description, f"{code} missing from .pre-commit-hooks.yaml"
         assert f"| `{code}` |" in readme, f"{code} missing from the README table"
+
+
+# --- review fix: missing JoinByIntersection (PR #28) --------------------------
+
+
+def test_missing_join_with_one_component_is_converted():
+    """AND and OR of a single statement are the same, so no default is needed."""
+    src = bes(("Task", group([prop("a")], join=None)))
+    new_src, fixed, issues = convert(src)
+    assert relevances(new_src) == ["a"]
+    assert fixed == ["E700"]
+    assert issues == []
+
+
+def test_missing_join_message_says_what_to_add():
+    src = bes(("Task", group([prop("a"), prop("b")], join=None)))
+    _new_src, _fixed, issues = hook.convert_group_relevance(src)
+    assert 'JoinByIntersection="true"' in issues[0][2]
+    assert 'JoinByIntersection="false"' in issues[0][2]
+
+
+def test_invalid_join_with_one_component_is_still_refused():
+    src = bes(("Task", group([prop("a")], join="yes")))
+    assert convert(src)[2] == ["E702"]

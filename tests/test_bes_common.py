@@ -109,3 +109,51 @@ def test_importing_bes_common_needs_only_the_standard_library():
         "import pre_commit_bigfix.bes_common, pre_commit_bigfix.bes_conventions_check"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+# --- review fixes: schema choice and import noise (PR #28) --------------------
+
+
+def test_ojo_files_use_the_besojo_schema():
+    """Upstream maps .ojo to BESOJO.xsd before inferring; so must the guard."""
+    assert bes_common.schema_name(VALID, "site/x.ojo").endswith("BESOJO.xsd")
+    assert bes_common.schema_name(VALID, "site/X.OJO").endswith("BESOJO.xsd")
+    assert bes_common.schema_name(VALID, "site/x.bes") == "BES.xsd"
+    assert bes_common.schema_name(VALID) == "BES.xsd"
+
+
+def test_schema_file_is_matched_by_basename_not_substring(monkeypatch):
+    # a repo-local MyBES.xsd must not stand in for BES.xsd; if it were picked,
+    # parsing the nonexistent file would raise
+    monkeypatch.setattr(bes_common, "_SCHEMAS", {})
+    schemas = set(validate_bes_xml.SCHEMA_FILES) | {"/0/MyBES.xsd"}
+    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", schemas)
+    assert bes_common.schema_errors(VALID) == []
+
+
+def test_bundled_schema_wins_over_a_cwd_copy(monkeypatch):
+    bundled = bes_common._schema_path("BES.xsd")
+    assert bundled is not None
+    schemas = set(validate_bes_xml.SCHEMA_FILES) | {"/0/BES.xsd"}
+    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", schemas)
+    assert bes_common._schema_path("BES.xsd") == bundled
+
+
+def test_validating_prints_nothing_even_with_a_bad_xsd_in_cwd(tmp_path):
+    """Importing validate_bes_xml warns on stdout; none must reach the report."""
+    import subprocess
+    import sys
+
+    (tmp_path / "broken.xsd").write_text("<not a schema", encoding="utf-8")
+    code = (
+        "from pre_commit_bigfix import bes_common\n"
+        f"assert bes_common.schema_errors(open({str(EXAMPLE)!r}, 'rb').read()) == []\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout == ""

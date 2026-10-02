@@ -109,9 +109,9 @@ Checks:
           to be, so the rest of the if/endif pairing does not cascade
           (fixable -> joined into `elseif`, unless the body has a stray
           `endif` (E501), which means an `if` really was nested in the `else`)
-    E526  an auto-fix was not written because the fixed file would fail
-          BES.xsd validation when the original passed; the file is
-          reported as it stands (--disable E526 writes it anyway)
+    E526  an auto-fix pass (W503, W506, E525, or the E524/W505/E521 line rewrites) was held back, because it would make a
+          schema-valid file fail BES.xsd validation; the other fixes are
+          still written (--disable E526 writes it anyway)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -2475,46 +2475,47 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
 
     is_bes = is_bes_file(path)
     raw = original
-    original_src = src
-    fixed = []
+    # each fix pass is kept only if it leaves a schema-valid file valid (E526)
+    guard = bes_common.SchemaGuard(
+        src, "E526", path, validate=is_bes and "E526" not in disabled
+    )
     if auto_fix and "W503" not in disabled and SCRATCH_MARKER not in src:
-        src, fixed = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
-        raw = encode(src, was_crlf)
+        new_src, got = fix_scratch_case(src, _scratch_case_targets(raw, src, is_bes))
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if auto_fix and "W506" not in disabled and SCRATCH_DEST_MARKER not in src:
-        src, got = fix_scratch_destinations(
+        new_src, got = fix_scratch_destinations(
             src, list(_destination_targets(raw, src, is_bes))
         )
-        fixed += got
-        raw = encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if auto_fix and "E525" not in disabled and COMMAND_SHAPE_MARKER not in src:
-        src, got = fix_folder_quoting(
+        new_src, got = fix_folder_quoting(
             src, list(_folder_quote_targets(raw, src, is_bes))
         )
-        fixed += got
-        raw = encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     line_fix_codes = {
         code
         for code in ("E524", "W505", "E521")
         if auto_fix and code not in disabled and CHECK_MARKERS[code] not in src
     }
     if line_fix_codes:
-        src, got = fix_line_rewrites(
+        new_src, got = fix_line_rewrites(
             src, list(_line_fix_targets(raw, src, is_bes, line_fix_codes))
         )
-        fixed += got
-        raw = encode(src, was_crlf)
-    refused = bes_common.write_unless_schema_breaks(
-        path, original, raw, "E526", validate=is_bes and "E526" not in disabled
-    )
-    if refused:  # report the file as it stands, not the unwritten fixes
-        raw, src, fixed = original, original_src, []
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
+    fixed = guard.fixed
+    if raw != original:
+        with open(path, "wb") as handle:
+            handle.write(raw)
 
     if is_bes:
         issues = _validate_bes_xml(raw)
     else:
         issues = check_actionscript(src)
-    if refused:
-        issues.append(refused)
+    issues += guard.refused
 
     opt_outs = {marker for code, marker in CHECK_MARKERS.items() if marker in src}
     issues = [

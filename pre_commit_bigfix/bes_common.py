@@ -4,10 +4,13 @@ Each of these was once copied into several hooks and kept identical by hand.
 They live here so a fix to one is a fix to all: reading a file as LF text while
 remembering its line endings, writing it back the same way, finding the BES
 files under a folder when no paths are given, and printing the
-`path:line: [CODE] message` report the hooks share, and checking that an
-auto-fix has not made a schema-valid file fail BES.xsd validation.
+`path:line: [CODE] message` report the hooks share.
+
+SchemaGuard also lives here. It is what keeps an auto-fix from turning a
+schema-valid file into one that fails BES.xsd validation.
 """
 
+import importlib.util
 import io
 import os
 import re
@@ -98,46 +101,83 @@ def report(results, errors_only=False):
     return issue_count, warning_count, fix_count
 
 
-# compiled schemas, keyed by inferred schema name (a plain dict rather than
+# compiled schemas, keyed by schema file path (a plain dict rather than
 # functools.cache, which needs Python 3.9+)
 _SCHEMAS = {}
 
 
+def _schema_path(name):
+    """Return the path of the schema `name` that validate_bes_xml bundles, or None.
+
+    Only the package's own copy is used. Upstream also picks up any *.xsd in
+    the current folder, which lets a repo-local file stand in for BES.xsd.
+    The package is located with find_spec rather than imported: importing it
+    scans the current folder for schemas, prints a warning for each one it
+    cannot use, and fails outright on one that is not well-formed XML.
+    """
+    spec = importlib.util.find_spec("validate_bes_xml")
+    for folder in (spec.submodule_search_locations or []) if spec else []:
+        for candidate in (
+            os.path.join(folder, "schemas", name),
+            os.path.join(folder, name),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
 def _schema(name):
-    """Return the compiled XMLSchema validate_bes_xml uses for `name`, or None.
+    """Return the compiled bundled XMLSchema named `name`, or None."""
+    from lxml import etree  # pylint: disable=import-outside-toplevel
 
-    validate_bes_xml is imported here rather than at module level: importing it
-    finds and parses every bundled .xsd, which only a fix that writes needs.
+    path = _schema_path(name)
+    if path is None:
+        return None
+    if path not in _SCHEMAS:
+        _SCHEMAS[path] = etree.XMLSchema(etree.parse(path))
+    return _SCHEMAS[path]
+
+
+def _schema_name(document, path=None):
+    """Return the schema file name for a parsed `document`.
+
+    Mirrors validate_bes_xml.validate_xml: a `.ojo` path means BESOJO.xsd
+    (an .ojo's root is <BES> too). Otherwise the name comes from a root
+    attribute naming an .xsd (`xsi:noNamespaceSchemaLocation="BES.xsd"`),
+    and failing that from the root tag.
     """
-    # pylint: disable=import-outside-toplevel
-    import validate_bes_xml
-    from lxml import etree
+    if path and ".ojo" in path.lower():
+        return "BESOJO.xsd"
+    root = document.getroot()
+    for value in root.values():
+        if ".xsd" in value.lower():
+            return value.replace("\\", "/").rsplit("/", 1)[-1]
+    return f"{root.tag}.xsd"
 
-    if name not in _SCHEMAS:
-        paths = [path for path in sorted(validate_bes_xml.SCHEMA_FILES) if name in path]
-        _SCHEMAS[name] = etree.XMLSchema(etree.parse(paths[0])) if paths else None
-    return _SCHEMAS[name]
+
+def schema_name(raw, path=None):
+    """Return the schema file name BES XML bytes `raw` would be validated with."""
+    from lxml import etree  # pylint: disable=import-outside-toplevel
+
+    return _schema_name(etree.parse(io.BytesIO(raw)), path)
 
 
-def schema_errors(raw):
-    """Validate BES XML bytes against BES.xsd the way bes-schema-validate does.
+def schema_errors(raw, path=None):
+    """Validate BES XML bytes against the schema bes-schema-validate would pick.
 
-    Returns a list of "Line N: message" strings (empty when valid), or None
-    when no bundled schema applies to the document, so validity is unknown.
-    The schema is picked as validate_bes_xml.validate_xml picks it: the root's
-    `*.xsd` attribute, else the root tag's name. lxml and validate_bes_xml are
-    imported only here, so a hook that never writes (and the stdlib-only
-    bes-conventions-check) need not have them.
+    `path`, if given, is the file's name; only its extension matters (see
+    _schema_name). Returns a list of "Line N: message" strings, empty when
+    valid. Returns None when no bundled schema applies, meaning validity is
+    unknown. lxml is imported only here, so a hook that never writes (and the
+    stdlib-only bes-conventions-check) does not need it.
     """
-    # pylint: disable=import-outside-toplevel
-    import validate_bes_xml
-    from lxml import etree
+    from lxml import etree  # pylint: disable=import-outside-toplevel
 
     try:
         document = etree.parse(io.BytesIO(raw))
     except etree.XMLSyntaxError as err:
         return [f"Line {err.lineno}: {err.msg}"]
-    schema = _schema(validate_bes_xml.infer_xml_schema(document))
+    schema = _schema(_schema_name(document, path))
     if schema is None:
         return None
     if schema.validate(document):
@@ -145,7 +185,7 @@ def schema_errors(raw):
     return [f"Line {error.line}: {error.message}" for error in schema.error_log]
 
 
-def schema_regression(original, new):
+def schema_regression(original, new, path=None):
     """Return the schema errors an edit introduced, or [] if it introduced none.
 
     `original` and `new` are a file's bytes before and after an auto-fix. Only
@@ -155,34 +195,63 @@ def schema_regression(original, new):
     """
     if new == original:
         return []
-    errors = schema_errors(new)
+    errors = schema_errors(new, path)
     if not errors:
         return []
-    return errors if schema_errors(original) == [] else []
+    return errors if schema_errors(original, path) == [] else []
 
 
-def write_unless_schema_breaks(path, original, new, code, validate=True):
-    """Write `new` over `path` unless that would break BES.xsd validity.
+class SchemaGuard:
+    """Accept a file's auto-fix passes one at a time, keeping it BES.xsd-valid.
 
-    `original` is the file's bytes as read. Nothing is written when `new` is
-    the same. With `validate`, a `new` that would turn a schema-valid file
-    invalid (see schema_regression) is not written either, and the
-    (lineno, code, message) issue to report under `code` is returned; the
-    caller then reports the file as it stands. Otherwise returns None.
+    Start it with the file's text, then hand each fix pass's result to
+    apply(). A pass that would turn a schema-valid file invalid is held back:
+    its fixes are dropped and one issue is recorded under `code` naming them.
+    The passes before and after it still apply, so one bad fix does not cost
+    the others. A file that already fails validation is never held back,
+    since bes-schema-validate reports it regardless. Line endings do not
+    affect validity, so the text is checked in whatever form it is given.
+
+    Afterwards `src` is the accepted text, `fixed` the accepted fixes, and
+    `refused` the issues to report.
     """
-    if new == original:
-        return None
-    errors = schema_regression(original, new) if validate else []
-    if errors:
-        return (
-            1,
-            code,
-            (
-                "auto-fix not written: the fixed file would fail BES.xsd "
-                f"validation ({errors[0]}); fix by hand, or --disable {code} "
-                "to write it anyway"
-            ),
-        )
-    with open(path, "wb") as handle:
-        handle.write(new)
-    return None
+
+    def __init__(self, src, code, path=None, validate=True):
+        self.src = src
+        self.fixed = []
+        self.refused = []
+        self._code = code
+        self._path = path
+        self._validate = validate
+        self._valid = None  # is the accepted text schema-valid? (checked lazily)
+
+    def _errors(self, new_src):
+        """Schema errors `new_src` would introduce over the accepted text."""
+        if self._valid is None:
+            self._valid = schema_errors(self.src.encode("utf-8"), self._path) == []
+        if not self._valid:
+            return []
+        return schema_errors(new_src.encode("utf-8"), self._path) or []
+
+    def apply(self, new_src, fixes):
+        """Take one pass's rewritten text and its fixes; return True if kept."""
+        if self._validate and new_src != self.src:
+            errors = self._errors(new_src)
+            if errors:
+                codes = ", ".join(sorted({code for _line, code, _msg in fixes}))
+                self.refused.append(
+                    (
+                        1,
+                        self._code,
+                        (
+                            f"auto-fix ({codes or 'unreported'}) not written: it "
+                            "would make the file fail BES.xsd validation "
+                            f"({errors[0]}); fix by hand, or --disable "
+                            f"{self._code} to write it anyway"
+                        ),
+                    )
+                )
+                return False
+        self.src = new_src
+        self.fixed += fixes
+        return True

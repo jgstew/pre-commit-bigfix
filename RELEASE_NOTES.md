@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.9.0
 
 ### Added (bes-relevance-convert-group)
 
@@ -10,17 +10,26 @@
   With `"false"` you get one `(a) OR (b)` `<Relevance>`, or the bare statement
   when there is only one component. Codes `E700`-`E704` and `W700`; see the
   README. A `SearchComponentGroupReference` is not converted yet (`E701`).
+- **`JoinByIntersection`.** A missing attribute converts when the group has
+  a single component, because AND and OR then mean the same thing. With two
+  or more components it is `E702`, and the message says which attribute to
+  add. BES.xsd makes the attribute optional and documents no default.
 - **Schema guard on every auto-fix.** Each hook that rewrites BES files now
-  checks the result against BES.xsd (via `validate_bes_xml`) before writing
-  it. If the fixes would turn a schema-valid file into an invalid one, the
-  file is not written and the hook reports the file as it stands, plus a new
-  error: `E222` (`bes-conventions-check`), `E304`
+  checks its fixes against BES.xsd one pass at a time before writing. A pass
+  that would turn a schema-valid file into an invalid one is held back, and
+  the other passes are still written. For example, sha256 values downloaded
+  for `E401` are kept even if an unrelated fix is held back. Each hook
+  reports a held-back pass with a new error: `E222` (`bes-conventions-check`), `E304`
   (`bes-actionscript-lint-schclass`), `E404`
   (`bes-actionscript-validate-prefetch`), `E526`
   (`bes-actionscript-validate-script`), or `E704`
   (`bes-relevance-convert-group`). A file that already fails validation is
   still fixed, since `bes-schema-validate` reports it either way. Disabling
-  the code (for example `--disable E222`) writes the fix anyway.
+  the code (for example `--disable E222`) writes the fix anyway. The guard
+  uses the schemas bundled with `validate_bes_xml` (`BESOJO.xsd` for an
+  `.ojo` file) and locates them without importing that package. Importing
+  it scans the current folder for `.xsd` files, prints warnings, and fails
+  outright on one that is not well-formed XML.
 
 ### Changed (bes-relevance-convert-group)
 
@@ -28,6 +37,8 @@
   line-ending preservation, `.bes` discovery, the report printer, the
   mustache-template pattern) now live in `pre_commit_bigfix/bes_common.py`.
   Behavior is unchanged.
+
+## Unreleased
 
 ### Changed (bigfix-relevance-analyzer 1.13.3)
 

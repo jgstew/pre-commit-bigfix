@@ -93,9 +93,10 @@ Checks:
           `/* */` block comment is flagged; a comment whose text itself
           contains `*/` cannot be wrapped in a single block comment and is
           left as an unfixed error
-    E222  an auto-fix was not written because the fixed file would fail
-          BES.xsd validation when the original passed; the file is
-          reported as it stands (--disable E222 writes it anyway)
+    E222  an auto-fix stage (the per-block fixes, the trailing-whitespace strip, or the XML
+          declaration) was held back, because it would make a
+          schema-valid file fail BES.xsd validation; the other fixes are
+          still written (--disable E222 writes it anyway)
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -3235,17 +3236,21 @@ def check_file(
     crlf_ok = _is_all_crlf(raw)
 
     fixed = []
-    refused = None
+    refusals = []
     if auto_fix:
-        new_src, fixed = _autofix(src, root, disabled, strict, now, severities)
+        # each fix stage is kept only if it leaves a schema-valid file valid
+        # (E222); the per-block fixers in _autofix are one stage
+        guard = bes_common.SchemaGuard(
+            src, "E222", path, validate="E222" not in disabled
+        )
+        guard.apply(*_autofix(src, root, disabled, strict, now, severities))
         # file-level fixers run on the whole document (after the per-block ones):
         # strip trailing whitespace, then ensure the XML declaration.
         if "W210" not in disabled and TRAILING_WS_MARKER not in src:
-            new_src, got = fix_trailing_whitespace(new_src)
-            fixed += got
+            guard.apply(*fix_trailing_whitespace(guard.src))
         if "E214" not in disabled and XML_DECL_MARKER not in src:
-            new_src, got = fix_xml_declaration(new_src)
-            fixed += got
+            guard.apply(*fix_xml_declaration(guard.src))
+        new_src, fixed, refusals = guard.src, guard.fixed, guard.refused
         # CRLF normalization runs LAST: BES files must be entirely CRLF, so any
         # auto-fix leaves the whole file CRLF (rather than preserving endings).
         # If the CRLF rule is disabled, write whatever endings resulted (LF).
@@ -3255,11 +3260,9 @@ def check_file(
                 fixed.append((1, "E208", "normalized line endings to CRLF"))
         else:
             final_bytes = new_src.encode("utf-8")
-        refused = bes_common.write_unless_schema_breaks(
-            path, raw, final_bytes, "E222", validate="E222" not in disabled
-        )
-        if refused:  # report the file as it stands, not the unwritten fixes
-            new_src, fixed = src, []
+        if final_bytes != raw:
+            with open(path, "wb") as handle:
+                handle.write(final_bytes)
         src = new_src
         try:
             root = ElementTree.fromstring(src)
@@ -3281,9 +3284,8 @@ def check_file(
         issues += check_trailing_whitespace(src)
     if check_filename and "W217" not in disabled and FILENAME_MARKER not in src:
         issues += check_filename_matches_title(path, src)
-    if refused:
-        issues.append(refused)
-    if (not auto_fix or refused) and check_e208 and not crlf_ok:
+    issues += refusals
+    if not auto_fix and check_e208 and not crlf_ok:
         lone_lf = raw.count(b"\n") - raw.count(b"\r\n")
         lone_cr = raw.count(b"\r") - raw.count(b"\r\n")
         issues.append(

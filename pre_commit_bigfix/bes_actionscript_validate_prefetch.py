@@ -40,9 +40,9 @@ Checks:
           front of a 64-hex value becomes `sha256`, and tokens directly
           after the URL (an unencoded space in it) are joined with `%20`;
           stray text anywhere else is left for a human
-    E404  an auto-fix was not written because the fixed file would fail
-          BES.xsd validation when the original passed; the file is
-          reported as it stands (--disable E404 writes it anyway)
+    E404  an auto-fix pass (E403, E402, E401 or W407) was held back, because it would make a
+          schema-valid file fail BES.xsd validation; the other fixes are
+          still written (--disable E404 writes it anyway)
     W400  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W402  a prefetch block item has no sha1; technically valid, but unusual
@@ -1083,46 +1083,45 @@ def check_file(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     opted_out = PREFETCH_MARKER in src
 
     raw = original
-    original_src = src
-    fixed = []
+    # each fix pass is kept only if it leaves a schema-valid file valid (E404)
+    guard = bes_common.SchemaGuard(
+        src, "E404", path, validate=is_bes and "E404" not in disabled
+    )
     failed = []
     if not opted_out and auto_fix and "E403" not in disabled:
-        src, got = fix_stray_tokens(src, find_stray_fix_targets(raw, src, is_bes))
-        fixed += got
-        raw = encode(src, was_crlf)
+        new_src, got = fix_stray_tokens(src, find_stray_fix_targets(raw, src, is_bes))
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if not opted_out and auto_fix and "E402" not in disabled:
-        src, got = fix_outdated_unzip(src, find_fix_targets(raw, src, is_bes))
-        fixed += got
-        raw = encode(src, was_crlf)
+        new_src, got = fix_outdated_unzip(src, find_fix_targets(raw, src, is_bes))
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if not opted_out and auto_fix_network and "E401" not in disabled:
         # re-found on the current text: an E402 fix above may already have
         # brought a sha256 with it, leaving nothing here to download.
-        src, got, failed = fix_missing_sha256(
+        new_src, got, failed = fix_missing_sha256(
             src, find_network_fix_targets(raw, src, is_bes), network_cache
         )
-        fixed += got
-        raw = encode(src, was_crlf)
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
     if not opted_out and auto_fix_network and "W407" not in disabled:
         # after E401, so a sha256 just added is one more hash to verify against
-        src, got, https_failed = fix_http_urls(
+        new_src, got, https_failed = fix_http_urls(
             src, find_https_fix_targets(raw, src, is_bes), network_cache
         )
-        fixed += got
         failed += https_failed
-        raw = encode(src, was_crlf)
-    refused = bes_common.write_unless_schema_breaks(
-        path, original, raw, "E404", validate=is_bes and "E404" not in disabled
-    )
-    if refused:  # report the file as it stands, not the unwritten fixes
-        raw, src, fixed = original, original_src, []
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
+    fixed = guard.fixed
+    if raw != original:
+        with open(path, "wb") as handle:
+            handle.write(raw)
 
     if is_bes:
         issues = _validate_bes_xml(raw)
     else:
         issues = validate_actionscript(src)
-    issues += failed
-    if refused:
-        issues.append(refused)
+    issues += failed + guard.refused
 
     issues = [
         (lineno, code, message)

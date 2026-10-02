@@ -126,3 +126,51 @@ def test_guard_code_is_known_and_documented(hook, guard):
     assert guard in hook.__doc__
     assert guard in description
     assert guard in section
+
+
+# --- review fix: one refused pass must not drop the others (PR #28) ----------
+
+# (hook, the first fix pass it runs, a later pass, guard code, the codes they report)
+MULTI_PASS = [
+    pytest.param(
+        conventions,
+        "_autofix",
+        "fix_trailing_whitespace",
+        "E222",
+        ("W213", "W210"),
+        id="conventions",
+    ),
+    pytest.param(
+        prefetch,
+        "fix_stray_tokens",
+        "fix_outdated_unzip",
+        "E404",
+        ("E403", "E402"),
+        id="prefetch",
+    ),
+    pytest.param(
+        script,
+        "fix_scratch_case",
+        "fix_scratch_destinations",
+        "E526",
+        ("W503", "W506"),
+        id="script",
+    ),
+]
+
+
+@pytest.mark.parametrize(("hook", "first", "later", "guard", "codes"), MULTI_PASS)
+def test_only_the_breaking_pass_is_dropped(
+    tmp_path, monkeypatch, hook, first, later, guard, codes
+):
+    path = copy_example(tmp_path)
+    monkeypatch.setattr(hook, first, fake_fixer(breaking, codes[0]))
+    monkeypatch.setattr(hook, later, fake_fixer(harmless, codes[1]))
+    issues, fixed = hook.check_file(str(path), auto_fix=True)
+    written = path.read_bytes()
+    assert b"<!-- touched -->" in written  # the later, valid pass was kept
+    assert b"<Title>again</Title>" not in written  # the breaking one was not
+    assert [code for _l, code, _m in fixed] == [codes[1]]
+    refusals = [issue for issue in issues if issue[1] == guard]
+    assert len(refusals) == 1
+    assert codes[0] in refusals[0][2]  # names the fix that was held back

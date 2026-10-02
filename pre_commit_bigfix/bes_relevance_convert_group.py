@@ -28,7 +28,9 @@ Checks (E-codes fail the hook; W-codes are advisory unless --strict):
     E701  a GroupRelevance holds a SearchComponentGroupReference (or another
           component with no Relevance); converting group membership is not
           supported yet, so that whole GroupRelevance is left unchanged
-    E702  JoinByIntersection is missing or not an xs:boolean; left unchanged
+    E702  JoinByIntersection is not an xs:boolean, or is missing while there
+          are several components (with one, AND and OR are the same, so it
+          converts); left unchanged
     E703  a GroupRelevance has no components, or one with an empty Relevance;
           left unchanged
     E704  the converted file would no longer pass BES.xsd schema validation;
@@ -109,10 +111,27 @@ def _component_relevance(component):
     return "" if relevance is None else _text(relevance)
 
 
+def _components(group):
+    """The search-component elements of `group` (comments left out)."""
+    return [child for child in group if isinstance(child.tag, str)]
+
+
+def _intersection(group):
+    """Return True/False for how `group` joins its components, or None.
+
+    None means it cannot be told. BES.xsd makes JoinByIntersection optional
+    and documents no default, so a missing attribute is only safe with a
+    single component, where AND and OR mean the same thing.
+    """
+    join = group.get("JoinByIntersection")
+    if join is None:
+        return True if len(_components(group)) == 1 else None
+    return XS_BOOLEAN.get(join.strip())
+
+
 def _refusal(group):
     """Return (code, message) if `group` cannot be converted, else None."""
-    join = (group.get("JoinByIntersection") or "").strip()
-    components = [child for child in group if isinstance(child.tag, str)]
+    components = _components(group)
     for component in components:
         if _component_relevance(component) is None:
             if component.tag == "SearchComponentGroupReference":
@@ -129,14 +148,19 @@ def _refusal(group):
                     "not supported yet, so it was left unchanged"
                 ),
             )
-    if join not in XS_BOOLEAN:
+    if _intersection(group) is None:
         found = group.get("JoinByIntersection")
-        detail = "missing" if found is None else f'"{found}"'
+        detail = (
+            f"missing and it has {len(components)} components"
+            if found is None
+            else f'"{found}"'
+        )
         return (
             "E702",
             (
-                f"GroupRelevance JoinByIntersection is {detail}; expected true or "
-                "false, so it was left unchanged"
+                f"GroupRelevance JoinByIntersection is {detail}, so how they join "
+                'is unknown; add JoinByIntersection="true" (all must hold) or '
+                'JoinByIntersection="false" (any may hold). Left unchanged'
             ),
         )
     if not components:
@@ -176,8 +200,8 @@ def _replacement(src, span, raw_inners, statements, intersection):
     return separator.join(f"<Relevance>{body}</Relevance>" for body in bodies)
 
 
-def _describe(statements, intersection):
-    """E700's account of what a GroupRelevance became."""
+def _describe(statements, intersection, join):
+    """E700's account of what a GroupRelevance became; `join` is the attribute."""
     count = len(statements)
     if intersection:
         result = f"{count} <Relevance> element(s)"
@@ -185,9 +209,9 @@ def _describe(statements, intersection):
         result = "one <Relevance>"
     else:
         result = "one OR-joined <Relevance>"
-    join = "true" if intersection else "false"
+    join = "missing" if join is None else join.strip()
     return (
-        f"GroupRelevance (JoinByIntersection={join}, {count} component(s)) -> {result}"
+        f"GroupRelevance (JoinByIntersection {join}, {count} component(s)) -> {result}"
     )
 
 
@@ -204,7 +228,8 @@ def convert_group_relevance(src):
         return src, [], [(1, "W700", f"not parseable BES XML ({err}); skipping")]
 
     groups = root.xpath(GROUP_RELEVANCE_XPATH)
-    if not groups and "GroupRelevance" not in src:
+    # no tag anywhere: nothing to convert and no misplaced one to warn about
+    if "<GroupRelevance" not in src:
         return src, [], []
 
     masked = _mask_opaque(src)
@@ -232,7 +257,7 @@ def convert_group_relevance(src):
         if refusal:
             issues.append((line, *refusal))
             continue
-        statements = [_component_relevance(c) for c in group if isinstance(c.tag, str)]
+        statements = [_component_relevance(c) for c in _components(group)]
         raw_inners = [
             src[m.start(1) + span[0] : m.end(1) + span[0]]
             for m in RELEVANCE_RE.finditer(masked[span[0] : span[1]])
@@ -246,11 +271,17 @@ def convert_group_relevance(src):
                 )
             )
             continue
-        intersection = XS_BOOLEAN[group.get("JoinByIntersection").strip()]
+        intersection = _intersection(group)
         edits.append(
             (span, _replacement(src, span, raw_inners, statements, intersection))
         )
-        converted.append((line, "E700", _describe(statements, intersection)))
+        converted.append(
+            (
+                line,
+                "E700",
+                _describe(statements, intersection, group.get("JoinByIntersection")),
+            )
+        )
 
     for (start, end), text in reversed(edits):
         src = src[:start] + text + src[end:]
@@ -269,7 +300,7 @@ def check_file(path, disabled=frozenset(), check=False):
     if not os.path.isfile(path):
         return [(1, "W700", "file not found; skipping")], []
 
-    original, src, was_crlf = read_source(path)
+    _raw, src, was_crlf = read_source(path)
     if SKIP_MARKER in src or MUSTACHE_RE.search(src):
         return [], []
 
@@ -283,17 +314,14 @@ def check_file(path, disabled=frozenset(), check=False):
             for line, code, message in converted
         ]
     elif converted:
-        refused = bes_common.write_unless_schema_breaks(
-            path,
-            original,
-            encode(new_src, was_crlf),
-            "E704",
-            validate="E704" not in disabled,
+        guard = bes_common.SchemaGuard(
+            src, "E704", path, validate="E704" not in disabled
         )
-        if refused:
-            issues.append(refused)
-        else:
+        if guard.apply(new_src, converted):
+            with open(path, "wb") as handle:
+                handle.write(encode(new_src, was_crlf))
             fixed = converted
+        issues += guard.refused
 
     issues = [issue for issue in issues if issue[1] not in disabled]
     return sorted(issues), fixed

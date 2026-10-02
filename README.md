@@ -88,9 +88,10 @@ See the docstring in
 [bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
-An auto-fix that would turn a schema-valid file into one that fails
-BES.xsd validation is not written: `E222` is reported instead, along with
-the file's issues as it stands (`--disable E222` writes the fix anyway).
+Fixes are checked against BES.xsd one stage (the per-block fixes, the trailing-whitespace strip, or the XML declaration) at a
+time. One that would turn a schema-valid file into an invalid one is held
+back and reported as `E222`; the other fixes are still written
+(`--disable E222` writes it anyway).
 
 ### bes-actionscript-lint-schclass
 
@@ -148,9 +149,10 @@ See the docstring in
 [bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
 
-An auto-fix that would turn a schema-valid file into one that fails
-BES.xsd validation is not written: `E304` is reported instead, along with
-the file's issues as it stands (`--disable E304` writes the fix anyway).
+Fixes are checked against BES.xsd one set of case fixes at a
+time. One that would turn a schema-valid file into an invalid one is held
+back and reported as `E304`; the other fixes are still written
+(`--disable E304` writes it anyway).
 
 ### bes-actionscript-validate-prefetch
 
@@ -278,9 +280,10 @@ See the docstring in
 [bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
 
-An auto-fix that would turn a schema-valid file into one that fails
-BES.xsd validation is not written: `E404` is reported instead, along with
-the file's issues as it stands (`--disable E404` writes the fix anyway).
+Fixes are checked against BES.xsd one pass (`E403`, `E402`, `E401` or `W407`) at a
+time. One that would turn a schema-valid file into an invalid one is held
+back and reported as `E404`; the other fixes are still written
+(`--disable E404` writes it anyway).
 
 ### bes-actionscript-validate-script
 
@@ -442,9 +445,10 @@ See the docstring in
 [bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
 
-An auto-fix that would turn a schema-valid file into one that fails
-BES.xsd validation is not written: `E526` is reported instead, along with
-the file's issues as it stands (`--disable E526` writes the fix anyway).
+Fixes are checked against BES.xsd one pass (`W503`, `W506`, `E525`, or the `E524`/`W505`/`E521` line rewrites) at a
+time. One that would turn a schema-valid file into an invalid one is held
+back and reported as `E526`; the other fixes are still written
+(`--disable E526` writes it anyway).
 
 ### bes-relevance-lint
 
@@ -541,9 +545,9 @@ can become one large statement; `bes-relevance-lint` may then report `E604`.
 | --- | --- |
 | `E700` | a GroupRelevance was converted (under `--check`: needs converting) |
 | `E701` | a GroupRelevance holds a `SearchComponentGroupReference`; group membership is not converted yet, so it is left unchanged |
-| `E702` | `JoinByIntersection` is missing or not a boolean; left unchanged |
+| `E702` | `JoinByIntersection` is not a boolean, or is missing with two or more components (BES.xsd documents no default; a single component converts either way); left unchanged |
 | `E703` | a GroupRelevance has no components, or one with an empty Relevance; left unchanged |
-| `E704` | the converted file would fail BES.xsd validation, so nothing is written |
+| `E704` | the converted file would turn a schema-valid file invalid, so nothing is written |
 | `W700` | skipped: file missing or not parseable XML, or a GroupRelevance that could not be located |
 
 The hook converts by default and exits 1 when it changed anything, so the
