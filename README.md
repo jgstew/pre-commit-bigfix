@@ -477,15 +477,17 @@ of the file.
 | `E604` | the complexity score is above the ceiling (raise with `--max-score`) |
 | `E605` | the evaluation cost is above the ceiling (raise with `--max-evaluation-cost`) |
 | `E606` | a directory tree was deeper than `--max-depth`, so it was not fully scanned (auto-discovery only; pre-commit always passes filenames) |
-| `E607` | a path given to the linter does not exist or could not be read |
-| `E608` | the value does not fit the kind of site it came from: a `<Relevance>` that is not a boolean, or an ActionScript `{...}` substitution that is plural |
+| `E607` | a path given to the linter does not exist, could not be read, or is not a file type the analyzer recognizes (the hook's `files:` pattern keeps those away under pre-commit) |
+| `E608` | the value does not fit the kind of site it came from: a `<Relevance>` that is not a boolean, or an `if`/`elseif`/`continue if` condition that is not a boolean or string |
 | `E609` | inspectors exclusive to client relevance and to session relevance in one statement, which no engine can answer |
+| `E610` | an ActionScript command word used as a relevance name, usually an ActionScript line pasted or doubled into relevance |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
 | `W602` | a singular spelling mid-chain (under a `whose` filter, or where a plural is built from it), where the plural reads safer |
 | `W603` | two version-looking strings compared as strings, not as versions |
 | `W604` | a version comparison that truncates to the shorter operand's components |
 | `W605` | an ordinary ActionScript substitution's value is an opaque object with no text form |
+| `W606` | an ordinary ActionScript substitution's value may be more than one value; the client joins them with no separator |
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard

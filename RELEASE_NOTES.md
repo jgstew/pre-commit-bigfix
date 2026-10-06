@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.9.1
+
+### Changed (bes-relevance-lint, bigfix-relevance-analyzer 1.16.3)
+
+- **`E610`**, new error: an ActionScript command word used as a relevance
+  name. Usually this is an ActionScript line pasted or doubled into relevance.
+- **`W606`**, new warning: an ordinary ActionScript `{...}` substitution that
+  may be plural. The client joins the values with no separator, so the action
+  runs but probably not as meant. A plural substitution used to be the `E608`
+  error. `E608` now covers a non-boolean `<Relevance>` and an
+  `if`/`elseif`/`continue if` condition that is not a boolean or string.
+- **`E607`** now also reports a file named on the command line that the
+  analyzer cannot read, such as `notes.txt`. Before, such a file passed with
+  no output. Under pre-commit the hook's `files:` pattern keeps these files
+  away, so this only matters if you run the hook by hand or widen `files:`.
+
 ## v1.9.0
 
 ### Added (bes-relevance-convert-group)

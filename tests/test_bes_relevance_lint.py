@@ -118,6 +118,7 @@ def test_codes_are_unique():
             "E609",
             id="mixed-dialect",
         ),
+        pytest.param("exists prefetch", "E610", id="actionscript-keyword"),
     ],
 )
 def test_each_code_fires(tmp_path, capsys, relevance, code):
@@ -206,11 +207,18 @@ def test_unparsable_xml_is_skipped(tmp_path, capsys):
     assert status == 0
 
 
-def test_an_unrecognized_suffix_yields_nothing(tmp_path, capsys):
+def test_a_named_unrecognized_suffix_is_e607(tmp_path, capsys):
+    """A file named explicitly is a statement that it should be linted, so
+    the analyzer reports one it cannot read rather than passing it silently.
+
+    Under pre-commit the hook's `files:` pattern keeps these away.
+    """
     path = write(tmp_path, bes("it"), name="x.txt")
     status = linter.main([path])
-    assert capsys.readouterr().out == ""
-    assert status == 0
+    out = capsys.readouterr().out
+    assert codes_in(out.splitlines()) == ["E607"]
+    assert "unrecognised file type" in out
+    assert status == 1
 
 
 def test_a_missing_file_is_reported_as_a_file_error(tmp_path, capsys):
@@ -256,6 +264,30 @@ def test_a_substitution_is_reported_at_its_own_line(tmp_path, capsys):
     out = capsys.readouterr().out.splitlines()
     assert codes_in(out) == ["E602"]
     assert ".bes:6:" in out[0]
+
+
+def test_a_plural_substitution_is_w606(tmp_path, capsys):
+    """The client joins a plural substitution with no separator: the action
+    runs, so this is a warning, not E608.
+    """
+    document = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<BES>",
+            "<Task>",
+            "<Title>Example</Title>",
+            "<ActionScript>",
+            'waithidden cmd /c echo {("a";"b")}',
+            "</ActionScript>",
+            "</Task>",
+            "</BES>",
+        ]
+    )
+    path = write(tmp_path, document)
+    status = linter.main([path])
+    out = capsys.readouterr().out.splitlines()
+    assert codes_in(out) == ["W606"]
+    assert status == 0
 
 
 def test_the_skip_marker_opts_a_file_out_when_discovering(

@@ -322,16 +322,20 @@
     scored against a ceiling. E600 parse failure; E601 unlexable text; E602
     unbound `it`; E603 type error; E604 complexity over --max-score; E605
     evaluation cost over --max-evaluation-cost; E606 a walk stopped at
-    --max-depth (auto-discovery only); E607 a given path does not exist or
-    could not be read; E608 a value that does not fit its site (a non-boolean
-    <Relevance>, or a plural `{...}` substitution); E609 client-only and
-    session-only inspectors in one statement; W600 a name no inspector dump
+    --max-depth (auto-discovery only); E607 a given path does not exist,
+    could not be read, or is not a recognized file type; E608 a value that
+    does not fit its site (a non-boolean <Relevance>, or an `if`/`elseif`
+    condition that is not a boolean or string); E609 client-only and
+    session-only inspectors in one statement; E610 an ActionScript command
+    word used as a relevance name; W600 a name no inspector dump
     defines; W601 a singular property over a possibly-plural object; W602 a
     singular spelling mid-chain where the plural reads safer (a safe
     whole-statement rewrite is printed as a suggested fix); W603 two version-looking strings compared as strings; W604 a
     version comparison that truncates to the shorter operand; W605 an ordinary
     ActionScript `{...}` substitution whose value is an opaque object with no
-    text form (a `bes *` object, a bare `registry`, ...). W601 is disabled
+    text form (a `bes *` object, a bare `registry`, ...); W606 an ordinary
+    ActionScript `{...}` substitution that may be plural (the client joins
+    the values with no separator). W601 is disabled
     by default here -- it fires several times per file across real content --
     and `--enable W601` switches it back on. Unparsable XML is skipped
     (bes-schema-validate owns validity), so a clean run says the relevance

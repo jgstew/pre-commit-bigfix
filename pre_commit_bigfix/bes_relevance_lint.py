@@ -24,11 +24,16 @@ Checks:
     E606  a directory tree was deeper than the walk's limit, so it was not
           fully scanned. Only reachable when auto-discovering -- pre-commit
           always passes filenames
-    E607  a path given to the linter does not exist or could not be read
+    E607  a path given to the linter does not exist, could not be read, or
+          is not a file type the analyzer's extractor recognizes (under
+          pre-commit the hook's `files:` pattern keeps those away)
     E608  the value does not fit the kind of site it was extracted from -- a
-          non-boolean <Relevance>, or a plural ActionScript substitution
+          non-boolean <Relevance>, or an `if`/`elseif`/`continue if`
+          condition that is not a boolean or string
     E609  inspectors exclusive to client relevance and to session relevance in
           one statement, which no engine can answer
+    E610  an ActionScript command word used as a relevance name -- usually an
+          ActionScript line pasted or doubled into relevance
     W600  a name no inspector dump defines. A warning rather than an error
           because a repo running a newer client than the analyzer's snapshot
           legitimately uses names it has never heard of
@@ -49,6 +54,10 @@ Checks:
           A warning rather than an E608 error because which types cannot
           render is the analyzer's curated inference, not a confirmed engine
           fact
+    W606  an ordinary ActionScript `{...}` substitution whose value may be
+          more than one value. The client joins a plural with no separator,
+          so the action runs but probably not as meant; use
+          `concatenation "<sep>" of (...)` or a tighter filter
 
 E-codes fail the hook; warnings fail only under --strict.
 
@@ -118,12 +127,14 @@ CODES = {
     "file-error": "E607",
     "site-type-mismatch": "E608",
     "mixed-dialect": "E609",
+    "actionscript-keyword": "E610",
     "unknown-inspector": "W600",
     "non-unique-risk": "W601",
     "plural-preferred": "W602",
     "version-like-string-compare": "W603",
     "version-truncating-compare": "W604",
     "non-renderable-substitution": "W605",
+    "plural-substitution": "W606",
 }
 
 KNOWN_CODES = frozenset(CODES.values())
@@ -304,8 +315,8 @@ def main(argv=None):
         "files",
         nargs="*",
         help=(
-            "files to check; anything the analyzer's extractor does not "
-            "recognize yields nothing. If omitted, the current folder and "
+            "files to check; a named file the analyzer's extractor does not "
+            "recognize is reported as E607. If omitted, the current folder and "
             "below is walked"
         ),
     )
