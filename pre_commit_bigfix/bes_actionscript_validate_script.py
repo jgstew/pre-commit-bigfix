@@ -109,10 +109,23 @@ Checks:
           to be, so the rest of the if/endif pairing does not cascade
           (fixable -> joined into `elseif`, unless the body has a stray
           `endif` (E501), which means an `if` really was nested in the `else`)
-    E526  an auto-fix pass (W503, W506, E525, or the E524/W505/E521 line
-          rewrites together) was not written, because it would make a
-          schema-valid file fail BES.xsd validation; the other passes are
-          still written (--disable E526 writes it anyway)
+    E526  an auto-fix pass (W503, W506, E525, E528, E527, or the
+          E524/W505/E521 line rewrites together) was not written, because it
+          would make a schema-valid file fail BES.xsd validation; the other
+          passes are still written (--disable E526 writes it anyway)
+    E527  a `parameter "<name>" = <value>` whose value is not double-quoted.
+          The agent substitutes `{...}` first and then parses the line, so
+          an unquoted value -- even a singular `{"a"}` -- is invalid
+          `parameter` syntax and the line fails at runtime (fixable -> the
+          value is wrapped in quotes, `&quot;` in an entity-escaped body; a
+          value holding a `"` outside `{...}`, or `%22`, is reported but not
+          fixed, and so is one with a trailing comment until E528's fix has
+          moved the comment off the line)
+    E528  a trailing `// comment` on a `parameter` line: only fixed-syntax
+          lines (if/elseif/else/endif, the prefetch block, `override`)
+          honor one, so the line fails at runtime even with a quoted value
+          (fixable -> the comment is moved onto its own line directly above,
+          same indentation, text kept as written)
     W500  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W501  unreachable command: a line after an unconditional `exit`,
@@ -175,7 +188,7 @@ structure (an `endif`, an `end prefetch block`, ...) a hook has no way to
 know the right place for, and guessing could silently change what the action
 does.
 
---auto-fix (W503, W506, E525, E524, W505, E521), on by default (yes when files are given, as
+--auto-fix (W503, W506, E525, E528, E527, E524, W505, E521), on by default (yes when files are given, as
 pre-commit does; no when auto-discovering). Every wrong-case `__download`,
 `__createfile`, or `__appendfile` reference is rewritten in place to its
 canonical spelling -- purely a case correction of a reference this hook
@@ -183,7 +196,9 @@ already resolved to a known scratch-file token, so there is nothing to
 guess -- and a `delete <destination>` line (same indentation, same XML
 escaping as the body) is inserted before each W506 move/copy, the
 documented pattern -- and an unquoted `folder create|delete` path is
-wrapped in quotes (E525); an `else if` is joined into `elseif` (E524); a
+wrapped in quotes (E525); a `parameter` line's trailing comment is moved
+onto its own line above (E528) and an unquoted `parameter` value is wrapped
+in quotes (E527); an `else if` is joined into `elseif` (E524); a
 cmd.exe `/k` becomes `/c` or a missing `/c` is inserted (W505); and a
 bracketed-but-unquoted registry key is quoted (E521). An auto-fixed file
 fails the hook so the change is reviewed and re-staged.
@@ -218,7 +233,7 @@ or out of a single check family with the matching marker anywhere in the file:
     actionscript-substitution-ok   (E508, E509)
     actionscript-prefetch-placement-ok (E510, E511, E515)
     actionscript-download-ok       (E512, W507)
-    actionscript-parameter-ok      (E516, E517, W508)
+    actionscript-parameter-ok      (E516, E517, E527, E528, W508)
     actionscript-scratch-ok        (E519, W503)
     actionscript-scratch-dest-ok   (W506)
     actionscript-command-shape-ok  (E520, E521, E523, E525)
@@ -281,7 +296,7 @@ BLOCK_NESTING_MARKER = "actionscript-block-nesting-ok"  # E507
 SUBSTITUTION_MARKER = "actionscript-substitution-ok"  # E508, E509
 PREFETCH_PLACEMENT_MARKER = "actionscript-prefetch-placement-ok"  # E510, E511, E515
 DOWNLOAD_MARKER = "actionscript-download-ok"  # E512, W507
-PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517, W508
+PARAMETER_MARKER = "actionscript-parameter-ok"  # E516, E517, E527, E528, W508
 SCRATCH_MARKER = "actionscript-scratch-ok"  # E519, W503
 COMMAND_SHAPE_MARKER = "actionscript-command-shape-ok"  # E520, E521, E523, E525
 CMD_MARKER = "actionscript-cmd-ok"  # W505
@@ -318,6 +333,8 @@ CHECK_MARKERS = {
     "E523": COMMAND_SHAPE_MARKER,
     "E524": IF_MARKER,
     "E525": COMMAND_SHAPE_MARKER,
+    "E527": PARAMETER_MARKER,
+    "E528": PARAMETER_MARKER,
     "W501": UNREACHABLE_MARKER,
     "W502": PARAMETER_QUERY_MARKER,
     "W503": SCRATCH_MARKER,
@@ -355,6 +372,8 @@ KNOWN_CODES = frozenset(
         "E524",
         "E525",
         "E526",
+        "E527",
+        "E528",
         "W500",
         "W501",
         "W502",
@@ -506,6 +525,18 @@ _EXISTS_BEFORE_RE = re.compile(r"\bexists\s*\(?\s*$", re.IGNORECASE)
 _PARAMETER_RE = re.compile(r"^parameter\b", re.IGNORECASE)
 # a `parameter "name" = ...` assignment; the value is everything after `=`
 _PARAMETER_ASSIGN_RE = re.compile(r'^parameter\s+"([^"]+)"\s*=', re.IGNORECASE)
+# the same assignment with its value captured, for the E527 quoting check; a
+# bare `parameter "x" =` (no value at all) does not match
+_PARAMETER_VALUE_RE = re.compile(
+    r'^(parameter\s+"([^"]+)"\s*=\s*)(\S.*?)\s*$', re.IGNORECASE
+)
+# the same assignment inside a raw file line (the name quoted with `"` or
+# `&quot;`), stopping before a CDATA/tag close
+_RAW_PARAMETER_VALUE_RE = re.compile(
+    r'(parameter\s+(?:"[^"]+"|&quot;.+?&quot;)\s*=\s*)(.*?)'
+    r"(\s*(?:\]\]>|</ActionScript>|$))",
+    re.IGNORECASE,
+)
 # a `parameter "name"` reference anywhere on a line, assignments included --
 # callers distinguish an assignment's own name from a reference to another
 _PARAMETER_REF_RE = re.compile(r'\bparameter\s+"([^"]+)"', re.IGNORECASE)
@@ -1475,6 +1506,101 @@ def fix_folder_quoting(src, targets):
     return "\n".join(lines), fixed
 
 
+def _parameter_quote_targets(raw, src, is_bes):
+    """Yield the file line of every fixable E527 `parameter` value."""
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return
+    else:
+        bodies = [(1, src)]
+    for sourceline, body in bodies:
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        for index, _name, _value, fixable in _unquoted_parameter_values(masked_lines):
+            if fixable:
+                yield sourceline + index
+
+
+def fix_parameter_quoting(src, targets):
+    """E527: wrap each unquoted `parameter` value in double quotes.
+
+    The quote is `&quot;` when the line is entity-escaped that way, else a
+    literal `"`, as for E525. Indentation and the spacing around `=` are
+    kept. Returns (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    for lineno in sorted(set(targets)):
+        if not 1 <= lineno <= len(lines):
+            continue
+        raw_line = lines[lineno - 1]
+        quote = "&quot;" if "&quot;" in raw_line else '"'
+        match = _RAW_PARAMETER_VALUE_RE.search(raw_line)
+        if not match or not match.group(2) or match.group(2).startswith(quote):
+            continue
+        lines[lineno - 1] = (
+            raw_line[: match.start(2)]
+            + quote
+            + match.group(2)
+            + quote
+            + raw_line[match.end(2) :]
+        )
+        fixed.append((lineno, "E527", "quoted the parameter value"))
+    return "\n".join(lines), fixed
+
+
+def _parameter_comment_targets(raw, src, is_bes):
+    """Yield (file_lineno, comment) for every E528 fix target."""
+    if is_bes:
+        try:
+            bodies = list(_iter_actionscript_bodies(raw))
+        except etree.XMLSyntaxError:
+            return
+    else:
+        bodies = [(1, src)]
+    for sourceline, body in bodies:
+        masked_lines, _createfile_issues = _mask_heredocs(body.split("\n"))
+        for index, comment in _parameter_comments(masked_lines):
+            yield sourceline + index, comment
+
+
+def fix_parameter_comments(src, targets):
+    """E528: move a `parameter` line's trailing `// comment` onto its own line.
+
+    The comment goes directly above, with the command's indentation; its
+    text and the value are kept exactly as written (the comment is found on
+    the file line as written, or escaped to match an entity-escaped body).
+    When the command shares its line with the `<ActionScript>` opening tag,
+    the comment goes right after the tag. Returns (new_src, fixed).
+    """
+    lines = src.split("\n")
+    fixed = []
+    # bottom-up, so an insertion does not shift the lines still to be fixed
+    for lineno, comment in sorted(targets, reverse=True):
+        if not 1 <= lineno <= len(lines):
+            continue
+        raw_line = lines[lineno - 1]
+        text = comment
+        if comment not in raw_line and _ENTITY_RE.search(raw_line):
+            text = _escape_like(raw_line, comment)
+        cut = raw_line.rfind(text)
+        if cut < 0:
+            continue
+        command, rest = raw_line[:cut].rstrip(), raw_line[cut + len(text) :]
+        opening = _ACTIONSCRIPT_OPEN_RE.search(command)
+        if opening:
+            head, command = command[: opening.end()], command[opening.end() :]
+            indent = command[: len(command) - len(command.lstrip())]
+            lines[lineno - 1] = f"{head}{indent}{text}\n{command}{rest}"
+        else:
+            indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            lines[lineno - 1] = command + rest
+            lines.insert(lineno - 1, f"{indent}{text}")
+        fixed.append((lineno, "E528", "moved the trailing comment above the line"))
+    return "\n".join(lines), sorted(fixed)
+
+
 def _replace_on_line(lines, lineno, text, replacement):
     """Substitute one `text` on 1-based `lineno` of `lines`; say whether it landed.
 
@@ -2000,6 +2126,92 @@ def _check_folder_quoting(lines):
     ]
 
 
+def _unquoted_parameter_values(lines):
+    """Yield (index, name, value, fixable) for each E527 target in `lines`.
+
+    `value` is shown without any trailing `// comment`. `fixable` is False
+    when the value holds a `"` outside a substitution (where the quotes were
+    meant to go is unknowable), holds `%22` (a substitution that renders its
+    own quotes, which wrapping would double), or the line has a trailing
+    comment (quoting the value alone leaves a line that still fails -- E528's
+    fix moves the comment off first).
+    """
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        match = _PARAMETER_VALUE_RE.match(stripped)
+        if not match or match.group(3).startswith('"'):
+            continue
+        value = match.group(3)
+        uncommented = _strip_trailing_comment(stripped)
+        fixable = (
+            not _has_quote_outside_braces(value)
+            and "%22" not in value
+            and uncommented == stripped
+        )
+        shown = uncommented[len(match.group(1)) :] or value
+        yield index, match.group(2), shown, fixable
+
+
+def _check_parameter_quoting(lines):
+    """E527: a `parameter "name" = value` whose value is not quoted.
+
+    The agent substitutes `{...}` first and then parses the line, so even a
+    singular substitution (`{"a"}`) leaves invalid `parameter` syntax and the
+    line fails at runtime.
+    """
+    return [
+        (
+            index + 1,
+            "E527",
+            (
+                "`parameter` value is not double-quoted; the agent parses the "
+                "line after `{...}` substitution, so this line fails at "
+                f'runtime -- quote it: parameter "{name}" = "{value}"'
+                f"{' (auto-fixable)' if fixable else ''}; add "
+                f"`{PARAMETER_MARKER}` if intentional"
+            ),
+        )
+        for index, name, value, fixable in _unquoted_parameter_values(lines)
+    ]
+
+
+def _parameter_comments(lines):
+    """Yield (index, comment) for each E528 `parameter` line in `lines`.
+
+    `comment` is the trailing `// ...` text as `_strip_trailing_comment`
+    splits it: a `//` inside "..." or `{...}`, or with no whitespace before
+    it (a URL), is not a comment.
+    """
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not _PARAMETER_ASSIGN_RE.match(stripped):
+            continue
+        code = _strip_trailing_comment(stripped)
+        if code != stripped:
+            yield index, stripped[len(code) :].strip()
+
+
+def _check_parameter_comments(lines):
+    """E528: a trailing `// comment` on a `parameter` line.
+
+    Only fixed-syntax lines (`_FIXED_SYNTAX_RE`) honor a trailing comment;
+    on a `parameter` line it fails the action, quoted value or not.
+    """
+    return [
+        (
+            index + 1,
+            "E528",
+            (
+                "trailing `// comment` on a `parameter` line; only "
+                "if/elseif/else/endif-style lines accept one, so this line "
+                "fails at runtime -- move the comment onto its own line "
+                f"(auto-fixable); add `{PARAMETER_MARKER}` if intentional"
+            ),
+        )
+        for index, _comment in _parameter_comments(lines)
+    ]
+
+
 def _check_heredoc_braces(raw_lines, masked_lines):
     """E508 for a `{` left open on a `createfile until` content line.
 
@@ -2061,6 +2273,8 @@ def check_actionscript(body, first_line=1):
     issues.extend(_check_condition_shapes(lines))  # E518
     issues.extend(_check_override_blocks(lines, first_line))  # E522
     issues.extend(_check_folder_quoting(lines))  # E525
+    issues.extend(_check_parameter_quoting(lines))  # E527
+    issues.extend(_check_parameter_comments(lines))  # E528
     if_stack = []  # each entry: [lineno, seen_else]
     prefetch_stack = []  # each entry: [lineno, if_depth_at_open]
     preamble_over = False  # True once anything a prefetch block may not follow
@@ -2458,7 +2672,9 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     `actionscript-scratch-ok` marker; and a `delete <destination>` is
     inserted before each W506 move/copy, unless "W506" is disabled or the
     `actionscript-scratch-dest-ok` marker is present; each unquoted
-    `folder create|delete` path is quoted (E525); an `else if` is joined
+    `folder create|delete` path is quoted (E525); a `parameter` line's
+    trailing comment is moved above it (E528) and an unquoted `parameter`
+    value is quoted (E527); an `else if` is joined
     (E524), a cmd.exe `/k` or missing `/c` is put right (W505), and a
     bracketed registry key is quoted (E521) -- each unless its code is
     disabled or its family marker is present. The file's line endings are
@@ -2493,6 +2709,20 @@ def check_file(path, disabled=frozenset(), auto_fix=False):
     if auto_fix and "E525" not in disabled and COMMAND_SHAPE_MARKER not in src:
         new_src, got = fix_folder_quoting(
             src, list(_folder_quote_targets(raw, src, is_bes))
+        )
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
+    # E528 first: an unquoted value with a trailing comment is only safe to
+    # quote (E527) once the comment is off the line
+    if auto_fix and "E528" not in disabled and PARAMETER_MARKER not in src:
+        new_src, got = fix_parameter_comments(
+            src, list(_parameter_comment_targets(raw, src, is_bes))
+        )
+        if guard.apply(new_src, got):
+            src, raw = new_src, encode(new_src, was_crlf)
+    if auto_fix and "E527" not in disabled and PARAMETER_MARKER not in src:
+        new_src, got = fix_parameter_quoting(
+            src, list(_parameter_quote_targets(raw, src, is_bes))
         )
         if guard.apply(new_src, got):
             src, raw = new_src, encode(new_src, was_crlf)
@@ -2571,7 +2801,9 @@ def main(argv=None):
             "rewrite wrong-case __download/__createfile/__appendfile "
             "references (W503) to their canonical spelling and insert a "
             "`delete` before each uncleared move/copy (W506) and quote "
-            "folder create/delete paths (E525), join `else if` (E524), put "
+            "folder create/delete paths (E525), move a `parameter` line's "
+            "trailing comment above it (E528), quote unquoted parameter "
+            "values (E527), join `else if` (E524), put "
             "cmd.exe's `/c` right (W505), and quote bracketed registry keys "
             "(E521), in place "
             "(default: yes when files are given, no when auto-discovering)"

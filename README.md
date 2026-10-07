@@ -400,12 +400,22 @@ any `if`) can never run and warns `W501` (first unreachable line only); an
 `action parameter query` after the first execution command warns `W502` -
 these are console-time prompts and belong at the top.
 
-`--auto-fix` (`W503`, `W506`, `E525`, `E524`, `W505`, `E521`), on by default when files are given (as
+A `parameter "<name>" = <value>` whose value is not double-quoted is `E527`:
+the agent substitutes `{...}` first and then parses the line, so an unquoted
+value - even a singular `{"a"}` - is invalid `parameter` syntax and the line
+fails at runtime. A trailing `// comment` on a `parameter` line is `E528`:
+only fixed-syntax lines (`if`/`elseif`/`else`/`endif`, the prefetch block,
+`override`) accept one, so the line fails even with a quoted value.
+
+`--auto-fix` (`W503`, `W506`, `E525`, `E528`, `E527`, `E524`, `W505`, `E521`), on by default when files are given (as
 pre-commit does) and off when auto-discovering, rewrites every wrong-case
 `__download`/`__createfile`/`__appendfile` reference to its canonical
 spelling, inserts a `delete <destination>` before each `W506` move/copy, and
 quotes each unquoted `folder create`/`folder delete` path (`E525` - quoted even
 when today's value has no spaces, since a user profile or parameter can),
+moves a `parameter` line's trailing comment onto its own line above (`E528`),
+quotes an unquoted `parameter` value (`E527` - `&quot;` in an entity-escaped
+body; a value holding a `"` outside `{...}` or `%22` is reported, not fixed),
 joins `else if` into `elseif` (`E524`, unless a stray `endif` shows a real
 nested `if`), turns a waiting cmd.exe's `/k` into `/c` or inserts a missing
 `/c` after its leading switches (`W505`), and quotes a bracketed-but-unquoted
@@ -432,7 +442,7 @@ or out of one family with `actionscript-if-ok` (`E500`, `E501`, `E505`,
 its `E301`, so one marker covers both hooks),
 `actionscript-prefetch-placement-ok` (`E510`, `E511`, `E515`),
 `actionscript-download-ok` (`E512`, `W507`), `actionscript-parameter-ok`
-(`E516`, `E517`, `W508`), `actionscript-scratch-ok` (`E519`, `W503`),
+(`E516`, `E517`, `E527`, `E528`, `W508`), `actionscript-scratch-ok` (`E519`, `W503`),
 `actionscript-scratch-dest-ok` (`W506`),
 `actionscript-command-shape-ok` (`E520`, `E521`, `E523`, `E525`),
 `actionscript-cmd-ok` (`W505`),
@@ -447,7 +457,7 @@ See the docstring in
 for the full list of check codes, opt-out markers, and options.
 
 Auto-fixes are checked against BES.xsd one pass at a time: `W503`, `W506`,
-`E525`, then the `E524`/`W505`/`E521` line rewrites as one pass. A pass that
+`E525`, `E528`, `E527`, then the `E524`/`W505`/`E521` line rewrites as one pass. A pass that
 would turn a schema-valid file into an invalid one is not written and is
 reported as `E526`; the other passes still are (`--disable E526` writes it
 anyway).

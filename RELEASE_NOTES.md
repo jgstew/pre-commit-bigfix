@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.10.0
+
+### Added (bes-actionscript-validate-script)
+
+- **`E527`**, new error: a `parameter "<name>" = <value>` whose value is not
+  double-quoted. The agent substitutes `{...}` first and then parses the
+  line, so an unquoted value fails at runtime, even a singular one such as
+  `{"a"}`. Auto-fixed by wrapping the value in quotes (`&quot;` in an
+  entity-escaped body). A value with a `"` outside `{...}`, or with `%22`,
+  is reported but not fixed.
+- **`E528`**, new error: a trailing `// comment` on a `parameter` line. Only
+  fixed-syntax lines such as `if`/`endif` accept one, so the line fails at
+  runtime even when its value is quoted. Auto-fixed by moving the comment
+  onto its own line directly above. This pass runs before the `E527` pass,
+  so an unquoted value with a comment gets both fixes in one run.
+- Both use the existing `actionscript-parameter-ok` marker, and both fixes
+  are checked against BES.xsd like the other passes (`E526`).
+
 ## v1.9.3
 
 ### Changed (bes-relevance-lint, bigfix-relevance-analyzer 1.19.0)

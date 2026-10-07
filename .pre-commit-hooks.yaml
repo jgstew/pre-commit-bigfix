@@ -263,12 +263,19 @@
     inside a block are bes-actionscript-lint-schclass's E303, this is the
     pairing check that hook's state machine cannot express. A command after
     an unconditional exit/restart/shutdown is unreachable and warns W501; an
-    `action parameter query` after execution began warns W502. E-codes
-    fail the hook. --auto-fix (W503, W506, E525, E524, W505, E521), on by
+    `action parameter query` after execution began warns W502. A
+    `parameter "<name>" = <value>` whose value is not double-quoted is E527,
+    and a trailing `// comment` on a `parameter` line is E528: the agent
+    parses the line after `{...}` substitution, so both fail at runtime.
+    E-codes fail the hook. --auto-fix (W503, W506, E525, E528, E527, E524,
+    W505, E521), on by
     default when files are given (as pre-commit does) and off when
     auto-discovering, rewrites every wrong-case scratch reference to its
     canonical spelling, inserts a `delete` before each W506 move/copy, quotes
-    each unquoted `folder create|delete` path (E525), joins `else if` into
+    each unquoted `folder create|delete` path (E525), moves a `parameter`
+    line's trailing comment onto its own line above (E528), quotes an
+    unquoted `parameter` value (E527 -- not one holding a `"` outside
+    `{...}` or `%22`), joins `else if` into
     `elseif` (E524, unless a stray `endif` shows a real nested `if`), turns a
     waiting cmd.exe's `/k` into `/c` or inserts a missing `/c` after its
     leading switches (W505), and quotes a bracketed-but-unquoted registry key
@@ -292,7 +299,7 @@
     bes-actionscript-lint-schclass also uses for its E301),
     `actionscript-prefetch-placement-ok` (E510, E511, E515),
     `actionscript-download-ok` (E512, W507), `actionscript-parameter-ok`
-    (E516, E517, W508), `actionscript-scratch-ok` (E519, W503),
+    (E516, E517, E527, E528, W508), `actionscript-scratch-ok` (E519, W503),
     `actionscript-scratch-dest-ok` (W506),
     `actionscript-command-shape-ok` (E520, E521, E523, E525),
     `actionscript-cmd-ok` (W505),
@@ -302,7 +309,8 @@
     hook; pass
     --strict to also fail on warnings.
     Auto-fixes are checked against BES.xsd one pass at a time (W503, W506,
-    E525, then the E524/W505/E521 line rewrites together); a pass that would
+    E525, E528, E527, then the E524/W505/E521 line rewrites together); a
+    pass that would
     make a schema-valid file invalid is not written, the others are (E526;
     --disable E526 writes it anyway).
   language: python

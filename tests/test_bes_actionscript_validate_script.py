@@ -2490,6 +2490,222 @@ def test_e525_with_a_stray_quote_is_reported_but_not_fixed(tmp_path):
     assert "E525" in codes(issues) and "E525" not in codes(fixed)
 
 
+# --- E527: parameter value must be double-quoted ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'parameter "test"={X}',
+        'parameter "test"=bare',
+        'parameter "test"   =   {X}',
+        'PARAMETER "test"={X}',
+        'parameter "a b"={X}',
+        'parameter "u"=http://x/y',
+    ],
+)
+def test_unquoted_parameter_value_is_e527(line):
+    """The agent substitutes `{...}` and then parses the line; an unquoted
+    value is invalid `parameter` syntax and fails at runtime (action 38995:
+
+    even a singular `{"a"}` fails).
+    """
+    issues = validator.check_actionscript(line)
+    assert codes(issues) == ["E527"]
+    assert validator.PARAMETER_MARKER in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'parameter "test" = "{X}"',
+        'parameter "test"="literal"',
+        'parameter "test"=""',
+        'action parameter query "x"',
+        'run "{parameter "x"}"',
+        'createfile until __END\nparameter "x"={y}\n__END',
+        'parameter "test" =',  # nothing after `=`: a different defect
+    ],
+)
+def test_quoted_or_other_parameter_lines_are_not_e527(body):
+    assert "E527" not in codes(validator.check_actionscript(body))
+
+
+def test_parameter_marker_and_disable_silence_e527(tmp_path):
+    body = 'parameter "test"={X}'
+    content = bes(body, marker=validator.PARAMETER_MARKER)
+    assert "E527" not in codes(issues_for(tmp_path, content))
+    assert "E527" not in codes(issues_for(tmp_path, bes(body), disabled={"E527"}))
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        ('parameter "test"={X}', 'parameter "test"="{X}"'),
+        ('parameter "test"=bare', 'parameter "test"="bare"'),
+        ('  parameter "t" = {X}', '  parameter "t" = "{X}"'),
+        ('parameter "u"=http://x/y', 'parameter "u"="http://x/y"'),
+    ],
+)
+def test_e527_auto_fix_quotes_the_value(tmp_path, before, after):
+    issues, fixed, text = _fix(tmp_path, before)
+    assert text == after
+    assert codes(fixed) == ["E527"] and "E527" not in codes(issues)
+
+
+def test_e527_auto_fix_is_idempotent(tmp_path):
+    path = write(tmp_path, "x.bes", bes('parameter "test"={X}\nwait x'))
+    validator.check_file(path, auto_fix=True)
+    once = open(path, "rb").read()
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == [] and "E527" not in codes(issues)
+    assert open(path, "rb").read() == once
+
+
+def test_e527_auto_fix_in_an_entity_escaped_body(tmp_path):
+    content = bes("x").replace(
+        "<![CDATA[x]]>", "\nparameter &quot;t&quot;={name of it}\n"
+    )
+    path = write(tmp_path, "x.bes", content)
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["E527"]
+    assert (
+        "parameter &quot;t&quot;=&quot;{name of it}&quot;"
+        in open(path, encoding="utf-8").read()
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'parameter "x"={"%22" & y}',  # holds a `"`
+        'parameter "x"=a"b',
+        "parameter \"x\"={concatenation of ('%22'; y)}",  # renders its own quotes
+        'parameter "u"={X} // note',  # comment: E528's fix comes first
+        'parameter "u"=a //b',
+    ],
+)
+def test_e527_reported_but_not_fixed(tmp_path, body):
+    """With E528 disabled the comment stays, so quoting the value alone
+    would still leave a failing line.
+    """
+    issues, fixed, text = _fix(tmp_path, body, disabled={"E528"})
+    assert "E527" in codes(issues) and fixed == []
+    assert text == body
+
+
+def test_e527_fixed_bes_stays_schema_valid(tmp_path):
+    issues, fixed, _text = _fix(tmp_path, 'parameter "t"={X}')
+    assert codes(fixed) == ["E527"] and "E526" not in codes(issues)
+
+
+# --- E528: trailing `// comment` on a parameter line ------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'parameter "n"="v" // c',
+        'PARAMETER "n" = "v"   // c',
+    ],
+)
+def test_parameter_trailing_comment_is_e528(line):
+    """Action 39444: `parameter "n"="v" // c` failed on that line."""
+    issues = validator.check_actionscript(line)
+    assert codes(issues) == ["E528"]
+    assert validator.PARAMETER_MARKER in issues[0][2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'parameter "u" = "http://x"',
+        'parameter "x" = "{a // b}"',
+        "// a comment on its own line",
+        'createfile until __END\nparameter "n"="v" // c\n__END',
+    ],
+)
+def test_parameter_without_trailing_comment_is_not_e528(body):
+    assert "E528" not in codes(validator.check_actionscript(body))
+
+
+def test_unquoted_value_with_comment_is_e527_and_e528():
+    issues = validator.check_actionscript('parameter "u"={X} // note')
+    assert sorted(codes(issues)) == ["E527", "E528"]
+
+
+def test_e528_in_an_entity_escaped_body(tmp_path):
+    content = bes("x").replace(
+        "<![CDATA[x]]>", "\nparameter &quot;n&quot;=&quot;v&quot; // c\n"
+    )
+    assert "E528" in codes(issues_for(tmp_path, content))
+    path = write(tmp_path, "y.bes", content)
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["E528"]
+    assert "\n// c\nparameter &quot;n&quot;=&quot;v&quot;\n" in open(
+        path, encoding="utf-8"
+    ).read().replace("\r\n", "\n")
+
+
+def test_parameter_marker_and_disable_silence_e528(tmp_path):
+    body = 'parameter "n"="v" // c'
+    content = bes(body, marker=validator.PARAMETER_MARKER)
+    assert "E528" not in codes(issues_for(tmp_path, content))
+    assert "E528" not in codes(issues_for(tmp_path, bes(body), disabled={"E528"}))
+
+
+def test_e528_auto_fix_moves_the_comment_above(tmp_path):
+    issues, fixed, text = _fix(tmp_path, 'wait x\n  parameter "n"="v" // c')
+    assert text == 'wait x\n  // c\n  parameter "n"="v"'
+    assert codes(fixed) == ["E528"] and "E528" not in codes(issues)
+    assert "E526" not in codes(issues)
+
+
+def test_e528_auto_fix_on_the_actionscript_tag_line(tmp_path):
+    issues, fixed, text = _fix(tmp_path, 'parameter "n"="v" // c\nwait x')
+    assert text == '// c\nparameter "n"="v"\nwait x'
+    assert codes(fixed) == ["E528"] and "E526" not in codes(issues)
+
+
+def test_e528_auto_fix_is_idempotent(tmp_path):
+    path = write(tmp_path, "x.bes", bes('parameter "n"="v" // c'))
+    validator.check_file(path, auto_fix=True)
+    once = open(path, "rb").read()
+    issues, fixed = validator.check_file(path, auto_fix=True)
+    assert fixed == [] and "E528" not in codes(issues)
+    assert open(path, "rb").read() == once
+
+
+def test_e528_then_e527_fix_a_commented_unquoted_value(tmp_path):
+    """E528 moves the comment off the line first; then E527 can quote."""
+    issues, fixed, text = _fix(tmp_path, 'parameter "u"={X} // note\nwait x')
+    assert text == '// note\nparameter "u"="{X}"\nwait x'
+    assert sorted(codes(fixed)) == ["E527", "E528"]
+    assert not {"E526", "E527", "E528"} & set(codes(issues))
+
+
+def test_probe_38779_script_is_flagged_and_fixed(tmp_path):
+    body = (
+        'parameter "test"={concatenations "" of ("this";"that")}\n'
+        'parameter "test2"={"a"}\n'
+        "continue if {disjunctions of (true;true)}"
+    )
+    path = write(tmp_path, "x.bes", bes(body))
+    lines = [
+        lineno for lineno, code, _ in validator.check_file(path)[0] if code == "E527"
+    ]
+    assert len(lines) == 2
+    _issues, fixed = validator.check_file(path, auto_fix=True)
+    assert codes(fixed) == ["E527", "E527"]
+    [text] = _action_texts(path)
+    assert text == (
+        'parameter "test"="{concatenations "" of ("this";"that")}"\n'
+        'parameter "test2"="{"a"}"\n'
+        "continue if {disjunctions of (true;true)}"
+    )
+    assert codes(validator.check_file(path)[0]) == []
+
+
 # --- E512: `>>` appends to a file, it does not re-create it --------------------
 
 
