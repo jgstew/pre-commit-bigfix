@@ -394,6 +394,53 @@ def test_regex_quantifier_with_range_is_not_e509():
     assert validator.check_actionscript(body) == []
 
 
+# CommunityContent 666-Relay AdvertisementList (ADSite) (23800), line 36
+_ESCAPED_QUANTIFIER_LINE = (
+    'if {value of setting "AD Site" of client as lowercase = regex '
+    '"([0-9]{3}}-[a-z,0-9]{2}}[0-9]{3}})" }'
+)
+
+
+def test_escaped_regex_quantifier_inside_a_substitution_is_not_e509():
+    """`{3}}` inside a substitution is the quantifier `{3}` with its `}`
+    escaped as `}}`; the substitution stays open for its real close.
+    """
+    body = _ESCAPED_QUANTIFIER_LINE + "\nendif"
+    assert validator.check_actionscript(body) == []
+
+
+@pytest.mark.parametrize("quantifier", ["{3}}", "{1,3}}", "{2,}}"])
+def test_escaped_regex_quantifier_forms_are_not_e509(quantifier):
+    body = f'wait cmd /c echo {{(regex "a{quantifier}b") of "x"}}'
+    assert validator.check_actionscript(body) == []
+
+
+def test_escaped_regex_quantifier_in_an_entity_escaped_body(tmp_path):
+    content = bes("x").replace(
+        "<![CDATA[x]]>",
+        "\n" + _ESCAPED_QUANTIFIER_LINE.replace('"', "&quot;") + "\nendif\n",
+    )
+    assert "E509" not in codes(issues_for(tmp_path, content))
+
+
+def test_escaped_regex_quantifier_outside_a_substitution_is_unchanged():
+    issues = validator.check_actionscript("wait cmd /c echo {3}}")
+    assert codes(issues) == ["E509"]
+
+
+def test_stray_close_after_an_escaped_regex_quantifier_is_e509():
+    line = 'wait echo {(regex "a{3}}") of "x"} }'
+    issues = validator.check_actionscript(line)
+    assert codes(issues) == ["E509"]
+    assert f"column {len(line)}" in issues[0][2]
+
+
+def test_unclosed_substitution_with_an_escaped_regex_quantifier_is_e508():
+    """The misread `}` used to close this early, hiding the E508."""
+    issues = validator.check_actionscript('wait echo {(regex "a{3}}"')
+    assert codes(issues) == ["E508"]
+
+
 def test_substitution_column_is_reported_from_the_raw_line():
     issues = validator.check_actionscript("    wait cmd /c echo {x")
     assert "column 22" in issues[0][2]

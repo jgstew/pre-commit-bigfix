@@ -471,6 +471,9 @@ _HASH_ATTR_RE = re.compile(r"\b(sha1|sha256|size)\s*[:=]\s*(\S+)", re.IGNORECASE
 # match`), and a quantifier's braces are plain regex syntax, not a nested
 # relevance substitution or its close; see `_check_substitution_braces`
 _REGEX_QUANTIFIER_RE = re.compile(r"\{\d+(?:,\d*)?\}")
+# the same quantifier with its `}` written as the escaped literal `}}`, the
+# spelling a quantifier takes inside an open substitution (`{3}}`)
+_ESCAPED_REGEX_QUANTIFIER_RE = re.compile(r"\{\d+(?:,\d*)?\}\}")
 # `delete` / `folder delete` lines clean up the working directory; a
 # `__Download\<name>` they mention is not a consumption of that file
 _DELETE_RE = re.compile(r"^(?:folder\s+)?delete\b", re.IGNORECASE)
@@ -633,12 +636,24 @@ def _check_substitution_braces(lineno, line):
     substitution are counted so an escaped brace absorbs a later lone `}`
     rather than being reported as stray, which keeps this quiet on the
     escaping styles seen in real content.
+
+    Inside an open substitution, an escaped regex quantifier `{3}}` /
+    `{1,3}}` (a `regex "..."` literal's `{3}` with its `}` written `}}`) is
+    consumed as one unit, so its trailing `}` is not misread as the
+    substitution's close. Outside a substitution it is handled as before.
     """
     issues = []
     open_col = None  # column of the `{` that opened the current substitution
     pending_escapes = 0  # `{{`/`}}` literals a lone `}` may pair with
     index = 0
     while index < len(line):
+        if open_col is not None:
+            # checked before the plain quantifier, which would otherwise
+            # take `{3}` and leave the escape's second `}` to close early
+            match = _ESCAPED_REGEX_QUANTIFIER_RE.match(line, index)
+            if match:
+                index = match.end()
+                continue
         match = _REGEX_QUANTIFIER_RE.match(line, index)
         if match:
             # `{40}` etc -- a regex quantifier's braces, not a nested

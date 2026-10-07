@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.10.1
+
+### Fixed (bes-actionscript-validate-script)
+
+- **`E509`** false positive: an escaped regex quantifier such as `{3}}`,
+  `{1,3}}` or `{2,}}` inside a `{...}` substitution (a `regex "..."`
+  literal's `{3}` with its `}` written as the escape `}}`) is no longer
+  misread. The quantifier used to be skipped first, which left the second
+  `}` to close the substitution early, so every later `}` on the line was
+  reported as stray. Outside a substitution, `{3}}` is handled as before.
+- **`E508`** is now reported for an unclosed substitution that contains an
+  escaped quantifier (`wait echo {(regex "a{3}}"`). The same misread used to
+  close it early, so nothing was reported.
+
 ## v1.10.0
 
 ### Added (bes-actionscript-validate-script)
