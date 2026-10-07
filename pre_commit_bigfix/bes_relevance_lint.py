@@ -34,6 +34,16 @@ Checks:
           one statement, which no engine can answer
     E610  an ActionScript command word used as a relevance name -- usually an
           ActionScript line pasted or doubled into relevance
+    E611  a plural operand where the engine requires a single value, which it
+          refuses before evaluating anything. Split out of E603; where the
+          analyzer can work out `unique value of` or the singular spelling of
+          an aggregate, it is printed as a suggested fix
+    E612  an ActionScript `{` with anything after it on its line and no `}` to
+          close it there, which fails the action
+    E613  a `<?Relevance` with no closing `?>`, so its relevance was not linted
+    E614  a BES file that is not well-formed XML, so nothing in it was linted.
+          Off by default -- bes-schema-validate owns file validity -- and
+          switched back on with --enable E614
     W600  a name no inspector dump defines. A warning rather than an error
           because a repo running a newer client than the analyzer's snapshot
           legitimately uses names it has never heard of
@@ -58,11 +68,14 @@ Checks:
           more than one value. The client joins a plural with no separator,
           so the action runs but probably not as meant; use
           `concatenation "<sep>" of (...)` or a tighter filter
+    W607  a relevance-tagged markdown code fence that is never closed, so its
+          relevance was not linted (markdown only; never from a BES file)
 
 E-codes fail the hook; warnings fail only under --strict.
 
-Unparsable XML is skipped, not reported -- bes-schema-validate owns file
-validity, and this hook must not duplicate its findings. That does mean a
+Unparsable XML is skipped, not reported (E614 is off by default) --
+bes-schema-validate owns file validity, and this hook must not duplicate its
+findings. That does mean a
 truncated file passes here: a clean run says the relevance the extractor could
 see is sound, not that the file parses.
 
@@ -73,7 +86,7 @@ needs relevance this complex is what --max-score is for.
 
 There is no auto-fix: files are never rewritten. Where the analyzer can work
 out a safe rewrite of a whole statement (today, the singular spellings behind
-W602), the fixed statement is printed once under that statement's first
+W602 and the `unique value of` / singular-aggregate rewrites behind E611), the fixed statement is printed once under that statement's first
 finding as `suggested fix: ...`, for a human to copy in. Everything else needs
 a human to decide what the relevance was meant to say.
 
@@ -128,6 +141,10 @@ CODES = {
     "site-type-mismatch": "E608",
     "mixed-dialect": "E609",
     "actionscript-keyword": "E610",
+    "singular-required": "E611",
+    "unterminated-substitution": "E612",
+    "unterminated-processing-instruction": "E613",
+    "xml-parse-error": "E614",
     "unknown-inspector": "W600",
     "non-unique-risk": "W601",
     "plural-preferred": "W602",
@@ -135,6 +152,7 @@ CODES = {
     "version-truncating-compare": "W604",
     "non-renderable-substitution": "W605",
     "plural-substitution": "W606",
+    "unterminated-code-fence": "W607",
 }
 
 KNOWN_CODES = frozenset(CODES.values())
@@ -142,6 +160,11 @@ KNOWN_CODES = frozenset(CODES.values())
 # The reverse direction, for --disable/--enable: a repo names an E-code, the
 # analyzer's LintConfig wants its own.
 ANALYZER_CODES = {code: name for name, code in CODES.items()}
+
+# Off unless a repo names them in --enable. E614 is a BES file that is not
+# well-formed XML: bes-schema-validate already reports that, and this hook must
+# not duplicate its findings, so unparsable XML stays skipped here.
+DEFAULT_DISABLED = frozenset({"E614"})
 
 
 MIN_ANALYZER_PYTHON = (3, 11)
@@ -333,6 +356,7 @@ def main(argv=None):
         )
     disabled -= unknown
     enabled -= unknown
+    disabled |= DEFAULT_DISABLED - enabled
 
     config_kwargs = {"severities": _severities(disabled, enabled)}
     # The analyzer's ceilings are on by default and these only raise them, so a

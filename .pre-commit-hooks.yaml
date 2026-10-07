@@ -327,7 +327,12 @@
     does not fit its site (a non-boolean <Relevance>, or an `if`/`elseif`
     condition that is not a boolean or string); E609 client-only and
     session-only inspectors in one statement; E610 an ActionScript command
-    word used as a relevance name; W600 a name no inspector dump
+    word used as a relevance name; E611 a plural where the engine requires a
+    single value (a `unique value of` rewrite is printed as a suggested fix
+    where safe); E612 an ActionScript `{` not closed on its line, which
+    fails the action; E613 a `<?Relevance` with no closing `?>`; E614 a BES
+    file that is not well-formed XML (off by default, `--enable E614`); W600
+    a name no inspector dump
     defines; W601 a singular property over a possibly-plural object; W602 a
     singular spelling mid-chain where the plural reads safer (a safe
     whole-statement rewrite is printed as a suggested fix); W603 two version-looking strings compared as strings; W604 a
@@ -335,10 +340,11 @@
     ActionScript `{...}` substitution whose value is an opaque object with no
     text form (a `bes *` object, a bare `registry`, ...); W606 an ordinary
     ActionScript `{...}` substitution that may be plural (the client joins
-    the values with no separator). W601 is disabled
+    the values with no separator); W607 a relevance code fence in markdown
+    that is never closed (manual runs only). W601 is disabled
     by default here -- it fires several times per file across real content --
     and `--enable W601` switches it back on. Unparsable XML is skipped
-    (bes-schema-validate owns validity), so a clean run says the relevance
+    (E614 is off by default; bes-schema-validate owns validity), so a clean run says the relevance
     that could be extracted is sound, not that the file parses. A file opts
     out entirely with `pre-commit-skip: bes-relevance-lint`. No auto-fix.
     E-codes fail the hook; pass --strict to also fail on warnings. Requires

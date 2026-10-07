@@ -119,6 +119,9 @@ def test_codes_are_unique():
             id="mixed-dialect",
         ),
         pytest.param("exists prefetch", "E610", id="actionscript-keyword"),
+        pytest.param(
+            'exists ("a" &amp; names of files "x")', "E611", id="singular-required"
+        ),
     ],
 )
 def test_each_code_fires(tmp_path, capsys, relevance, code):
@@ -204,6 +207,55 @@ def test_unparsable_xml_is_skipped(tmp_path, capsys):
     path = write(tmp_path, "<BES><Task><Relevance>it</Relevance></Task>")
     status = linter.main([path])
     assert capsys.readouterr().out == ""
+    assert status == 0
+
+
+def test_unparsable_xml_is_e614_when_enabled(tmp_path, capsys):
+    """E614 is off by default (see above); --enable E614 restores it for a
+    run by hand that wants one tool to say the file did not parse.
+    """
+    path = write(tmp_path, "<BES><Task><Relevance>it</Relevance></Task>")
+    status = linter.main(["--enable", "E614", path])
+    assert codes_in(capsys.readouterr().out.splitlines()) == ["E614"]
+    assert status == 1
+
+
+def test_unterminated_substitution_is_e612(tmp_path, capsys):
+    """The engine substitutes line by line, so a `{` left open fails the action."""
+    document = "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<BES>",
+            "<Task>",
+            "<Title>Example</Title>",
+            "<ActionScript>",
+            'waithidden cmd /c echo {name of file "x"',
+            "</ActionScript>",
+            "</Task>",
+            "</BES>",
+        ]
+    )
+    status = linter.main([write(tmp_path, document)])
+    assert codes_in(capsys.readouterr().out.splitlines()) == ["E612"]
+    assert status == 1
+
+
+def test_unterminated_processing_instruction_is_e613(tmp_path, capsys):
+    document = bes('exists file "x"').replace(
+        "<Title>", '<Description>&lt;?Relevance exists file "y"</Description><Title>'
+    )
+    status = linter.main([write(tmp_path, document)])
+    assert codes_in(capsys.readouterr().out.splitlines()) == ["E613"]
+    assert status == 1
+
+
+def test_unterminated_code_fence_is_w607(tmp_path, capsys):
+    """Markdown only -- the hook's `files:` pattern never passes one, but a run
+    by hand can.
+    """
+    path = write(tmp_path, '```relevance\nexists file "x"\n', name="x.md")
+    status = linter.main([path])
+    assert codes_in(capsys.readouterr().out.splitlines()) == ["W607"]
     assert status == 0
 
 

@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.9.3
+
+### Changed (bes-relevance-lint, bigfix-relevance-analyzer 1.19.0)
+
+- **`E611`**, new error: a plural operand where the engine requires a single
+  value. These used to be reported as `E603`, so a repo that disabled `E603`
+  will now see them as `E611`. Where it is safe, a `unique value of` (or
+  singular-aggregate) rewrite is printed as a suggested fix.
+- **`E612`**, new error: an ActionScript `{` with anything after it on its
+  line and no `}` to close it there, which fails the action.
+- **`E613`**, new error: a `<?Relevance` with no closing `?>`, so its relevance
+  was never linted.
+- **`E614`**, new error, **off by default**: a BES file that is not
+  well-formed XML. bes-schema-validate still owns file validity, so
+  unparsable XML stays skipped unless you pass `--enable E614`.
+- **`W607`**, new warning: a relevance code fence in markdown that is never
+  closed. This only shows up when you run the hook by hand on markdown.
+
 ## v1.9.1
 
 ### Changed (bes-relevance-lint, bigfix-relevance-analyzer 1.16.3)

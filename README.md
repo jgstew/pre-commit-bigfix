@@ -481,6 +481,10 @@ of the file.
 | `E608` | the value does not fit the kind of site it came from: a `<Relevance>` that is not a boolean, or an `if`/`elseif`/`continue if` condition that is not a boolean or string |
 | `E609` | inspectors exclusive to client relevance and to session relevance in one statement, which no engine can answer |
 | `E610` | an ActionScript command word used as a relevance name, usually an ActionScript line pasted or doubled into relevance |
+| `E611` | a plural operand where the engine requires a single value, which it refuses before evaluating anything; a `unique value of` (or singular-aggregate) rewrite is printed as a suggested fix where safe |
+| `E612` | an ActionScript `{` with anything after it on its line and no `}` to close it there, which fails the action |
+| `E613` | a `<?Relevance` with no closing `?>`, so its relevance was not linted |
+| `E614` | a BES file that is not well-formed XML, so nothing in it was linted (**off by default**; `--enable E614`) |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
 | `W602` | a singular spelling mid-chain (under a `whose` filter, or where a plural is built from it), where the plural reads safer |
@@ -488,6 +492,7 @@ of the file.
 | `W604` | a version comparison that truncates to the shorter operand's components |
 | `W605` | an ordinary ActionScript substitution's value is an opaque object with no text form |
 | `W606` | an ordinary ActionScript substitution's value may be more than one value; the client joins them with no separator |
+| `W607` | a relevance-tagged markdown code fence that is never closed, so its relevance was not linted (manual runs on markdown only) |
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard
@@ -495,8 +500,8 @@ of. `W601` is **disabled by default** in the hook declaration: across 1,108
 `.bes` files of real content it fires 6,127 times, which drowns everything
 else. Switch it back on with `--enable W601`.
 
-Unparsable XML is skipped rather than reported - `bes-schema-validate` owns
-file validity. That does mean a truncated file passes this hook: a clean run
+Unparsable XML is skipped rather than reported (`E614` is off by default) -
+`bes-schema-validate` owns file validity. That does mean a truncated file passes this hook: a clean run
 says the relevance that could be extracted is sound, not that the file parses.
 
 A file opts out of every check here with
