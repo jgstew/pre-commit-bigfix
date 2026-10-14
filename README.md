@@ -32,15 +32,22 @@ as deprecated aliases, so existing configs need no changes.
 
 Validates that BigFix XML files are well-formed and satisfy their schema, via
 the [validate_bes_xml](https://pypi.org/project/validate-bes-xml/) package
-(`>= 2.4.1`). It checks:
+(`>= 2.4.1`). It checks these files:
 
-| Files | Schema |
-|---|---|
-| `*.bes`, `*.ojo` | `BES.xsd` for `.bes`, `BESOJO.xsd` for `.ojo` (or another bundled schema named after the root tag, such as `BESAPI.xsd`) |
-| `siteConfig.xml` | `SiteConfig.xsd` (Git External Custom Site) |
-| `site.xml` | `Site.xsd` (Git External Custom Site) |
-| `digest.xml` | `Digest.xsd` (Git External Custom Site) |
-| `Signatures/*.xml` | `SoftwareIdentityCatalog.xsd` (BigFix Inventory signatures) |
+| Files | Root tag | Schema |
+|---|---|---|
+| `*.bes` | `<BES>` | `BES.xsd` |
+| `*.ojo` | any | `BESOJO.xsd` |
+| `siteConfig.xml` (Git External Custom Site) | `<SiteConfig>` | `SiteConfig.xsd` |
+| `site.xml` (Git External Custom Site) | `<Site>` | `Site.xsd` |
+| `digest.xml` (Git External Custom Site) | `<Digest>` | `Digest.xsd` |
+| `Signatures/*.xml` (BigFix Inventory signatures) | `<SoftwareIdentityCatalog>` | `SoftwareIdentityCatalog.xsd` |
+
+The file names only decide which files the hook sees. Apart from `.ojo`
+files, which always use `BESOJO.xsd`, the schema is picked by the root tag:
+the bundled schema with the same name, ignoring case. So a `digest.xml` whose
+root is `<SiteConfig>` is checked against `SiteConfig.xsd`, and a `.bes` file
+whose root is `<BESAPI>` against `BESAPI.xsd`.
 
 The hook's `files` pattern is:
 
