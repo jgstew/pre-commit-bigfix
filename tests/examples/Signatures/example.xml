@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SoftwareIdentityCatalog>
+  <Software name="Example Tool" vendor="Example Vendor" version="1.0">
+    <Signature>
+      <AND>
+        <OR>
+          <File name="exampletool.exe" size="12345" version="1.0.0.0"/>
+        </OR>
+      </AND>
+    </Signature>
+  </Software>
+</SoftwareIdentityCatalog>
