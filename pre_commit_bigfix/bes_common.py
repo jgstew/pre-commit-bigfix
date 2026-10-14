@@ -130,7 +130,7 @@ def _warn_schema_check_unavailable():
     _schema_check_warned.append(True)
     print(
         "warning: BES.xsd schema check unavailable, so auto-fixes are written "
-        'unchecked; install "validate_bes_xml>=2.2.1" to enable it',
+        'unchecked; install "validate_bes_xml>=2.3.0" to enable it',
         file=sys.stderr,
     )
 
@@ -161,11 +161,9 @@ def schema_errors(raw, path=None):
     )
     if result:
         return []
-    # upstream reports "no schema applies" as schema=None with line-less
-    # errors; a syntax error also has schema=None, but carries line numbers.
-    # Swap for `result.status == "no_schema"` once jgstew/validate_bes_xml#17
-    # ships (and raise the validate_bes_xml floor to match).
-    if result.schema is None and all(line is None for line, _msg in result.errors):
+    # compare against the value: every Status member is a non-empty str, so
+    # testing `result.status` for truth would always pass.
+    if result.status == "no_schema":
         return None
     return [f"Line {line}: {message}" for line, message in result.errors]
 
