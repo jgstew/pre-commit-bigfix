@@ -165,7 +165,11 @@ def schema_errors(raw, path=None):
     # testing `result.status` for truth would always pass.
     if result.status == "no_schema":
         return None
-    return [f"Line {line}: {message}" for line, message in result.errors]
+    # an error with no line number (an unreadable file, say) is just its message
+    return [
+        message if line is None else f"Line {line}: {message}"
+        for line, message in result.errors
+    ]
 
 
 def schema_regression(original, new, path=None):

@@ -11,6 +11,8 @@
   errors with no line numbers, which would also have matched other failures
   without line numbers, such as an unreadable file or a document with no root
   element. Those now count as schema errors, not as unknown validity.
+- A schema error with no line number is now shown as just its message
+  instead of `Line None: <message>` when the guard refuses an auto-fix.
 
 ## v1.10.1
 
