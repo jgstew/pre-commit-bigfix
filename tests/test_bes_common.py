@@ -143,6 +143,30 @@ def test_schema_errors_delegates_to_validate_bes(monkeypatch):
     assert calls[0]["filename"] == "site/x.bes"
 
 
+def _result(status, errors):
+    """A real ValidationResult with a chosen status, as validate_bes returns."""
+    return validate_bes_xml.ValidationResult(
+        valid=status == "valid", errors=errors, status=status
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Invalid File: x", "XML document has no root element"],
+)
+def test_a_line_less_error_status_is_reported_not_unknown(monkeypatch, message):
+    """Only status "no_schema" means unknown: a line-less "error" is an error."""
+    fake = _result("error", [(None, message)])
+    monkeypatch.setattr(validate_bes_xml, "validate_bes", lambda **_kw: fake)
+    assert bes_common.schema_errors(VALID) == [message]
+
+
+def test_no_schema_status_means_unknown(monkeypatch):
+    fake = _result("no_schema", [(None, "No schema found for root <Foo>")])
+    monkeypatch.setattr(validate_bes_xml, "validate_bes", lambda **_kw: fake)
+    assert bes_common.schema_errors(VALID) is None
+
+
 def test_no_bundled_schemas_means_unknown_not_the_cwd_ones(monkeypatch):
     # upstream treats an empty schema list as "use SCHEMA_FILES", cwd included
     monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", {"/repo/BES.xsd"})

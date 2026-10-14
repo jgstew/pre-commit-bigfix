@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.11.1
+
+### Changed
+
+- This now needs **`validate_bes_xml >= 2.3.0, < 3`** (was `>= 2.2.1`).
+- The BES.xsd guard on auto-fix writes now uses validate_bes_xml's
+  `ValidationResult.status` to decide that no schema applies, so validity is
+  unknown and the fix is written. It used to guess from a missing schema plus
+  errors with no line numbers, which would also have matched other failures
+  without line numbers, such as an unreadable file or a document with no root
+  element. Those now count as schema errors, not as unknown validity.
+- A schema error with no line number is now shown as just its message
+  instead of `Line None: <message>` when the guard refuses an auto-fix.
+
 ## v1.10.1
 
 ### Fixed (bes-actionscript-validate-script)
