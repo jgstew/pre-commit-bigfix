@@ -111,3 +111,28 @@ def test_deprecated_alias_says_so(old_id):
     hook = load_hooks()[old_id]
     text = f"{hook['name']} {hook.get('description', '')}".lower()
     assert "deprecated" in text
+
+
+@pytest.mark.parametrize(
+    ("path", "matched"),
+    [
+        ("Sites/Foo/siteConfig.xml", True),
+        ("Sites/Foo/site.xml", True),
+        ("Fixlets/A/digest.xml", True),
+        ("siteConfig.xml", True),
+        ("Signatures/a b-1.0-12.xml", True),
+        ("Sites/X/Signatures/y.xml", True),
+        ("x.bes", True),
+        ("x.ojo", True),
+        ("Signatures/sub/x.xml", False),
+        ("Sites/broken_site.xml", False),
+        ("mysite.xml", False),
+        ("pom.xml", False),
+        ("site.xml.bak", False),
+        ("SiteConfig.xml", False),  # case-sensitive, like the documented names
+    ],
+)
+def test_bes_schema_validate_files_pattern(path, matched):
+    """Match `files` the way pre-commit does: re.search on the repo path."""
+    pattern = load_hooks()["bes-schema-validate"]["files"]
+    assert bool(re.search(pattern, path)) is matched
