@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.11.1
 
 ### Changed
 
