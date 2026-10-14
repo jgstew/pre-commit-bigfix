@@ -133,12 +133,11 @@ def test_cwd_schema_is_ignored(tmp_path, monkeypatch):
     foo.write_text("<Foo/>", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     # SCHEMA_FILES is built at import, so add the cwd schema the way an
-    # import from this folder would have
-    monkeypatch.setattr(
-        validate_bes_xml,
-        "SCHEMA_FILES",
-        [*validate_bes_xml.SCHEMA_FILES, str(foo_xsd)],
-    )
+    # import from this folder would have: the package re-exports it, and the
+    # inner module's copy is the one validate_bes() falls back to
+    with_cwd = {*validate_bes_xml.SCHEMA_FILES, str(foo_xsd)}
+    monkeypatch.setattr(validate_bes_xml, "SCHEMA_FILES", with_cwd)
+    monkeypatch.setattr(validate_bes_xml.validate_bes_xml, "SCHEMA_FILES", with_cwd)
     assert validate_bes_xml.validate_xml(str(foo), verbose=False)  # upstream would
     assert hook.main([str(foo)]) == 1
 

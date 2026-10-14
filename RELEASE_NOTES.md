@@ -1,5 +1,30 @@
 # Release Notes
 
+## v1.12.0
+
+### Added (bes-schema-validate)
+
+- Git External Custom Site files (`siteConfig.xml`, `site.xml`,
+  `digest.xml`) and BigFix Inventory signatures (`Signatures/*.xml`) are now
+  validated too, against the schemas bundled with validate_bes_xml 2.4.0. Both
+  `bes-schema-validate` and the deprecated `validate-bes` alias have the wider
+  `files` pattern. A `.xml` file whose root has no bundled schema (a sitemap
+  or Maven `site.xml`) is skipped; an Eclipse update-site `site.xml` fails
+  and needs an `exclude:` (see the README).
+
+### Changed (bes-schema-validate)
+
+- New output format: one `path:line: message` line per error (`path:
+  message` when there is no line number), and nothing for files that pass.
+  The file name of every checked file and validate_bes_xml's verbose report
+  are no longer printed. The exit code is still the number of failed files.
+- Only the schemas bundled with validate_bes_xml are used, for `.bes` and
+  `.ojo` files too. A repo-local `Foo.xsd` used to make a `<Foo>` root
+  checkable; such a file now fails with "no schema", as it would on a
+  machine without that `.xsd`. A repo-local copy of a bundled schema was
+  already ignored, since the bundled one won the name clash.
+- This now needs **`validate_bes_xml >= 2.4.1, < 3`** (was `>= 2.3.0`).
+
 ## v1.11.1
 
 ### Changed

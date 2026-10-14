@@ -130,7 +130,7 @@ def _warn_schema_check_unavailable():
     _schema_check_warned.append(True)
     print(
         "warning: BES.xsd schema check unavailable, so auto-fixes are written "
-        'unchecked; install "validate_bes_xml>=2.3.0" to enable it',
+        'unchecked; install "validate_bes_xml>=2.4.1" to enable it',
         file=sys.stderr,
     )
 

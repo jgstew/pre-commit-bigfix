@@ -133,6 +133,6 @@ def test_deprecated_alias_says_so(old_id):
     ],
 )
 def test_bes_schema_validate_files_pattern(path, matched):
-    """Pre-commit matches `files` with re.search on the repo-relative path."""
+    """Match `files` the way pre-commit does: re.search on the repo path."""
     pattern = load_hooks()["bes-schema-validate"]["files"]
     assert bool(re.search(pattern, path)) is matched

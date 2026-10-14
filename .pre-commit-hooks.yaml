@@ -1,11 +1,16 @@
 - id: bes-schema-validate
   name: Validate BigFix BES Files
-  description: This hook validates BigFix BES XML Files against the BES.xsd schema
+  description: >
+    Validates BigFix BES, OJO, Git External Custom Site (siteConfig.xml,
+    site.xml, digest.xml) and BigFix Inventory signature (Signatures/*.xml)
+    files against the schemas bundled with validate_bes_xml. Errors print as
+    path:line: message. A .xml file with no bundled schema for its root (a
+    sitemap, say) is skipped; a .bes or .ojo file with none fails.
   entry: bes-schema-validate
   language: python
   pass_filenames: True
   types: [text]
-  files: \.(bes|ojo)$
+  files: \.(bes|ojo)$|(^|/)(siteConfig|site|digest)\.xml$|(^|/)Signatures/[^/]+\.xml$
 # Deprecated alias: `validate-bes` was this hook's id before it was renamed to
 # `bes-schema-validate` (type-subtype-action naming). It is kept so existing
 # .pre-commit-config.yaml files keep working, and runs the very same entry
@@ -16,11 +21,13 @@
   description: >
     DEPRECATED alias for bes-schema-validate, kept so pre-rename configs keep
     working; it runs the same entry point. Use bes-schema-validate instead.
+    Validates BES, OJO, Git External Custom Site and BigFix Inventory signature
+    files against the schemas bundled with validate_bes_xml.
   entry: bes-schema-validate
   language: python
   pass_filenames: True
   types: [text]
-  files: \.(bes|ojo)$
+  files: \.(bes|ojo)$|(^|/)(siteConfig|site|digest)\.xml$|(^|/)Signatures/[^/]+\.xml$
 - id: bes-conventions-check
   name: Check BigFix BES conventions
   description: >

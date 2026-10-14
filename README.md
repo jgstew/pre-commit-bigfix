@@ -30,9 +30,54 @@ as deprecated aliases, so existing configs need no changes.
 
 ### bes-schema-validate
 
-Validates that BigFix BES XML files (`.bes`, `.ojo`) are well-formed XML that
-satisfies the BES.xsd schema, via the
-[validate_bes_xml](https://pypi.org/project/validate-bes-xml/) package.
+Validates that BigFix XML files are well-formed and satisfy their schema, via
+the [validate_bes_xml](https://pypi.org/project/validate-bes-xml/) package
+(`>= 2.4.1`). It checks:
+
+| Files | Schema |
+|---|---|
+| `*.bes`, `*.ojo` | `BES.xsd` for `.bes`, `BESOJO.xsd` for `.ojo` (or another bundled schema named after the root tag, such as `BESAPI.xsd`) |
+| `siteConfig.xml` | `SiteConfig.xsd` (Git External Custom Site) |
+| `site.xml` | `Site.xsd` (Git External Custom Site) |
+| `digest.xml` | `Digest.xsd` (Git External Custom Site) |
+| `Signatures/*.xml` | `SoftwareIdentityCatalog.xsd` (BigFix Inventory signatures) |
+
+The hook's `files` pattern is:
+
+```text
+\.(bes|ojo)$|(^|/)(siteConfig|site|digest)\.xml$|(^|/)Signatures/[^/]+\.xml$
+```
+
+The `.xml` names are matched case-sensitively, as BigFix documents them, and
+only signature files directly inside a `Signatures/` folder are matched. Keep
+signatures elsewhere? Set `files:` in your own config.
+
+Only the schemas bundled with validate_bes_xml are used. A `*.xsd` in the
+repo (a copy of `site.xsd` from RepositorySiteExample, say) is ignored, so a
+`.bes` file whose root tag has no bundled schema fails here as it would
+anywhere else.
+
+A `.xml` file that is not a BigFix file, such as a sitemap or a Maven site
+descriptor named `site.xml`, has no bundled schema for its root tag and is
+skipped. An Eclipse update-site `site.xml` is the exception: its root is a
+plain `<site>`, which matches `Site.xsd` (schema names match without regard
+to case), so it is validated and fails. If your repo holds Eclipse update
+sites, exclude them:
+
+```yaml
+      - id: bes-schema-validate
+        exclude: ^eclipse/.*site\.xml$
+```
+
+Files that pass print nothing. Each error is printed as `path:line: message`,
+or `path: message` when there is no line number, and the exit code is the
+number of files that failed:
+
+```text
+Sites/Foo/siteConfig.xml:4: Element 'BesFileDir': This element is not expected. Expected is one of ( NonClientFilesDir, OtherFilesDir ).
+Sites/Foo/Fixlets/A/digest.xml:4: Element 'DigestRelevanceEvaluationPeriod': [facet 'enumeration'] The value 'PT10M' is not an element of the set {...}.
+unknown.bes: no schema to validate this file against
+```
 
 Renamed from `validate-bes`, which is kept as a deprecated alias so existing
 configs keep working: both ids run the same entry point, so there is no
