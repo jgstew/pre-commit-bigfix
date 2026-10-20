@@ -2,8 +2,83 @@
 """Check a BigFix Git External Custom Site repo's layout, file names and paths.
 
 A Git External Custom Site ("repository site", BigFix 11.0.7+) is gathered by
-the root server from a git repo. One bad file can fail the whole sync, so
-this hook checks the site as a whole before it is pushed.
+the root server from a git repo, and one bad file can fail the whole sync. This
+hook checks the site as a whole, so pre-commit runs it once per commit
+(pass_filenames: false, always_run: true). The files it sees are those
+`git ls-files` lists: untracked and ignored files do not count.
+
+Each site root (--site-root, repeatable; default the repo root) may hold a
+siteConfig.xml naming its folders (BesFileDir, NonClientFilesDir,
+OtherFilesDir); the defaults are Fixlets, NonClientFiles and OtherFiles.
+Folder names are matched ignoring case, as on the Windows server.
+
+Checks (E-codes fail the hook; W-codes are advisory unless --strict):
+
+    E800  a .bes file in the .bes folder whose name does not start with a
+          numeric ID followed by a space or hyphen (`42- Name.bes`,
+          `42 Name.bes`); the server skips it
+    E801  two or more .bes files in one site share an ID, compared as
+          integers (0042 and 42 collide); each names the others
+    E802  a .bes file's server path is over the limit and cannot be fixed:
+          even `<ID> X.bes` is too long (the folders are), or it has no ID.
+          Renaming a folder changes its .fxf or digest, so it is not done
+    E803  fix: zero padding in the ID (0042- X.bes -> 42- X.bes)
+    E804  fix: non-ASCII characters in the name, folded to ASCII
+    E805  fix: the server path is over the limit; renamed `<ID> <Title>.bes`
+    E806  a rename was skipped: the new name is taken, ignoring case (by a
+          tracked file, another planned rename or an untracked file), the
+          file has unstaged changes pre-commit set aside, or the rename failed
+    W800  a .bes file outside the .bes folder; it is not gathered
+    W801  a .bes file directly in the .bes folder, or deeper than
+          <BesFileDir>/<fxf>/<digest>/ (server behavior undocumented)
+    W802  a file in the .bes folder other than .bes or digest.xml (an .xsd
+          too: bes-schema-validate already has the schemas)
+    W803  a folder siteConfig.xml renames does not exist (has no files); a
+          default name spelled out, as the template does, is not checked
+    W804  a site with no content: no .bes files in the .bes folder and no
+          files in the NonClient or Other folders (server files alone pass)
+    W805  any other tracked file whose server path is over the limit; it is
+          not renamed, since actions may refer to it by name
+    W806  an ID outside 1..2147483647 (the range is undocumented)
+    W807  siteConfig.xml is not readable XML; the default folders are used
+
+Server path: the server clones the whole repo to
+`<server-root>\\RepositorySiteGather\\Sites\\<repo>_<branch>_<8 hex>\\Source\\`
+and each file's path relative to the REPO root (not the site root) follows
+that. It must be at most --max-path (259: MAX_PATH 260 includes the NUL),
+counted in UTF-16 units. <repo> is the git repo's name (--repo-name, default
+the origin remote's, else the repo folder's), not the BigFix site name.
+Over-long paths fail on 11.0.7 even with Windows long paths enabled.
+
+Auto-fix (the default; --check is a dry run that reports and changes
+nothing): each .bes file in the .bes folder is renamed at most once, combining
+E803, E804 and, if the path is still too long, E805. E805 builds
+`<ID> <Title><extension>` (no hyphen) from the first content object's
+<Title> (or the current name without its ID, if there is none), made ASCII
+and Windows-safe, cut to fit, with trailing spaces, dots and hyphens dropped.
+A name that already fits is left alone, even when it differs from <Title>.
+The ID never changes and no file moves between folders. Files without an ID
+are not given one: assigning IDs is a policy decision (CommunityContent uses
+a counter file; max+1 would reuse the IDs of deleted content), so there is
+no --assign-ids.
+
+How files are renamed: a tracked file with `git mv`, anything else with a
+plain rename. git mv stages the rename, so the next commit carries both the
+new name and the removal of the old one; a plain rename would leave an
+unstaged deletion plus an untracked file, and `git commit -a` (or
+`git add -u`) would then commit the deletion alone, dropping the content
+from the repo. Inside a pre-commit run the work tree matches the index,
+because pre-commit stashed unstaged changes in a patch it re-applies after
+the hooks; it cannot re-apply that patch to a renamed file, so a file named
+in the patch is left alone (E806; see pre_commit_stashed_paths). Any rename
+makes the hook exit 1, so the commit stops and the renames can be reviewed.
+
+Not in scope: more than one object per .bes file and Baselines (repository
+sites are thought to handle both); case conflicts and names Windows forbids
+(use check-case-conflict and check-illegal-windows-names from
+pre-commit-hooks >= 5.0.0); schemas, GroupRelevance and `//` comments (the
+bes-schema-validate, bes-relevance-convert-group and bes-conventions-check
+hooks); writing a siteConfig.xml for a blank repo.
 """
 
 import argparse

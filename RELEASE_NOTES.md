@@ -1,5 +1,21 @@
 # Release Notes
 
+## Unreleased
+
+### Added (bes-siterepo-validate-layout)
+
+- New hook `bes-siterepo-validate-layout` for BigFix Git External Custom Site
+  (repository site) repos (#30). It checks the site as a whole, from the
+  files `git ls-files` lists: the `.bes` folder layout (folder names from
+  `siteConfig.xml`), `.bes` file names (a numeric ID and a space or hyphen),
+  duplicate IDs compared as integers per site (#33), and the path length on
+  the server. `--site-root` can be repeated for a repo of several sites.
+- By default it renames `.bes` files with `git mv`, at most once each: zero
+  padding stripped from the ID (#33), non-ASCII folded to ASCII (#32), and a
+  name too long for the server path shortened to `<ID> <Title>.bes`. The ID
+  never changes. Any rename fails the hook so it can be reviewed; `--check`
+  is a dry run. Codes `E800`-`E806` and `W800`-`W807`; see the README.
+
 ## v1.12.0
 
 ### Added (bes-schema-validate)
