@@ -296,16 +296,22 @@ def _windows_safe(char):
 def fold_ascii(text):
     """Return `text` with each non-ASCII character replaced by ASCII (#32).
 
-    ASCII_TABLE first, then Unicode NFKD with the combining marks dropped
+    The text is first composed (NFC), so a decomposed accent (a combining
+    mark after its letter, as macOS writes names) joins its letter. Then
+    ASCII_TABLE, then Unicode NFKD with the combining marks dropped
     (\u00e9 -> e, \u2122 -> TM); a character with no Windows-safe ASCII
-    equivalent becomes `_`. ASCII characters are left as they are.
+    equivalent becomes `_`. A combining mark with no letter to join, and an
+    invisible format character (category Cf: zero-width space, BOM), are
+    dropped. ASCII characters are left as they are.
     """
     out = []
-    for char in text:
+    for char in unicodedata.normalize("NFC", text):
         if char.isascii():
             out.append(char)
         elif char in ASCII_TABLE:
             out.append(ASCII_TABLE[char])
+        elif unicodedata.combining(char) or unicodedata.category(char) == "Cf":
+            continue
         else:
             decomposed = "".join(
                 c
