@@ -516,12 +516,13 @@ def _shortest_name(path):
     return f"{folder}/{short}" if folder else short
 
 
-def _check_lengths(results, files, gathered, prefix, max_path):
+def _check_lengths(results, files, gathered, prefix, max_path, disabled=frozenset()):
     """W805 and E802: server paths over `max_path`.
 
     `gathered` are the .bes files in a site's .bes folder; the rename fix
     can shorten those, so only one even the shortest name cannot bring
-    under the limit is reported here (E802). Every other tracked file is a
+    under the limit is reported here (E802), or, with the E805 fix
+    disabled, any of them that is too long. Every other tracked file is a
     W805: the server clones the whole repo, so a long path anywhere breaks
     the sync, but actions may refer to those files by name.
     """
@@ -554,6 +555,13 @@ def _check_lengths(results, files, gathered, prefix, max_path):
                     f"{over}, and even the shortest name ({shortest}) would be "
                     f"{shortest_length}: the folders are too long. Renaming a "
                     "folder changes its .fxf or digest, so this is not fixed",
+                )
+            elif "E805" in disabled:
+                results.issue(
+                    path,
+                    "E802",
+                    f"{over}; renaming it to <ID> <Title> would fix it, but "
+                    "E805 is disabled",
                 )
 
 
@@ -830,7 +838,7 @@ def check_repo(
         bes_paths = _check_layout(results, site, site_files, config)
         _check_ids(results, bes_paths)
         gathered.update(bes_paths)
-    _check_lengths(results, files, gathered, prefix, max_path)
+    _check_lengths(results, files, gathered, prefix, max_path, disabled)
     renamer = _Renamer(root, files, prefix, max_path, disabled, held)
     renamer.temporary_index = temporary_index
     for path in sorted(gathered):
