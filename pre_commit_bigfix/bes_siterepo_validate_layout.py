@@ -33,7 +33,19 @@ SITE_CONFIG = "siteConfig.xml"
 SITE_CONFIG_ELEMENTS = ("BesFileDir", "NonClientFilesDir", "OtherFilesDir")
 
 KNOWN_CODES = frozenset(
-    {"E800", "E801", "W800", "W801", "W802", "W803", "W804", "W806", "W807"}
+    {
+        "E800",
+        "E801",
+        "E802",
+        "W800",
+        "W801",
+        "W802",
+        "W803",
+        "W804",
+        "W805",
+        "W806",
+        "W807",
+    }
 )
 
 # a numeric ID, then a space or a hyphen: `42- Name.bes`, `42 Name.bes`
@@ -218,6 +230,12 @@ class _Results:
         ]
 
 
+def _id_of(path):
+    """The numeric ID a .bes file's name starts with, as an int, or None."""
+    match = ID_PREFIX_RE.match(path.rsplit("/", 1)[-1])
+    return int(match.group(1)) if match else None
+
+
 def _check_ids(results, bes_paths):
     """E800, W806 and E801 for the .bes files of one site's .bes folder."""
     by_id = collections.defaultdict(list)
@@ -325,20 +343,87 @@ def _check_layout(results, site, site_files, config):
     return bes_paths
 
 
-def check_repo(root, files, site_roots=("",), *, disabled=frozenset(), **_options):
+def _shortest_name(path):
+    """The shortest name the length fix could give a .bes file: `<ID> X.bes`."""
+    folder, _, name = path.rpartition("/")
+    extension = os.path.splitext(name)[1]
+    short = f"{_id_of(path)} X{extension}"
+    return f"{folder}/{short}" if folder else short
+
+
+def _check_lengths(results, files, gathered, prefix, max_path):
+    """W805 and E802: server paths over `max_path`.
+
+    `gathered` are the .bes files in a site's .bes folder; the rename fix
+    can shorten those, so only one even the shortest name cannot bring
+    under the limit is reported here (E802). Every other tracked file is a
+    W805: the server clones the whole repo, so a long path anywhere breaks
+    the sync, but actions may refer to those files by name.
+    """
+    for path in files:
+        length = server_path_length(prefix, path)
+        if length <= max_path:
+            continue
+        over = f"server path is {length} characters, over the {max_path} limit"
+        if path not in gathered:
+            results.issue(
+                path,
+                "W805",
+                f"{over}; shorten it by hand (not renamed automatically, since "
+                "actions may refer to it by name)",
+            )
+        elif _id_of(path) is None:
+            results.issue(
+                path,
+                "E802",
+                f"{over}, and with no numeric ID there is no short name to "
+                "rename it to",
+            )
+        else:
+            shortest = _shortest_name(path)
+            shortest_length = server_path_length(prefix, shortest)
+            if shortest_length > max_path:
+                results.issue(
+                    path,
+                    "E802",
+                    f"{over}, and even the shortest name ({shortest}) would be "
+                    f"{shortest_length}: the folders are too long. Renaming a "
+                    "folder changes its .fxf or digest, so this is not fixed",
+                )
+
+
+def check_repo(
+    root,
+    files,
+    site_roots=("",),
+    *,
+    prefix=None,
+    max_path=DEFAULT_MAX_PATH,
+    disabled=frozenset(),
+    **_options,
+):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
     `files` are the repo-relative paths to consider (normally `git ls-files`)
     and `site_roots` the repo-relative folders holding a site ("" is the repo
-    root). This is the programmatic entry point: it does no printing.
+    root). `prefix` is the server folder the repo is cloned into (see
+    server_prefix(); by default the default server root, the repo's name and
+    branch main). This is the programmatic entry point: it does no printing.
     """
+    if prefix is None:
+        prefix = server_prefix(
+            DEFAULT_SERVER_ROOT, default_repo_name(root), DEFAULT_BRANCH
+        )
     results = _Results()
+    gathered = set()
     for site, site_files in _assign_sites(files, site_roots).items():
         config = read_site_config(root, site, files)
         if config.issue:
             results.issue(_join(site, SITE_CONFIG), *config.issue[1:])
         bes_paths = _check_layout(results, site, site_files, config)
         _check_ids(results, bes_paths)
+        gathered.update(bes_paths)
+    _check_lengths(results, files, gathered, prefix, max_path)
     return results.as_list(disabled)
 
 
@@ -377,6 +462,30 @@ def main(argv=None, list_files=git_ls_files):
             "for a repo of several sites (default: the repo root)"
         ),
     )
+    parser.add_argument(
+        "--server-root",
+        default=DEFAULT_SERVER_ROOT,
+        help=f"the BES Server install folder (default: {DEFAULT_SERVER_ROOT})",
+    )
+    parser.add_argument(
+        "--repo-name",
+        help=(
+            "the repo name the server names its clone after (default: the last "
+            "part of the origin remote URL, or the repo folder's name)"
+        ),
+    )
+    parser.add_argument(
+        "--branch",
+        default=DEFAULT_BRANCH,
+        help=f"the branch the site syncs from (default: {DEFAULT_BRANCH})",
+    )
+    parser.add_argument(
+        "--max-path",
+        type=int,
+        default=DEFAULT_MAX_PATH,
+        metavar="N",
+        help=f"longest allowed server path (default: {DEFAULT_MAX_PATH})",
+    )
     args = parser.parse_args(argv)
 
     disabled = {
@@ -406,7 +515,17 @@ def main(argv=None, list_files=git_ls_files):
         site_roots.append("" if rel == os.curdir else rel.replace(os.sep, "/"))
 
     issue_count, warning_count, fix_count = bes_common.report(
-        check_repo(root, files, site_roots, disabled=disabled, check=args.check)
+        check_repo(
+            root,
+            files,
+            site_roots,
+            prefix=server_prefix(
+                args.server_root, args.repo_name or default_repo_name(root), args.branch
+            ),
+            max_path=args.max_path,
+            disabled=disabled,
+            check=args.check,
+        )
     )
     if warning_count:
         print(f"{warning_count} site layout warning(s).")

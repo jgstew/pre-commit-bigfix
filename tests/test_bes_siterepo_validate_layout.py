@@ -676,7 +676,8 @@ def test_w805_long_non_bes_path(tmp_path):
 
 
 def test_w805_counts_the_prefix(tmp_path):
-    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None, "OtherFiles/x.txt": "x"})
+    # no .bes file, which would be over the limit too
+    repo = make_repo(tmp_path, {"OtherFiles/x.txt": "x"})
     # 16 characters of path; 50 - 16 = 34 left for the prefix
     assert run(repo, check=True, prefix="P" * 34, max_path=50) == {}
     assert run(repo, check=True, prefix="P" * 35, max_path=50) == {
