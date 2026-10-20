@@ -9,8 +9,12 @@ siteConfig.xml folder names, the naming and duplicate-ID errors, the layout
 warnings, path length, the rename auto-fix, --check, and main()'s exit codes.
 """
 
+import json
 import os
+import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1086,3 +1090,140 @@ def test_main_check_renames_nothing(tmp_path, monkeypatch, capsys):
     assert listing(repo) == ["Fixlets/A/0042- X.bes"]
     staged = git(repo, "diff", "--cached", "--name-status", "-z")
     assert staged == "A\0Fixlets/A/0042- X.bes\0"
+
+
+# --- renames inside a pre-commit run ------------------------------------------
+
+
+def write_patch(home, pid, repo, edits):
+    """Write a pre-commit-style stash patch of `edits` {path: appended line}."""
+    for rel, line in edits.items():
+        with open(Path(repo) / rel, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    patch = git(repo, "diff", "--binary", "--no-color", "--no-ext-diff")
+    git(repo, "checkout", "--", ".")
+    home.mkdir(parents=True, exist_ok=True)
+    (home / f"patch1792519987-{pid}").write_text(patch, encoding="utf-8")
+
+
+def test_pre_commit_stashed_paths(tmp_path):
+    repo = make_repo(
+        tmp_path, {"Fixlets/A/0042- X.bes": None, "Fixlets/A/1- \u20ac.bes": None}
+    )
+    home = tmp_path / "pc-home"
+    write_patch(home, 4242, repo, {"Fixlets/A/1- \u20ac.bes": "edit\n"})
+    environ = {"PRE_COMMIT_HOME": str(home)}
+    assert hook.pre_commit_stashed_paths(str(repo), 4242, environ) == {
+        "Fixlets/A/1- \u20ac.bes"
+    }
+    # another process's patch is not ours
+    assert hook.pre_commit_stashed_paths(str(repo), 4243, environ) == set()
+
+
+def test_pre_commit_stashed_paths_cache_locations(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None})
+    write_patch(tmp_path / "xdg" / "pre-commit", 7, repo, {"Fixlets/A/1- a.bes": "e\n"})
+    found = hook.pre_commit_stashed_paths(
+        str(repo), 7, {"XDG_CACHE_HOME": str(tmp_path / "xdg")}
+    )
+    assert found == {"Fixlets/A/1- a.bes"}
+    write_patch(
+        tmp_path / ".cache" / "pre-commit", 8, repo, {"Fixlets/A/1- a.bes": "e\n"}
+    )
+    found = hook.pre_commit_stashed_paths(str(repo), 8, {"HOME": str(tmp_path)})
+    assert found == {"Fixlets/A/1- a.bes"}
+
+
+def test_held_files_are_not_renamed(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/0042- X.bes": None, "Fixlets/A/0043- Y.bes": None}
+    )
+    found = messages(root, files=files, held={"Fixlets/A/0042- X.bes"})
+    assert [(p, c) for p, c, m in found] == [
+        ("Fixlets/A/0042- X.bes", "E806"),
+        ("Fixlets/A/0043- Y.bes", "E803"),
+    ]
+    assert "unstaged" in found[0][2]
+    assert listing(root) == ["Fixlets/A/0042- X.bes", "Fixlets/A/43- Y.bes"]
+
+
+def test_main_renames_an_untracked_listed_file_without_git(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- ok.bes": None})
+    (repo / "Fixlets/A/0042- X.bes").write_text(bes(), encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    def lister(_root):
+        return ["Fixlets/A/0042- X.bes", "Fixlets/A/1- ok.bes"]
+
+    assert hook.main([], list_files=lister) == 1
+    assert listing(repo) == ["Fixlets/A/1- ok.bes", "Fixlets/A/42- X.bes"]
+    # still untracked: git mv would have refused it
+    assert "Fixlets/A/42- X.bes" not in git(repo, "ls-files")
+
+
+PRE_COMMIT = shutil.which("pre-commit")
+
+
+def pre_commit_repo(tmp_path):
+    """A committed site repo whose pre-commit config runs this hook."""
+    module = Path(hook.__file__).resolve()
+    repo = make_repo(
+        tmp_path,
+        {
+            ".pre-commit-config.yaml": (
+                "repos:\n  - repo: local\n    hooks:\n      - id: layout\n"
+                "        name: layout\n"
+                f"        entry: {json.dumps(shlex.join([sys.executable, str(module)]))}\n"
+                "        language: system\n        pass_filenames: false\n"
+                "        always_run: true\n"
+            ),
+            "Fixlets/A/0042- X.bes": None,
+            "Fixlets/A/1- ok.bes": None,
+        },
+    )
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    return repo
+
+
+def pre_commit_run(repo, tmp_path):
+    env = dict(os.environ, PRE_COMMIT_HOME=str(tmp_path / "pc-home"))
+    return subprocess.run(
+        [PRE_COMMIT, "run"], cwd=repo, env=env, capture_output=True, text=True
+    )
+
+
+@pytest.mark.skipif(PRE_COMMIT is None, reason="pre-commit is not installed")
+def test_pre_commit_run_stages_the_rename(tmp_path):
+    repo = pre_commit_repo(tmp_path)
+    with open(repo / "Fixlets/A/0042- X.bes", "a", encoding="utf-8") as handle:
+        handle.write("staged\n")
+    git(repo, "add", "-A")
+    result = pre_commit_run(repo, tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "[E803] auto-fixed" in result.stdout
+    staged = git(repo, "diff", "--cached", "--name-status", "-M", "-z").split("\0")
+    assert staged[0].startswith("R")
+    assert staged[1:3] == ["Fixlets/A/0042- X.bes", "Fixlets/A/42- X.bes"]
+    assert pre_commit_run(repo, tmp_path).returncode == 0
+
+
+@pytest.mark.skipif(PRE_COMMIT is None, reason="pre-commit is not installed")
+def test_pre_commit_run_leaves_a_file_with_unstaged_edits(tmp_path):
+    # pre-commit stashes the unstaged edit and must re-apply it to the same
+    # path afterwards; renaming that file would make it fail and crash
+    repo = pre_commit_repo(tmp_path)
+    path = repo / "Fixlets/A/0042- X.bes"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("staged\n")
+    git(repo, "add", "-A")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("unstaged\n")
+    result = pre_commit_run(repo, tmp_path)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert "[E806]" in output
+    assert "unexpected error" not in output.lower()
+    assert path.read_text(encoding="utf-8").endswith("staged\nunstaged\n")
+    assert (
+        git(repo, "diff", "--cached", "--name-only", "-z") == "Fixlets/A/0042- X.bes\0"
+    )
