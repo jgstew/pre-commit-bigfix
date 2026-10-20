@@ -932,7 +932,14 @@ def _parent_pid_windows(pid):
         ]
 
     kernel32 = ctypes.windll.kernel32
+    # declared, so a HANDLE is passed whole rather than as a C int
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
     kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for walk in (kernel32.Process32FirstW, kernel32.Process32NextW):
+        walk.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        walk.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
     snapshot = kernel32.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
     if not snapshot or snapshot == wintypes.HANDLE(-1).value:
         return None
@@ -961,7 +968,7 @@ def _parent_pid(pid):
             check=False,
         ).stdout.strip()
         return int(out) if out else None
-    except (OSError, ValueError, AttributeError):
+    except Exception:  # noqa: BLE001 - e.g. ctypes.ArgumentError: fail safe
         return None
 
 
