@@ -1416,3 +1416,16 @@ def test_fold_ascii_combining_mark_without_a_precomposed_form():
 def test_fold_ascii_drops_format_characters(text, folded):
     # zero-width space, BOM and zero-width joiner are invisible (category Cf)
     assert hook.fold_ascii(text) == folded
+
+
+def test_disable_e805_still_reports_the_long_path(tmp_path, monkeypatch, capsys):
+    # turning off the rename must not turn off the path-length check
+    long_name = "Fixlets/A/42- " + "L" * 140 + ".bes"
+    repo = make_repo(tmp_path, {long_name: None})
+    found = messages(repo, check=True, disabled={"E805"})
+    assert [(p, c) for p, c, m in found] == [(long_name, "E802")]
+    assert "E805" in found[0][2]  # says the fix is turned off
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check", "--disable", "E805"]) == 1
+    assert hook.main(["--disable", "E805"]) == 1
+    assert listing(repo) == [long_name]
