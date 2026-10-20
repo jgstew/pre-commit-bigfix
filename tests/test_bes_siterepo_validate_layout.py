@@ -22,6 +22,18 @@ import pytest
 
 from pre_commit_bigfix import bes_siterepo_validate_layout as hook
 
+
+@pytest.fixture(autouse=True)
+def no_outer_git_hook_env(monkeypatch):
+    """Drop git's hook variables, in case the suite runs inside a git hook.
+
+    git sets GIT_INDEX_FILE (and may set GIT_DIR) for hooks; inherited, they
+    would point the tests' git commands at the outer repo's index.
+    """
+    for name in ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX"):
+        monkeypatch.delenv(name, raising=False)
+
+
 # confirmed on James's BigFix server for jgstew/bigfix-site-reporting-jgstew
 CONFIRMED_SOURCE = (
     "C:\\Program Files (x86)\\BigFix Enterprise\\BES Server\\RepositorySiteGather"
@@ -1460,3 +1472,78 @@ def test_stash_found_through_a_launcher_process(tmp_path, monkeypatch):
 def test_parent_pid():
     assert hook._parent_pid(os.getpid()) == os.getppid()
     assert hook._parent_pid(2**22 + 12345) is None  # no such process
+
+
+# --- review nits --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("./Content", "Content"),
+        ("Content/./", "Content"),
+        (".\\Content\\", "Content"),
+        ("Content/Sub/../Fixlets", "Content/Fixlets"),
+        (".", "Fixlets"),  # names no folder, so the default stands
+    ],
+)
+def test_site_config_folder_is_normalized(tmp_path, value, expected):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": f"<SiteConfig><BesFileDir>{value}</BesFileDir></SiteConfig>"
+        },
+    )
+    config = hook.read_site_config(str(repo), "", hook.git_ls_files(repo))
+    assert config.bes_dir == expected
+
+
+def test_site_config_dot_slash_folder_has_no_false_warnings(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": "<SiteConfig><BesFileDir>./Content</BesFileDir></SiteConfig>",
+            "Content/A/42- x.bes": None,
+        },
+    )
+    assert run(repo, check=True) == {}
+
+
+@pytest.mark.parametrize(
+    ("url", "name"),
+    [
+        ("C:\\repos\\my-site", "my-site"),
+        ("\\\\server\\share\\my-site.git", "my-site"),
+        ("https://h/o/My-Site.GIT", "My-Site"),
+    ],
+)
+def test_repo_name_from_local_and_windows_remotes(url, name):
+    assert hook.repo_name_from_url(url) == name
+
+
+def test_e805_title_without_letters_or_digits_falls_back(tmp_path):
+    root, files = plain_repo(
+        tmp_path,
+        {"Fixlets/A/0012- Fallback name here " + "n" * 40 + ".bes": bes("???***")},
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    assert listing(root) == ["Fixlets/A/12 Fallback name here nnnn.bes"]
+
+
+def test_held_message_names_who_could_not_restore(tmp_path):
+    root, files = plain_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    found = messages(root, files=files, held={"Fixlets/A/0042- X.bes"})
+    assert "pre-commit could not" in found[0][2]
+
+
+def test_server_prefix_uses_slashes_for_a_posix_server_root():
+    prefix = hook.server_prefix("/var/opt/BESServer/", "r", "main")
+    assert (
+        prefix
+        == "/var/opt/BESServer/RepositorySiteGather/Sites/r_main_00000000/Source/"
+    )
+    # every separator is one character either way, so lengths do not change
+    windows = hook.server_prefix("C:\\BESServer", "r", "main")
+    assert hook.server_path_length(prefix, "a/b.bes") - len(prefix) == (
+        hook.server_path_length(windows, "a/b.bes") - len(windows)
+    )

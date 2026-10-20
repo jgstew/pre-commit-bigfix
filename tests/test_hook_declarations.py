@@ -139,10 +139,11 @@ def test_bes_schema_validate_files_pattern(path, matched):
 
 
 def test_bes_siterepo_validate_layout_checks_the_whole_repo():
-    """It reads `git ls-files` itself, so pre-commit must not pass file names,
-    and it must run even when no staged file matches (a deletion can leave a.
+    """The layout hook must check the whole repo on every commit.
 
-    site without content, say).
+    It reads `git ls-files` itself, so pre-commit must not pass file names,
+    and it must run even when no staged file matches: deleting a file can
+    leave a site without content, say.
     """
     hook = load_hooks()["bes-siterepo-validate-layout"]
     assert hook["entry"] == "bes-siterepo-validate-layout"
