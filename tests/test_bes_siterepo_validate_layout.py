@@ -1453,6 +1453,7 @@ def test_stash_found_through_a_launcher_process(tmp_path, monkeypatch):
     write_patch(home, 200, repo, {"Fixlets/A/1- a.bes": "e\n"})
     chain = {100: 200, 200: 300, 300: 400}
     monkeypatch.setattr(hook, "_parent_pid", chain.get)
+    monkeypatch.setattr(hook, "_is_windows", lambda: True)
     environ = {"PRE_COMMIT_HOME": str(home)}
     assert hook.pre_commit_stashed_paths(str(repo), 100, environ) == {
         "Fixlets/A/1- a.bes"
@@ -1627,3 +1628,32 @@ def test_w808_case_only_differences(tmp_path):
 def test_w808_upper_case_bes_name_without_an_id(tmp_path):
     repo = make_repo(tmp_path, {"Fixlets/A/Name.BES": None})
     assert run(repo, check=True) == {"Fixlets/A/Name.BES": ["E800", "W808"]}
+
+
+def test_stash_lookup_is_the_parent_only_off_windows(tmp_path, monkeypatch):
+    # pre-commit never deletes its patch files, and on Linux and macOS the
+    # grandparent is git or a shell: an old patch whose pid matches one of
+    # those would hold a file with no unstaged changes. Only Windows has a
+    # launcher between pre-commit and the hook.
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None, "Fixlets/A/2- b.bes": None})
+    home = tmp_path / "pc-home"
+    write_patch(home, 200, repo, {"Fixlets/A/1- a.bes": "e\n"})  # grandparent
+    write_patch(home, 100, repo, {"Fixlets/A/2- b.bes": "e\n"})  # parent
+    asked = []
+
+    def parent_of(pid):
+        asked.append(pid)
+        return {100: 200, 200: 300}.get(pid)
+
+    monkeypatch.setattr(hook, "_parent_pid", parent_of)
+    monkeypatch.setattr(hook, "_is_windows", lambda: False)
+    environ = {"PRE_COMMIT_HOME": str(home)}
+    assert hook.pre_commit_stashed_paths(str(repo), 100, environ) == {
+        "Fixlets/A/2- b.bes"
+    }
+    assert asked == []  # no process lookup at all
+    monkeypatch.setattr(hook, "_is_windows", lambda: True)
+    assert hook.pre_commit_stashed_paths(str(repo), 100, environ) == {
+        "Fixlets/A/1- a.bes",
+        "Fixlets/A/2- b.bes",
+    }
