@@ -85,6 +85,7 @@ import argparse
 import collections
 import glob
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -167,12 +168,16 @@ SiteConfig = collections.namedtuple(
 def server_prefix(server_root, repo_name, branch, commit_hash=HASH_PLACEHOLDER):
     r"""Return the server folder a repo file's relative path is appended to.
 
-    That is `<server_root>\RepositorySiteGather\Sites\<repo>_<branch>_<hash>\Source\`.
+    That is `<server_root>\RepositorySiteGather\Sites\<repo>_<branch>_<hash>\Source\`,
+    joined with `/` instead when `server_root` is a POSIX path. Only the
+    Windows layout is confirmed; a separator is one character either way,
+    so the length is the same.
     """
+    sep = "/" if server_root.startswith("/") else "\\"
     root = server_root.rstrip("\\/")
-    return (
-        f"{root}\\RepositorySiteGather\\Sites\\"
-        f"{repo_name}_{branch}_{commit_hash}\\Source\\"
+    return sep.join(
+        [root, "RepositorySiteGather", "Sites", f"{repo_name}_{branch}_{commit_hash}"]
+        + ["Source", ""]
     )
 
 
@@ -189,14 +194,15 @@ def server_path_length(prefix, rel_path):
 def repo_name_from_url(url):
     """The last part of a git remote URL, without `.git`.
 
-    Handles https://host/owner/name(.git), ssh://host/owner/name.git and the
-    scp-like git@host:owner/name.git.
+    Handles https://host/owner/name(.git), ssh://host/owner/name.git, the
+    scp-like git@host:owner/name.git, and local paths, Windows ones too
+    (C:\\repos\\name, \\\\server\\share\\name.git). `.git` matches in any case.
     """
-    name = url.strip().rstrip("/")
+    name = url.strip().replace("\\", "/").rstrip("/")
     name = name.replace(":", "/").rsplit("/", 1)[-1]
     # not str.removesuffix(): that needs Python 3.9, and this supports 3.8
     stem, extension = os.path.splitext(name)
-    return stem if extension == ".git" else name
+    return stem if extension.lower() == ".git" else name
 
 
 def _git(repo_root, *args):
@@ -242,8 +248,16 @@ def _join(site_root, rel):
 
 
 def _clean_dir(text):
-    """A folder name from siteConfig.xml, without surrounding space or slashes."""
-    return (text or "").strip().replace("\\", "/").strip("/")
+    """A folder name from siteConfig.xml, without surrounding space or slashes.
+
+    `./Content`, `.\\Content\\` and `Content/./` all mean Content; `.` (or
+    nothing) names no folder, so the caller uses the default.
+    """
+    text = (text or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    text = posixpath.normpath(text).strip("/")
+    return "" if text == "." else text
 
 
 def read_site_config(root, site_root, files):
@@ -608,7 +622,8 @@ class _Renamer:
             room = self.max_path - self._length(stem + extension)
             if room >= 1:  # otherwise _check_lengths reported E802
                 title = read_title(os.path.join(self.root, path))
-                if title is None or not safe_title(title):
+                # a Title of only forbidden characters would give `42 ___`
+                if title is None or not any(c.isalnum() for c in safe_title(title)):
                     # the current name, without its ID prefix
                     title = os.path.splitext(name[len(digits) :])[0].lstrip(" -")
                 short = safe_title(title)[:room].rstrip(" .-")
@@ -645,9 +660,9 @@ class _Renamer:
             results.issue(
                 path,
                 "E806",
-                f"not renamed to {new}: it has unstaged changes that pre-commit "
-                "set aside for this run, and could not restore to a renamed "
-                "file; stage or stash them, then run again",
+                f"not renamed to {new}: pre-commit set aside its unstaged "
+                "changes for this run, and pre-commit could not restore them "
+                "to a renamed file; stage or stash them, then run again",
             )
             return
         holder = self._holder(path, new_path)
