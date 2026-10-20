@@ -408,8 +408,9 @@ def read_title(path):
 def _within(rel, folder):
     """`rel` relative to `folder` if it is inside it, else None.
 
-    Compared case-insensitively: the server runs on Windows, where
-    `fixlets/` and `Fixlets/` are the same folder.
+    Compared ignoring case, so nothing goes unchecked: on a Windows root
+    server `fixlets/` and `Fixlets/` are the same folder. A RHEL root server
+    is case-sensitive, so a match that holds only this way is flagged W808.
     """
     if not folder:
         return rel
