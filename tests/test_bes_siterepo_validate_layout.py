@@ -1735,6 +1735,6 @@ def test_no_title_left_reports_the_limit_that_was_hit(tmp_path):
     found = messages(root, files=[name], check=True, prefix="", max_path=4000)
     assert [c for p, c, m in found] == ["E808"]
     assert "255" in found[0][2] and "no title" in found[0][2]
-    # the path limit triggered it: E802, the path code
-    found = messages(root, files=[name], check=True, prefix="", max_path=270)
+    # the path limit triggered it (268 > 260): E802, the path code
+    found = messages(root, files=[name], check=True, prefix="", max_path=260)
     assert [c for p, c, m in found] == ["E802"]

@@ -773,10 +773,11 @@ class _Renamer:
                     new = f"{number} {short}{extension}"
                     reasons.append(("E805", why))
                 else:
+                    # E802 is the path code, E808 the name code
                     results.issue(
                         path,
-                        "E802",
-                        f"{why}, and there is no title to build a shorter " "name from",
+                        "E802" if length > self.max_path else "E808",
+                        f"{why}, and there is no title to build a shorter name from",
                     )
         return new, reasons
 
