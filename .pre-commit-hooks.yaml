@@ -401,3 +401,33 @@
   pass_filenames: True
   types: [text]
   files: \.bes$
+- id: bes-siterepo-validate-layout
+  name: Validate a BigFix Git External Custom Site's layout and file names
+  description: >
+    Checks a BigFix Git External Custom Site ("repository site") repo as a
+    whole, from the files git tracks: the .bes folder, NonClient and Other
+    folders named in siteConfig.xml (default Fixlets, NonClientFiles,
+    OtherFiles); .bes file names (numeric ID then a space or hyphen, E800);
+    duplicate IDs compared as integers per site (E801); and limits for both
+    Windows and RHEL root servers: the server path
+    (<server-root>\RepositorySiteGather\Sites\<repo>_<branch>_<8 hex>\Source\
+    plus the repo-relative path) at most 259 characters, and each name at
+    most 255 bytes in UTF-8. Renames .bes files by default, at
+    most once each, with git mv: zero padding stripped (E803), non-ASCII
+    folded (E804), an over-long name shortened to "<ID> <Title>.bes" (E805);
+    E806 a rename skipped (name taken, unstaged changes, or a temporary
+    index from git commit -a). E802 a .bes path the rename cannot fix, E807
+    another file's path too long, E808 a name over 255 bytes. Warnings:
+    W800 .bes outside the .bes folder, W801 .bes at the wrong depth, W802
+    other files in the .bes folder (.xsd too), W803 a renamed folder that
+    does not exist, W804 a site with no content, W806 ID outside
+    1..2147483647, W807 siteConfig.xml not readable, W808 a name that
+    matches only when case is ignored. Exits 1 on any E-code or rename;
+    --check is a dry run. Out of scope: schemas, GroupRelevance and //
+    comments (other hooks here), case conflicts and Windows-illegal names
+    (check-case-conflict, check-illegal-windows-names), more than one object
+    per file, assigning IDs (deferred), and setting up a blank repo.
+  entry: bes-siterepo-validate-layout
+  language: python
+  pass_filenames: false
+  always_run: true
