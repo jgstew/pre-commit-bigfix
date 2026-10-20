@@ -1429,3 +1429,34 @@ def test_disable_e805_still_reports_the_long_path(tmp_path, monkeypatch, capsys)
     assert hook.main(["--check", "--disable", "E805"]) == 1
     assert hook.main(["--disable", "E805"]) == 1
     assert listing(repo) == [long_name]
+
+
+# --- finding pre-commit's stash through a launcher ----------------------------
+
+
+def test_stash_found_through_a_launcher_process(tmp_path, monkeypatch):
+    # on Windows a console script is an .exe launcher that starts python.exe
+    # as its child, so pre-commit is the hook's grandparent, not its parent
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None})
+    home = tmp_path / "pc-home"
+    write_patch(home, 200, repo, {"Fixlets/A/1- a.bes": "e\n"})
+    chain = {100: 200, 200: 300, 300: 400}
+    monkeypatch.setattr(hook, "_parent_pid", chain.get)
+    environ = {"PRE_COMMIT_HOME": str(home)}
+    assert hook.pre_commit_stashed_paths(str(repo), 100, environ) == {
+        "Fixlets/A/1- a.bes"
+    }
+    # three generations at most: pre-commit is never further away than that
+    assert hook.pre_commit_stashed_paths(str(repo), 50, environ) == set()
+    chain[50] = 100
+    assert hook.pre_commit_stashed_paths(str(repo), 50, environ) == {
+        "Fixlets/A/1- a.bes"
+    }
+    chain[25] = 50
+    assert hook.pre_commit_stashed_paths(str(repo), 25, environ) == set()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses ps")
+def test_parent_pid():
+    assert hook._parent_pid(os.getpid()) == os.getppid()
+    assert hook._parent_pid(2**22 + 12345) is None  # no such process
