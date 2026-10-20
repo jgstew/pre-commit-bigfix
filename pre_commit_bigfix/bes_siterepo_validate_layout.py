@@ -177,9 +177,13 @@ def server_prefix(server_root, repo_name, branch, commit_hash=HASH_PLACEHOLDER):
 
 
 def server_path_length(prefix, rel_path):
-    """Length of `rel_path` on the server, in the UTF-16 units MAX_PATH counts."""
+    """Length of `rel_path` on the server, in the UTF-16 units MAX_PATH counts.
+
+    A name git listed as bytes that are not UTF-8 holds lone surrogates
+    (os.fsdecode); surrogatepass counts each as one unit instead of failing.
+    """
     full = prefix + rel_path.replace("/", "\\")
-    return len(full.encode("utf-16-le")) // 2
+    return len(full.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def repo_name_from_url(url):
@@ -328,7 +332,7 @@ def read_title(path):
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     try:
         titles = etree.parse(path, parser).xpath("/BES/*/Title")
-    except (OSError, etree.XMLSyntaxError):
+    except (OSError, ValueError, etree.XMLSyntaxError):  # ValueError: Unicode
         return None
     return "".join(titles[0].itertext()) if titles else None
 
@@ -697,7 +701,8 @@ def _rename(root, old, new, use_git):
                 ["git", "mv", "--", old, new],
                 cwd=root,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="backslashreplace",  # git echoes names that may not be UTF-8
                 check=False,
             )
         except OSError as err:
@@ -888,6 +893,10 @@ def main(argv=None, list_files=git_ls_files):
         help=f"longest allowed server path (default: {DEFAULT_MAX_PATH})",
     )
     args = parser.parse_args(argv)
+    # a file name that is not UTF-8 holds lone surrogates; show them escaped
+    # rather than fail on print
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
 
     disabled = {
         code.strip().upper() for code in args.disable.split(",") if code.strip()
