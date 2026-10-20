@@ -420,7 +420,8 @@ def test_e801_ignores_bes_files_outside_the_bes_folder(tmp_path):
     )
     flagged = sorted(p for p, c, m in messages(repo, check=True) if c == "E801")
     assert flagged == ["Fixlets/A/1- a.bes", "Fixlets/B/1 b.bes"]
-    assert "Archive" not in str(messages(repo, check=True))
+    e801 = [m for m in messages(repo, check=True) if m[1] == "E801"]
+    assert "Archive" not in str(e801)
 
 
 # --- W806 ID range ------------------------------------------------------------
@@ -467,3 +468,156 @@ def test_disable_drops_a_code(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     assert hook.main(["--check", "--disable", "E800"]) == 0
     assert run(repo, check=True, disabled={"E800"}) == {}
+
+
+# --- layout warnings ----------------------------------------------------------
+
+REPORTING_SITE_CONFIG = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n<SiteConfig>\n'
+    "  <BesFileDir>Fixlets</BesFileDir>\n"
+    "  <NonClientFilesDir>ServerFiles</NonClientFilesDir>\n"
+    "  <OtherFilesDir>ClientFiles</OtherFilesDir>\n</SiteConfig>\n"
+)
+
+
+def test_w800_bes_outside_the_bes_folder(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/1- ok.bes": None,
+            "tests/2- t.bes": None,
+            "OtherFiles/3- o.bes": None,
+            "4- root.bes": None,
+        },
+    )
+    assert run(repo, check=True) == {
+        "4- root.bes": ["W800"],
+        "OtherFiles/3- o.bes": ["W800"],
+        "tests/2- t.bes": ["W800"],
+    }
+    message = [m for p, c, m in messages(repo, check=True) if p == "4- root.bes"][0]
+    assert "Fixlets" in message
+
+
+def test_w800_ignores_files_outside_every_site_root(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Sites/A/Fixlets/X/1- ok.bes": None,
+            "Sites/A/2- stray.bes": None,
+            "tools/3- tool.bes": None,
+        },
+    )
+    assert run(repo, ["Sites/A"], check=True) == {"Sites/A/2- stray.bes": ["W800"]}
+
+
+def test_w801_bes_depth(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/1- top.bes": None,
+            "Fixlets/A/2- fxf.bes": None,
+            "Fixlets/A/B/3- digest.bes": None,
+            "Fixlets/A/B/C/4- deep.bes": None,
+        },
+    )
+    assert run(repo, check=True) == {
+        "Fixlets/1- top.bes": ["W801"],
+        "Fixlets/A/B/C/4- deep.bes": ["W801"],
+    }
+
+
+def test_w802_other_files_in_the_bes_folder(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/digest.xml": "<Digest/>",
+            "Fixlets/A/digest.xml": "<Digest/>",
+            "Fixlets/A/1- ok.bes": None,
+            "Fixlets/digest.xsd": "<xs/>",
+            "Fixlets/A/readme.txt": "x",
+            "Fixlets/A/x.ojo": "x",
+            "Fixlets/.gitkeep": "",
+        },
+    )
+    assert run(repo, check=True) == {
+        "Fixlets/.gitkeep": ["W802"],
+        "Fixlets/A/readme.txt": ["W802"],
+        "Fixlets/A/x.ojo": ["W802"],
+        "Fixlets/digest.xsd": ["W802"],
+    }
+    xsd = [m for p, c, m in messages(repo, check=True) if p.endswith(".xsd")][0]
+    assert "bes-schema-validate" in xsd
+
+
+def test_w803_named_folder_missing(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": REPORTING_SITE_CONFIG,
+            "Fixlets/A/1- a.bes": None,
+            "ServerFiles/x.ojo": "x",
+        },
+    )
+    found = messages(repo, check=True)
+    assert [(p, c) for p, c, m in found] == [("siteConfig.xml", "W803")]
+    assert "ClientFiles" in found[0][2]
+
+
+def test_w803_not_for_default_folders(tmp_path):
+    # without siteConfig.xml nothing names NonClientFiles/OtherFiles, so their
+    # absence is fine; the second site is the control
+    repo = make_repo(
+        tmp_path,
+        {
+            "Sites/A/Fixlets/X/1- a.bes": None,
+            "Sites/B/siteConfig.xml": REPORTING_SITE_CONFIG,
+            "Sites/B/Fixlets/X/1- a.bes": None,
+        },
+    )
+    found = run(repo, ["Sites/A", "Sites/B"], check=True)
+    assert found == {"Sites/B/siteConfig.xml": ["W803"]}
+
+
+def test_w804_site_without_content(tmp_path):
+    repo = make_repo(tmp_path, {"README.md": "x", "Fixlets/digest.xml": "<D/>"})
+    assert run(repo, check=True) == {".": ["W804"]}
+
+
+def test_w804_bes_outside_the_folder_is_not_content(tmp_path):
+    repo = make_repo(tmp_path, {"Archive/1- a.bes": None})
+    assert run(repo, check=True) == {".": ["W804"], "Archive/1- a.bes": ["W800"]}
+
+
+def test_w804_server_files_only_site_passes(tmp_path):
+    # the bigfix-site-reporting-jgstew shape; Sites/B (README only) is the control
+    repo = make_repo(
+        tmp_path,
+        {
+            "Sites/A/siteConfig.xml": REPORTING_SITE_CONFIG,
+            "Sites/A/Fixlets/digest.xml": "<D/>",
+            "Sites/A/ServerFiles/r.ojo": "x",
+            "Sites/A/ClientFiles/c.txt": "x",
+            "Sites/B/README.md": "x",
+        },
+    )
+    assert run(repo, ["Sites/A", "Sites/B"], check=True) == {"Sites/B": ["W804"]}
+
+
+def test_reporting_site_shape_only_warns_on_the_xsd(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            ".gitignore": "x\n",
+            "README.md": "x",
+            "LICENSE": "x",
+            "site.xml": "<Site/>",
+            "siteConfig.xml": REPORTING_SITE_CONFIG,
+            "Fixlets/digest.xsd": "<xs/>",
+            "ClientFiles/client-file.txt": "x",
+            "ServerFiles/relevance-debugger-console.ojo": "x",
+            "ServerFiles/relevance-debugger-webreport.beswrpt": "x",
+        },
+        name="bigfix-site-reporting-jgstew",
+    )
+    assert run(repo, check=True) == {"Fixlets/digest.xsd": ["W802"]}
