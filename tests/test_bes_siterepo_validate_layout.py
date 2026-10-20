@@ -1227,3 +1227,109 @@ def test_pre_commit_run_leaves_a_file_with_unstaged_edits(tmp_path):
     assert (
         git(repo, "diff", "--cached", "--name-only", "-z") == "Fixlets/A/0042- X.bes\0"
     )
+
+
+# --- commits that use a temporary index ---------------------------------------
+
+
+def hook_env(tmp_path):
+    """Environment for running pre-commit and git commit in a test repo."""
+    return dict(
+        os.environ,
+        PRE_COMMIT_HOME=str(tmp_path / "pc-home"),
+        GIT_AUTHOR_NAME="t",
+        GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t",
+        GIT_COMMITTER_EMAIL="t@t",
+    )
+
+
+def installed_hook_repo(tmp_path):
+    """Pre_commit_repo() with the hook installed as .git/hooks/pre-commit."""
+    repo = pre_commit_repo(tmp_path)
+    subprocess.run(
+        [PRE_COMMIT, "install"],
+        cwd=repo,
+        env=hook_env(tmp_path),
+        check=True,
+        capture_output=True,
+    )
+    return repo
+
+
+def git_commit(repo, tmp_path, *args):
+    """Run `git commit` (and so the installed hook) in `repo`."""
+    return subprocess.run(
+        ["git", "commit", *args],
+        cwd=repo,
+        env=hook_env(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+
+
+def status(repo):
+    """`git status --porcelain -z` entries as a sorted list."""
+    out = git(repo, "status", "--porcelain", "-z", "--untracked-files=all")
+    return sorted(entry for entry in out.split("\0") if entry)
+
+
+@pytest.mark.skipif(PRE_COMMIT is None, reason="pre-commit is not installed")
+@pytest.mark.parametrize(
+    "commit_args",
+    [["-a", "-m", "m"], ["-m", "m", "--", "Fixlets/A/0042- X.bes"]],
+    ids=["commit-a", "commit-pathspec"],
+)
+def test_temporary_index_commit_renames_nothing(tmp_path, commit_args):
+    # git commit -a and git commit <paths> give the hook a temporary index,
+    # which git discards when the hook fails: a git mv there would be lost,
+    # leaving the old name deleted and the new one untracked
+    repo = installed_hook_repo(tmp_path)
+    with open(repo / "Fixlets/A/0042- X.bes", "a", encoding="utf-8") as handle:
+        handle.write("edit\n")
+    result = git_commit(repo, tmp_path, *commit_args)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "[E806]" in output and "temporary index" in output
+    assert "auto-fixed" not in output
+    assert listing(repo) == [
+        ".pre-commit-config.yaml",
+        "Fixlets/A/0042- X.bes",
+        "Fixlets/A/1- ok.bes",
+    ]
+    assert status(repo) == [" M Fixlets/A/0042- X.bes"]
+    # a plain commit after git add renames and stages it as before
+    git(repo, "add", "-A")
+    result = git_commit(repo, tmp_path, "-m", "m")
+    assert result.returncode != 0
+    assert "[E803] auto-fixed" in result.stdout + result.stderr
+    assert status(repo) == ["R  Fixlets/A/42- X.bes", "Fixlets/A/0042- X.bes"]
+    assert git_commit(repo, tmp_path, "-m", "m").returncode == 0
+
+
+def test_uses_real_index(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None})
+    git_dir = os.path.join(str(repo), ".git")
+    assert hook.uses_real_index(str(repo), {})
+    assert hook.uses_real_index(
+        str(repo), {"GIT_INDEX_FILE": os.path.join(git_dir, "index")}
+    )
+    # relative to the repo root, as git may set it
+    assert hook.uses_real_index(str(repo), {"GIT_INDEX_FILE": ".git/index"})
+    assert not hook.uses_real_index(
+        str(repo), {"GIT_INDEX_FILE": os.path.join(git_dir, "index.lock")}
+    )
+    assert not hook.uses_real_index(
+        str(repo), {"GIT_INDEX_FILE": os.path.join(git_dir, "next-index-12.lock")}
+    )
+
+
+def test_temporary_index_reported_under_e806(tmp_path):
+    root, files = plain_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    found = messages(root, files=files, temporary_index=True)
+    assert [(p, c) for p, c, m in found] == [("Fixlets/A/0042- X.bes", "E806")]
+    assert "42- X.bes" in found[0][2] and "git add" in found[0][2]
+    assert listing(root) == ["Fixlets/A/0042- X.bes"]
+    # --check reports the fix as usual: nothing is renamed either way
+    found = messages(root, files=files, temporary_index=True, check=True)
+    assert [c for p, c, m in found] == ["E803"]
