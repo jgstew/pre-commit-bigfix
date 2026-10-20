@@ -576,7 +576,8 @@ def test_w803_not_for_default_folders(tmp_path):
         },
     )
     found = run(repo, ["Sites/A", "Sites/B"], check=True)
-    assert found == {"Sites/B/siteConfig.xml": ["W803"]}
+    # Sites/B names ServerFiles/ and ClientFiles/, and has neither
+    assert found == {"Sites/B/siteConfig.xml": ["W803", "W803"]}
 
 
 def test_w804_site_without_content(tmp_path):
@@ -621,3 +622,29 @@ def test_reporting_site_shape_only_warns_on_the_xsd(tmp_path):
         name="bigfix-site-reporting-jgstew",
     )
     assert run(repo, check=True) == {"Fixlets/digest.xsd": ["W802"]}
+
+
+def test_w803_not_for_default_names_spelled_out(tmp_path):
+    # CommunityContent and the RepositorySiteExample template name all three
+    # default folders in siteConfig.xml, and most sites have no
+    # NonClientFiles/ or OtherFiles/: those are optional, so that is fine.
+    # A renamed folder that is missing (Srv/) is still flagged.
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": (
+                "<SiteConfig><BesFileDir>Fixlets</BesFileDir>"
+                "<NonClientFilesDir>NonClientFiles</NonClientFilesDir>"
+                "<OtherFilesDir>OtherFiles</OtherFilesDir></SiteConfig>"
+            ),
+            "Fixlets/X/1- a.bes": None,
+            "Sites/B/siteConfig.xml": (
+                "<SiteConfig><NonClientFilesDir>Srv</NonClientFilesDir>"
+                "<OtherFilesDir>OtherFiles</OtherFilesDir></SiteConfig>"
+            ),
+            "Sites/B/Fixlets/X/1- a.bes": None,
+        },
+    )
+    found = messages(repo, ["", "Sites/B"], check=True)
+    assert [(p, c) for p, c, m in found] == [("Sites/B/siteConfig.xml", "W803")]
+    assert "Srv/" in found[0][2]
