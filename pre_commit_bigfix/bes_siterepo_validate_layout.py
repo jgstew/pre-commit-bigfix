@@ -8,6 +8,7 @@ this hook checks the site as a whole before it is pushed.
 
 import argparse
 import collections
+import glob
 import os
 import re
 import subprocess
@@ -481,8 +482,9 @@ class _Renamer:
     file, another planned rename or anything on disk is E806 instead.
     """
 
-    def __init__(self, root, files, prefix, max_path, disabled):
+    def __init__(self, root, files, prefix, max_path, disabled, held=frozenset()):
         self.root = root
+        self.held = held
         self.prefix = prefix
         self.max_path = max_path
         self.disabled = disabled
@@ -545,6 +547,15 @@ class _Renamer:
         if not reasons:
             return
         new_path = _join(path.rpartition("/")[0], new)
+        if path in self.held:
+            results.issue(
+                path,
+                "E806",
+                f"not renamed to {new}: it has unstaged changes that pre-commit "
+                "set aside for this run, and could not restore to a renamed "
+                "file; stage or stash them, then run again",
+            )
+            return
         holder = self._holder(path, new_path)
         if holder:
             why = "; ".join(reason for _code, reason in reasons)
@@ -571,7 +582,7 @@ class _Renamer:
             return "an untracked file"
         return None
 
-    def apply(self, results, check, use_git):
+    def apply(self, results, check, tracked):
         """Make the planned renames (or, under `check`, report them)."""
         for old, new_path, reasons in self.renames:
             new = new_path.rsplit("/", 1)[-1]
@@ -583,7 +594,7 @@ class _Renamer:
                         f"{reason}; would be renamed to {new} (run without --check)",
                     )
                 continue
-            error = _rename(self.root, old, new_path, use_git)
+            error = _rename(self.root, old, new_path, old in tracked)
             if error:
                 results.issue(old, "E806", f"could not rename to {new}: {error}")
                 continue
@@ -612,6 +623,53 @@ def _rename(root, old, new, use_git):
     return None
 
 
+def _pre_commit_home(environ):
+    """The folder pre-commit keeps its cache, and so its stash patches, in."""
+    if environ.get("PRE_COMMIT_HOME"):
+        return environ["PRE_COMMIT_HOME"]
+    cache = environ.get("XDG_CACHE_HOME") or os.path.join(
+        environ.get("HOME") or os.path.expanduser("~"), ".cache"
+    )
+    return os.path.join(cache, "pre-commit")
+
+
+def pre_commit_stashed_paths(root, pid=None, environ=None):
+    """Return the files whose unstaged changes pre-commit set aside for this run.
+
+    Before running hooks on staged files, pre-commit saves unstaged changes
+    as a patch named `patch<time>-<its pid>` in its cache folder, checks
+    them out, and re-applies the patch afterwards. Its pid is this hook's
+    parent's (`pid` defaults to os.getppid()). A file renamed in between
+    is not where the patch expects it, so pre-commit cannot restore those
+    changes and stops with an error. The file names are read with
+    `git apply --numstat -z`, which applies nothing. Outside a pre-commit
+    run, or with no unstaged changes, there is no such patch: empty set.
+    This relies on how pre-commit names the patch; if that changes, the set
+    is empty and such a file is renamed as before.
+    """
+    pid = os.getppid() if pid is None else pid
+    environ = os.environ if environ is None else environ
+    pattern = os.path.join(glob.escape(_pre_commit_home(environ)), f"patch*-{pid}")
+    paths = set()
+    for patch in glob.glob(pattern):
+        out = _git(root, "apply", "--numstat", "-z", os.path.abspath(patch))
+        # records are `added<TAB>deleted<TAB>path`; a rename is
+        # `added<TAB>deleted<TAB>`, then the old and new paths
+        fields = (out or b"").split(b"\0")
+        index = 0
+        while index < len(fields):
+            record = fields[index].split(b"\t", 2)
+            index += 1
+            if len(record) < 3:
+                continue
+            if record[2]:
+                paths.add(os.fsdecode(record[2]))
+            else:
+                paths.update(os.fsdecode(f) for f in fields[index : index + 2])
+                index += 2
+    return paths
+
+
 def check_repo(
     root,
     files,
@@ -621,7 +679,8 @@ def check_repo(
     max_path=DEFAULT_MAX_PATH,
     disabled=frozenset(),
     check=False,
-    use_git=False,
+    tracked=frozenset(),
+    held=frozenset(),
 ):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
@@ -632,9 +691,10 @@ def check_repo(
     branch main). This is the programmatic entry point: it does no printing.
 
     Unless `check`, the .bes files the fix codes (E803-E805) apply to are
-    renamed: with `git mv` when `use_git` (main() always does), otherwise
-    with a plain filesystem rename. Codes in `disabled` are dropped; for a
-    fix code that also stops that part of the rename.
+    renamed: with `git mv` when they are in `tracked`, otherwise with a
+    plain filesystem rename. A file in `held` (see pre_commit_stashed_paths)
+    is not renamed (E806). Codes in `disabled` are dropped; for a fix code
+    that also stops that part of the rename.
     """
     if prefix is None:
         prefix = server_prefix(
@@ -650,10 +710,10 @@ def check_repo(
         _check_ids(results, bes_paths)
         gathered.update(bes_paths)
     _check_lengths(results, files, gathered, prefix, max_path)
-    renamer = _Renamer(root, files, prefix, max_path, disabled)
+    renamer = _Renamer(root, files, prefix, max_path, disabled, held)
     for path in sorted(gathered):
         renamer.plan(results, path)
-    renamer.apply(results, check, use_git)
+    renamer.apply(results, check, tracked)
     return results.as_list(disabled)
 
 
@@ -736,6 +796,10 @@ def main(argv=None, list_files=git_ls_files):
     except OSError as err:
         print(f"bes-siterepo-validate-layout: {err}")
         return 1
+    try:
+        tracked = set(files if list_files is git_ls_files else git_ls_files(root))
+    except OSError:
+        tracked = set()
     site_roots = []
     for site in args.site_root or [root]:
         rel = os.path.relpath(os.path.realpath(site), os.path.realpath(root))
@@ -755,13 +819,15 @@ def main(argv=None, list_files=git_ls_files):
             max_path=args.max_path,
             disabled=disabled,
             check=args.check,
-            use_git=True,
+            tracked=tracked,
+            held=set() if args.check else pre_commit_stashed_paths(root),
         )
     )
     if fix_count:
         print(
-            f"\nrenamed .bes file(s) ({fix_count} fix(es)); the renames are staged "
-            "with git mv: review them and commit again."
+            f"\nrenamed .bes file(s) ({fix_count} fix(es)); tracked files are "
+            "renamed with git mv, so the renames are staged: review them and "
+            "commit again."
         )
     if warning_count:
         print(f"{warning_count} site layout warning(s).")
