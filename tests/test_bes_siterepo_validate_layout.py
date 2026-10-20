@@ -9,12 +9,14 @@ siteConfig.xml folder names, the naming and duplicate-ID errors, the layout
 warnings, path length, the rename auto-fix, --check, and main()'s exit codes.
 """
 
+import ctypes
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import types
 import unicodedata
 from pathlib import Path
 
@@ -1657,3 +1659,66 @@ def test_stash_lookup_is_the_parent_only_off_windows(tmp_path, monkeypatch):
         "Fixlets/A/1- a.bes",
         "Fixlets/A/2- b.bes",
     }
+
+
+# --- Windows process lookup ---------------------------------------------------
+
+
+def test_parent_pid_survives_a_ctypes_error(tmp_path, monkeypatch):
+    # stash detection must fail safe: no parent found, no traceback
+    def broken(_pid):
+        raise ctypes.ArgumentError("argument 1: wrong type")
+
+    monkeypatch.setattr(hook, "_is_windows", lambda: True)
+    monkeypatch.setattr(hook, "_parent_pid_windows", broken)
+    assert hook._parent_pid(123) is None
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None})
+    home = tmp_path / "pc-home"
+    write_patch(home, 100, repo, {"Fixlets/A/1- a.bes": "e\n"})
+    environ = {"PRE_COMMIT_HOME": str(home)}
+    assert hook.pre_commit_stashed_paths(str(repo), 100, environ) == {
+        "Fixlets/A/1- a.bes"
+    }
+
+
+class FakeWinFunction:
+    """A kernel32 function stand-in that records its calls and ctypes types."""
+
+    def __init__(self, result):
+        self.result = result
+        self.argtypes = None
+        self.restype = None
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.result
+
+
+def test_parent_pid_windows_declares_ctypes_types(monkeypatch):
+    # without argtypes a HANDLE is passed as a C int, which can fail with
+    # ctypes.ArgumentError or truncate a 64-bit handle
+    from ctypes import wintypes
+
+    kernel32 = types.SimpleNamespace(
+        CreateToolhelp32Snapshot=FakeWinFunction(5),
+        Process32FirstW=FakeWinFunction(0),  # no processes listed
+        Process32NextW=FakeWinFunction(0),
+        CloseHandle=FakeWinFunction(1),
+    )
+    monkeypatch.setattr(
+        ctypes, "windll", types.SimpleNamespace(kernel32=kernel32), raising=False
+    )
+    assert hook._parent_pid_windows(123) is None
+    assert kernel32.CreateToolhelp32Snapshot.argtypes == [
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    assert kernel32.CreateToolhelp32Snapshot.restype is wintypes.HANDLE
+    for name in ("Process32FirstW", "Process32NextW"):
+        function = getattr(kernel32, name)
+        assert function.argtypes[0] is wintypes.HANDLE, name
+        assert issubclass(function.argtypes[1], ctypes._Pointer), name
+        assert function.restype is wintypes.BOOL, name
+    assert kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
+    assert kernel32.CloseHandle.calls == [(5,)]
