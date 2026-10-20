@@ -32,7 +32,9 @@ DEFAULT_DIRS = ("Fixlets", "NonClientFiles", "OtherFiles")
 SITE_CONFIG = "siteConfig.xml"
 SITE_CONFIG_ELEMENTS = ("BesFileDir", "NonClientFilesDir", "OtherFilesDir")
 
-KNOWN_CODES = frozenset({"E800", "E801", "W806", "W807"})
+KNOWN_CODES = frozenset(
+    {"E800", "E801", "W800", "W801", "W802", "W803", "W804", "W806", "W807"}
+)
 
 # a numeric ID, then a space or a hyphen: `42- Name.bes`, `42 Name.bes`
 ID_PREFIX_RE = re.compile(r"^([0-9]+)[ -]")
@@ -127,7 +129,8 @@ def read_site_config(root, site_root, files):
 
     Only a tracked siteConfig.xml counts, since the server only sees what is
     committed. Returns a SiteConfig: the three folder names (defaults for
-    any not set), `named` the ones the file sets, and `issue` a W807
+    any not set), `named` the ones it renames to something other than
+    the default, and `issue` a W807
     (lineno, code, message) when the file is not readable XML, in which
     case the defaults are used. Validating it is bes-schema-validate's job.
     """
@@ -153,10 +156,12 @@ def read_site_config(root, site_root, files):
     for tag, default in zip(SITE_CONFIG_ELEMENTS, DEFAULT_DIRS):
         value = _clean_dir(tree.getroot().findtext(tag))
         found.append(value or default)
+    # a default name spelled out (as the RepositorySiteExample template does)
+    # renames nothing, so it does not count
     named = tuple(
         name
-        for tag, name in zip(SITE_CONFIG_ELEMENTS, found)
-        if _clean_dir(tree.getroot().findtext(tag))
+        for name, default in zip(found, DEFAULT_DIRS)
+        if name.lower() != default.lower()
     )
     return SiteConfig(*found, named=named, issue=None)
 
@@ -250,6 +255,76 @@ def _check_ids(results, bes_paths):
             )
 
 
+def _check_layout(results, site, site_files, config):
+    """W800-W804 for one site; return the .bes files in its .bes folder."""
+    bes_dir = config.bes_dir
+    bes_paths = []
+    for path in site_files:
+        rel = _within(path, site)
+        inside = _within(rel, bes_dir)
+        if inside is None:
+            if _is_bes(path):
+                results.issue(
+                    path,
+                    "W800",
+                    f"a .bes file outside the .bes folder ({_join(site, bes_dir)}/) "
+                    "is not gathered",
+                )
+            continue
+        name = inside.rsplit("/", 1)[-1]
+        if _is_bes(path):
+            bes_paths.append(path)
+            depth = inside.count("/")
+            if depth == 0 or depth > 2:
+                where = "directly in" if depth == 0 else "more than two folders into"
+                results.issue(
+                    path,
+                    "W801",
+                    f"a .bes file {where} {bes_dir}/; the documented layout is "
+                    f"{bes_dir}/<fxf>/ or {bes_dir}/<fxf>/<digest>/ (how the "
+                    "server handles this is undocumented)",
+                )
+        elif name.lower() == "digest.xml":
+            continue
+        elif name.lower().endswith(".xsd"):
+            results.issue(
+                path,
+                "W802",
+                f"an .xsd in {bes_dir}/ is not site content; the site does not "
+                "need schemas, bes-schema-validate already has them",
+            )
+        else:
+            results.issue(
+                path,
+                "W802",
+                f"only .bes files and digest.xml belong in {bes_dir}/; this is "
+                "not site content",
+            )
+
+    for folder in config.named:
+        # a folder name may have several parts (Content/Fixlets)
+        if not any(_within(_within(p, site), folder) for p in site_files):
+            results.issue(
+                _join(site, SITE_CONFIG),
+                "W803",
+                f"{SITE_CONFIG} names the folder {folder}/, which has no files",
+            )
+
+    has_content = bes_paths or any(
+        _within(_within(p, site), folder)
+        for p in site_files
+        for folder in (config.nonclient_dir, config.other_dir)
+    )
+    if not has_content:
+        results.issue(
+            site or ".",
+            "W804",
+            f"the site has no content: no .bes files in {bes_dir}/ and no files "
+            f"in {config.nonclient_dir}/ or {config.other_dir}/",
+        )
+    return bes_paths
+
+
 def check_repo(root, files, site_roots=("",), *, disabled=frozenset(), **_options):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
@@ -262,12 +337,7 @@ def check_repo(root, files, site_roots=("",), *, disabled=frozenset(), **_option
         config = read_site_config(root, site, files)
         if config.issue:
             results.issue(_join(site, SITE_CONFIG), *config.issue[1:])
-        bes_paths = [
-            path
-            for path in site_files
-            if _is_bes(path)
-            and _within(_within(path, site), config.bes_dir) is not None
-        ]
+        bes_paths = _check_layout(results, site, site_files, config)
         _check_ids(results, bes_paths)
     return results.as_list(disabled)
 
