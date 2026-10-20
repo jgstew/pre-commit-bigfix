@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -1381,3 +1382,37 @@ def test_non_utf8_name_is_reported_not_a_crash(tmp_path, monkeypatch, capfd):
 
 def test_server_path_length_of_an_undecodable_name():
     assert hook.server_path_length("", "a\udce9.bes") == 6
+
+
+# --- decomposed accents and format characters ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "folded"),
+    [
+        ("R\u00e9sum\u00e9", "Resume"),
+        ("\u00c5ngstr\u00f6m \u00d1and\u00fa", "Angstrom Nandu"),
+        ("\u20ac\u00e9", "EURe"),
+    ],
+)
+def test_fold_ascii_decomposed_input(text, folded):
+    # names committed from macOS, or Titles pasted with combining marks, are
+    # often NFD: the accent is a separate character after its letter
+    decomposed = unicodedata.normalize("NFD", text)
+    assert decomposed != text or text.startswith("\u20ac")
+    assert hook.fold_ascii(decomposed) == folded
+    assert hook.safe_title(decomposed) == folded
+
+
+def test_fold_ascii_combining_mark_without_a_precomposed_form():
+    # q + combining dot above has no single-character form, even in NFC
+    assert hook.fold_ascii("q\u0307x") == "qx"
+
+
+@pytest.mark.parametrize(
+    ("text", "folded"),
+    [("a\u200bb", "ab"), ("\ufeffbom", "bom"), ("x\u200dy", "xy")],
+)
+def test_fold_ascii_drops_format_characters(text, folded):
+    # zero-width space, BOM and zero-width joiner are invisible (category Cf)
+    assert hook.fold_ascii(text) == folded
