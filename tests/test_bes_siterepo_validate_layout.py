@@ -1555,21 +1555,35 @@ def test_server_prefix_uses_slashes_for_a_posix_server_root():
 
 CJK = "\u6587"  # 3 bytes in UTF-8
 
+# Names over 255 bytes can only reach a Linux checkout through the index
+# (committed on macOS or Windows): the filesystem refuses to create them.
+# So the report-only tests below hand check_repo() a file list with
+# nothing on disk, which is all it needs to report them.
+
+
+def listed_only(tmp_path):
+    """An empty folder to pass check_repo() with a file list it never opens."""
+    root = tmp_path / "listed"
+    root.mkdir()
+    return root
+
 
 def test_e808_file_name_over_255_bytes(tmp_path):
     # 100 CJK characters: 104 characters, fine on Windows, 304 bytes on Linux
     long_name = "NonClientFiles/" + CJK * 100 + ".txt"
     ok_name = "NonClientFiles/" + CJK * 83 + "ab.txt"  # 249 + 6 = 255 bytes
-    repo = make_repo(tmp_path, {long_name: "x", ok_name: "x"})
-    found = messages(repo, check=True, prefix="", max_path=4000)
+    root = listed_only(tmp_path)
+    files = sorted([long_name, ok_name])
+    found = messages(root, files=files, check=True, prefix="", max_path=4000)
     assert [(p, c) for p, c, m in found] == [(long_name, "E808")]
     assert "304" in found[0][2] and "255" in found[0][2]
 
 
 def test_e808_folder_name_over_255_bytes_reported_once(tmp_path):
     folder = "Fixlets/" + CJK * 90  # 270 bytes
-    repo = make_repo(tmp_path, {f"{folder}/1- a.bes": None, f"{folder}/2- b.bes": None})
-    found = messages(repo, check=True, prefix="", max_path=4000)
+    root = listed_only(tmp_path)
+    files = [f"{folder}/1- a.bes", f"{folder}/2- b.bes"]
+    found = messages(root, files=files, check=True, prefix="", max_path=4000)
     assert [(p, c) for p, c, m in found] == [(folder, "E808")]
     assert "folder" in found[0][2]
 
@@ -1579,7 +1593,10 @@ def test_e805_fixes_a_bes_name_over_255_bytes(tmp_path):
     # 94 characters (macOS limits characters, so the file can exist here)
     # but 266 bytes. E804 is off, or folding the CJK to _ would fix it first.
     long_name = "Fixlets/A/12- " + CJK * 86 + ".bes"
-    root, files = plain_repo(tmp_path, {long_name: bes("T" * 300)})
+    try:
+        root, files = plain_repo(tmp_path, {long_name: bes("T" * 300)})
+    except OSError as error:  # ENAMETOOLONG: Linux, where it cannot exist
+        pytest.skip(f"this filesystem refuses a 266-byte name: {error}")
     options = {"prefix": "", "max_path": 4000, "disabled": {"E804"}}
     found = run(root, files=files, check=True, **options)
     assert found == {long_name: ["E805"]}
@@ -1592,10 +1609,11 @@ def test_e805_fixes_a_bes_name_over_255_bytes(tmp_path):
 def test_e808_bes_name_the_rename_cannot_fix(tmp_path):
     no_id = "Fixlets/A/" + CJK * 86 + ".bes"  # 262 bytes
     with_id = "Fixlets/A/12- " + CJK * 86 + ".bes"  # 266 bytes
-    root, files = plain_repo(tmp_path, {no_id: None, with_id: None})
+    root = listed_only(tmp_path)
+    files = sorted([no_id, with_id])
     found = run(root, files=files, prefix="", max_path=4000, disabled={"E804", "E805"})
     assert found == {no_id: ["E800", "E808"], with_id: ["E808"]}
-    assert listing(root) == sorted([no_id, with_id])
+    assert listing(root) == []  # nothing was renamed into existence
 
 
 def test_w808_case_only_differences(tmp_path):
