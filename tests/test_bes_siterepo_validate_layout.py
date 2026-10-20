@@ -323,9 +323,7 @@ def test_e800_accepts_id_then_space_or_hyphen(tmp_path, name):
     assert run(repo, check=True) == {"Fixlets/A/Bad.bes": ["E800"]}
 
 
-@pytest.mark.parametrize(
-    "name", ["Name.bes", "42_Name.bes", "42.bes", "x42- Name.bes", "Name.BES"]
-)
+@pytest.mark.parametrize("name", ["Name.bes", "42_Name.bes", "42.bes", "x42- Name.bes"])
 def test_e800_flags_names_without_an_id_prefix(tmp_path, name):
     repo = make_repo(tmp_path, {f"Fixlets/A/{name}": None})
     found = messages(repo, check=True)
@@ -673,7 +671,7 @@ def test_w803_not_for_default_names_spelled_out(tmp_path):
 SHORT_PREFIX = "C:\\Source\\"
 
 
-def test_w805_long_non_bes_path(tmp_path):
+def test_e807_long_non_bes_path(tmp_path):
     long_name = "OtherFiles/" + "x" * 25 + ".txt"  # 40 characters
     repo = make_repo(
         tmp_path,
@@ -685,39 +683,39 @@ def test_w805_long_non_bes_path(tmp_path):
     )
     found = messages(repo, check=True, prefix=SHORT_PREFIX, max_path=50)
     assert [(p, c) for p, c, m in found] == [
-        ("OtherFiles/" + "y" * 26 + ".txt", "W805")
+        ("OtherFiles/" + "y" * 26 + ".txt", "E807")
     ]
     message = found[0][2]
     assert "51" in message and "50" in message
     assert "rename" in message.lower()  # says why it is not renamed
 
 
-def test_w805_counts_the_prefix(tmp_path):
+def test_e807_counts_the_prefix(tmp_path):
     # no .bes file, which would be over the limit too
     repo = make_repo(tmp_path, {"OtherFiles/x.txt": "x"})
     # 16 characters of path; 50 - 16 = 34 left for the prefix
     assert run(repo, check=True, prefix="P" * 34, max_path=50) == {}
     assert run(repo, check=True, prefix="P" * 35, max_path=50) == {
-        "OtherFiles/x.txt": ["W805"]
+        "OtherFiles/x.txt": ["E807"]
     }
 
 
-def test_w805_bes_outside_the_bes_folder(tmp_path):
+def test_e807_bes_outside_the_bes_folder(tmp_path):
     repo = make_repo(
         tmp_path, {"Fixlets/A/1- a.bes": None, "Archive/" + "z" * 40 + ".bes": None}
     )
     found = run(repo, check=True, prefix=SHORT_PREFIX, max_path=50)
-    assert found == {"Archive/" + "z" * 40 + ".bes": ["W800", "W805"]}
+    assert found == {"Archive/" + "z" * 40 + ".bes": ["E807", "W800"]}
 
 
-def test_w805_files_outside_every_site_root(tmp_path):
+def test_e807_files_outside_every_site_root(tmp_path):
     # the server clones the whole repo, so every tracked file counts
     repo = make_repo(
         tmp_path,
         {"Sites/A/Fixlets/X/1- a.bes": None, "tools/" + "t" * 40 + ".py": "x"},
     )
     found = run(repo, ["Sites/A"], check=True, prefix=SHORT_PREFIX, max_path=50)
-    assert found == {"tools/" + "t" * 40 + ".py": ["W805"]}
+    assert found == {"tools/" + "t" * 40 + ".py": ["E807"]}
 
 
 def test_path_measured_from_the_repo_root_not_the_site_root(tmp_path):
@@ -728,7 +726,7 @@ def test_path_measured_from_the_repo_root_not_the_site_root(tmp_path):
     )
     assert run(repo, ["Sites/A"], check=True, prefix="", max_path=26) == {}
     found = run(repo, ["Sites/A"], check=True, prefix="", max_path=25)
-    assert found["Sites/A/OtherFiles/abc.txt"] == ["W805"]
+    assert found["Sites/A/OtherFiles/abc.txt"] == ["E807"]
 
 
 def test_e802_folders_alone_too_long(tmp_path):
@@ -766,9 +764,10 @@ def test_confirmed_server_prefix_leaves_130(tmp_path, monkeypatch, capsys):
         name="bigfix-site-reporting-jgstew",
     )
     monkeypatch.chdir(repo)
-    assert hook.main(["--check"]) == 0  # W805 is a warning
+    # E807: a path a Windows server cannot clone fails the sync, so it fails here
+    assert hook.main(["--check"]) == 1
     out = capsys.readouterr().out
-    assert over in out and "[W805]" in out
+    assert over in out and "[E807]" in out
     assert ok not in out
 
 
@@ -788,7 +787,7 @@ def test_main_path_options(tmp_path, monkeypatch, capsys):
     ):
         capsys.readouterr()
         assert hook.main(["--check", "--strict", *args]) == 1, args
-        assert "[W805]" in capsys.readouterr().out
+        assert "[E807]" in capsys.readouterr().out
     assert hook.main(["--check", "--strict", "--server-root", "C:\\BES"]) == 0
 
 
@@ -1547,3 +1546,84 @@ def test_server_prefix_uses_slashes_for_a_posix_server_root():
     assert hook.server_path_length(prefix, "a/b.bes") - len(prefix) == (
         hook.server_path_length(windows, "a/b.bes") - len(windows)
     )
+
+
+# --- names valid on a RHEL server too -----------------------------------------
+
+CJK = "\u6587"  # 3 bytes in UTF-8
+
+
+def test_e808_file_name_over_255_bytes(tmp_path):
+    # 100 CJK characters: 104 characters, fine on Windows, 304 bytes on Linux
+    long_name = "NonClientFiles/" + CJK * 100 + ".txt"
+    ok_name = "NonClientFiles/" + CJK * 83 + "ab.txt"  # 249 + 6 = 255 bytes
+    repo = make_repo(tmp_path, {long_name: "x", ok_name: "x"})
+    found = messages(repo, check=True, prefix="", max_path=4000)
+    assert [(p, c) for p, c, m in found] == [(long_name, "E808")]
+    assert "304" in found[0][2] and "255" in found[0][2]
+
+
+def test_e808_folder_name_over_255_bytes_reported_once(tmp_path):
+    folder = "Fixlets/" + CJK * 90  # 270 bytes
+    repo = make_repo(tmp_path, {f"{folder}/1- a.bes": None, f"{folder}/2- b.bes": None})
+    found = messages(repo, check=True, prefix="", max_path=4000)
+    assert [(p, c) for p, c, m in found] == [(folder, "E808")]
+    assert "folder" in found[0][2]
+
+
+def test_e805_fixes_a_bes_name_over_255_bytes(tmp_path):
+    # the path is fine (no Windows limit hit); only the name is too long:
+    # 94 characters (macOS limits characters, so the file can exist here)
+    # but 266 bytes. E804 is off, or folding the CJK to _ would fix it first.
+    long_name = "Fixlets/A/12- " + CJK * 86 + ".bes"
+    root, files = plain_repo(tmp_path, {long_name: bes("T" * 300)})
+    options = {"prefix": "", "max_path": 4000, "disabled": {"E804"}}
+    found = run(root, files=files, check=True, **options)
+    assert found == {long_name: ["E805"]}
+    hook.check_repo(str(root), files, check=False, **options)
+    (new,) = listing(root)
+    assert new == "Fixlets/A/12 " + "T" * 248 + ".bes"
+    assert len(new.rsplit("/", 1)[-1].encode()) == 255
+
+
+def test_e808_bes_name_the_rename_cannot_fix(tmp_path):
+    no_id = "Fixlets/A/" + CJK * 86 + ".bes"  # 262 bytes
+    with_id = "Fixlets/A/12- " + CJK * 86 + ".bes"  # 266 bytes
+    root, files = plain_repo(tmp_path, {no_id: None, with_id: None})
+    found = run(root, files=files, prefix="", max_path=4000, disabled={"E804", "E805"})
+    assert found == {no_id: ["E800", "E808"], with_id: ["E808"]}
+    assert listing(root) == sorted([no_id, with_id])
+
+
+def test_w808_case_only_differences(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": (
+                "<SiteConfig><NonClientFilesDir>ServerFiles</NonClientFilesDir>"
+                "</SiteConfig>"
+            ),
+            "fixlets/A/1- a.bes": None,  # BesFileDir is Fixlets
+            "fixlets/A/2- b.bes": None,
+            "fixlets/A/Digest.xml": "<D/>",
+            "fixlets/B/3- c.BES": None,
+            "serverfiles/x.ojo": "x",
+            "OtherFiles/y.txt": "x",  # exact: the control
+        },
+    )
+    found = messages(repo, check=True)
+    assert sorted((p, c) for p, c, m in found) == [
+        ("fixlets", "W808"),
+        ("fixlets/A/Digest.xml", "W808"),
+        ("fixlets/B/3- c.BES", "W808"),
+        ("serverfiles", "W808"),
+    ]
+    by_path = {p: m for p, c, m in found}
+    assert "Fixlets" in by_path["fixlets"]
+    assert "ServerFiles" in by_path["serverfiles"]
+    assert "digest.xml" in by_path["fixlets/A/Digest.xml"]
+
+
+def test_w808_upper_case_bes_name_without_an_id(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/Name.BES": None})
+    assert run(repo, check=True) == {"Fixlets/A/Name.BES": ["E800", "W808"]}
