@@ -1303,7 +1303,8 @@ def test_temporary_index_commit_renames_nothing(tmp_path, commit_args):
     result = git_commit(repo, tmp_path, "-m", "m")
     assert result.returncode != 0
     assert "[E803] auto-fixed" in result.stdout + result.stderr
-    assert status(repo) == ["R  Fixlets/A/42- X.bes", "Fixlets/A/0042- X.bes"]
+    # porcelain -z gives a rename as "R  <new>" then "<old>"; status() sorts
+    assert status(repo) == ["Fixlets/A/0042- X.bes", "R  Fixlets/A/42- X.bes"]
     assert git_commit(repo, tmp_path, "-m", "m").returncode == 0
 
 

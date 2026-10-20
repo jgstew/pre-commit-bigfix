@@ -560,6 +560,7 @@ class _Renamer:
     def __init__(self, root, files, prefix, max_path, disabled, held=frozenset()):
         self.root = root
         self.held = held
+        self.temporary_index = False
         self.prefix = prefix
         self.max_path = max_path
         self.disabled = disabled
@@ -669,6 +670,17 @@ class _Renamer:
                         f"{reason}; would be renamed to {new} (run without --check)",
                     )
                 continue
+            if self.temporary_index:
+                results.issue(
+                    old,
+                    "E806",
+                    f"not renamed to {new}: this commit uses a temporary index "
+                    "(git commit -a, or git commit <paths>), which git throws "
+                    "away when the hook fails, so the rename would be lost. "
+                    "git add the changes and run a plain git commit (or "
+                    "pre-commit run) to rename it",
+                )
+                continue
             error = _rename(self.root, old, new_path, old in tracked)
             if error:
                 results.issue(old, "E806", f"could not rename to {new}: {error}")
@@ -696,6 +708,27 @@ def _rename(root, old, new, use_git):
     except OSError as err:
         return str(err)
     return None
+
+
+def uses_real_index(root, environ=None):
+    """False when git gave this hook a temporary index (GIT_INDEX_FILE).
+
+    git commit -a and git commit <paths> run the pre-commit hook against a
+    temporary index (index.lock, next-index-<pid>.lock) that git discards
+    when the hook fails, so a `git mv` made there is lost while the work
+    tree keeps the new name. A relative GIT_INDEX_FILE is taken relative to
+    `root`, where the hook runs.
+    """
+    environ = os.environ if environ is None else environ
+    index = environ.get("GIT_INDEX_FILE")
+    if not index:
+        return True
+    git_dir = _git(root, "rev-parse", "--absolute-git-dir")
+    if git_dir is None:
+        return False
+    real = os.path.join(os.fsdecode(git_dir).strip(), "index")
+    given = os.path.join(root, index)  # an absolute `index` wins in join
+    return os.path.realpath(given) == os.path.realpath(real)
 
 
 def _pre_commit_home(environ):
@@ -756,6 +789,7 @@ def check_repo(
     check=False,
     tracked=frozenset(),
     held=frozenset(),
+    temporary_index=False,
 ):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
@@ -768,7 +802,8 @@ def check_repo(
     Unless `check`, the .bes files the fix codes (E803-E805) apply to are
     renamed: with `git mv` when they are in `tracked`, otherwise with a
     plain filesystem rename. A file in `held` (see pre_commit_stashed_paths)
-    is not renamed (E806). Codes in `disabled` are dropped; for a fix code
+    is not renamed (E806); with `temporary_index` (see uses_real_index)
+    nothing is (E806). Codes in `disabled` are dropped; for a fix code
     that also stops that part of the rename.
     """
     if prefix is None:
@@ -786,6 +821,7 @@ def check_repo(
         gathered.update(bes_paths)
     _check_lengths(results, files, gathered, prefix, max_path)
     renamer = _Renamer(root, files, prefix, max_path, disabled, held)
+    renamer.temporary_index = temporary_index
     for path in sorted(gathered):
         renamer.plan(results, path)
     renamer.apply(results, check, tracked)
@@ -896,6 +932,7 @@ def main(argv=None, list_files=git_ls_files):
             check=args.check,
             tracked=tracked,
             held=set() if args.check else pre_commit_stashed_paths(root),
+            temporary_index=not uses_real_index(root),
         )
     )
     if fix_count:
