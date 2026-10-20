@@ -785,3 +785,301 @@ def test_main_repo_name_defaults_to_origin(tmp_path, monkeypatch, capsys):
         repo, "remote", "set-url", "origin", "git@h:o/bigfix-site-reporting-jgstewX.git"
     )
     assert hook.main(["--check", "--strict"]) == 1
+
+
+# --- rename auto-fix: name helpers --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "folded"),
+    [
+        ("plain - name.bes", "plain - name.bes"),
+        ("Euro \u20ac only", "Euro EUR only"),  # #32
+        ("\u00a3 pound", "GBP pound"),
+        ("Docker\u2019s key", "Docker's key"),  # the one in bigfix-content
+        ("\u2018quoted\u2019 \u201cdouble\u201d", "'quoted' 'double'"),
+        ("a \u2013 b \u2014 c", "a - b - c"),
+        ("r\u00e9sum\u00e9 na\u00efve \u00c5ngstr\u00f6m", "resume naive Angstrom"),
+        ("Stra\u00dfe", "Strasse"),
+        ("check \u2713", "check _"),  # no ASCII equivalent
+        ("\u65e5\u672c", "__"),
+        ("full\uff1awidth", "full_width"),  # NFKD gives ':', which Windows forbids
+        ("\u2122", "TM"),
+        ("emoji \U0001f600", "emoji _"),
+    ],
+)
+def test_fold_ascii(text, folded):
+    assert hook.fold_ascii(text) == folded
+
+
+@pytest.mark.parametrize(
+    ("title", "safe"),
+    [
+        ('Install: Foo/Bar <x> | y? * "z" \\', "Install_ Foo_Bar _x_ _ y_ _ _z_ _"),
+        ("  lots\tof\n white   space  ", "lots of white space"),
+        ("ctrl\x01char", "ctrl_char"),
+        ("R\u00e9sum\u00e9 \u20ac", "Resume EUR"),
+    ],
+)
+def test_safe_title(title, safe):
+    assert hook.safe_title(title) == safe
+
+
+# --- rename auto-fix ------------------------------------------------------------
+
+
+def plain_repo(tmp_path, files):
+    """A folder (not a git repo) holding `files`; returns (root, file list)."""
+    root = tmp_path / "plain"
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(bes(Path(rel).stem) if text is None else text, encoding="utf-8")
+    return root, sorted(files)
+
+
+def listing(root):
+    """Every file under `root` (but .git), as sorted repo-relative paths."""
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in Path(root).rglob("*")
+        if p.is_file() and ".git" not in p.relative_to(root).parts
+    )
+
+
+def test_e803_check_reports_and_changes_nothing(tmp_path):
+    root, files = plain_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    found = messages(root, files=files, check=True)
+    assert [(p, c) for p, c, m in found] == [("Fixlets/A/0042- X.bes", "E803")]
+    assert "42- X.bes" in found[0][2]
+    assert listing(root) == ["Fixlets/A/0042- X.bes"]
+
+
+def test_e803_fix_strips_zero_padding(tmp_path):
+    root, files = plain_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    results = hook.check_repo(str(root), files, check=False)
+    assert listing(root) == ["Fixlets/A/42- X.bes"]
+    ((path, issues, fixed),) = results
+    assert path == "Fixlets/A/0042- X.bes"
+    assert issues == []
+    assert [code for _l, code, _m in fixed] == ["E803"]
+
+
+def test_e804_fix_folds_non_ascii(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/11903- Euro in name \u20ac only.bes": None}
+    )
+    assert run(root, files=files, check=False) == {
+        "Fixlets/A/11903- Euro in name \u20ac only.bes": ["E804"]
+    }
+    assert listing(root) == ["Fixlets/A/11903- Euro in name EUR only.bes"]
+
+
+def test_fixes_combine_into_one_rename(tmp_path):
+    name = (
+        "00011822- AAC Change the Currency Unit to \u20ac and the Weight Unit "
+        "to kg in the Client Dashboard.bes"
+    )
+    root, files = plain_repo(tmp_path, {f"Fixlets/Fixlets/{name}": None})
+    assert run(root, files=files, check=False) == {
+        f"Fixlets/Fixlets/{name}": ["E803", "E804"]
+    }
+    assert listing(root) == [
+        "Fixlets/Fixlets/11822- AAC Change the Currency Unit to EUR and the "
+        "Weight Unit to kg in the Client Dashboard.bes"
+    ]
+
+
+def test_e805_shortens_to_id_and_title(tmp_path):
+    long_name = "Fixlets/A/12- " + "n" * 60 + ".bes"
+    root, files = plain_repo(
+        tmp_path, {long_name: bes("Install: Widget/Pro \u2013 v2.0 for Windows")}
+    )
+    # Fixlets/A/12 = 12 characters; 10 + 12 + 1 + 4 = 27, so 50 leaves 23
+    results = hook.check_repo(
+        str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False
+    )
+    new = "Fixlets/A/12 Install_ Widget_Pro - v2.0.bes"
+    assert listing(root) == [new]
+    assert hook.server_path_length(SHORT_PREFIX, new) <= 50
+    ((_path, issues, fixed),) = results
+    assert issues == [] and [c for _l, c, _m in fixed] == ["E805"]
+
+
+def test_e805_cut_drops_trailing_space_dot_and_hyphen(tmp_path):
+    # the cut lands right after "v2.-"; all of " .-" at the end goes
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/12- " + "n" * 60 + ".bes": bes("Abc v2.- tail")}
+    )
+    # 10 + len("Fixlets/A/12 ") 13 + 4 = 27; limit 35 leaves 8: "Abc v2.-"
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=35, check=False)
+    assert listing(root) == ["Fixlets/A/12 Abc v2.bes"]
+
+
+def test_e805_exactly_at_the_limit(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/12- " + "n" * 60 + ".bes": bes("T" * 100)}
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    (new,) = listing(root)
+    assert hook.server_path_length(SHORT_PREFIX, new) == 50
+    assert new == "Fixlets/A/12 " + "T" * 23 + ".bes"
+
+
+def test_e805_title_falls_back_to_the_file_name(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/0012- Fallback name here " + "n" * 40 + ".bes": "not xml"}
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    assert listing(root) == ["Fixlets/A/12 Fallback name here nnnn.bes"]
+
+
+def test_e805_keeps_the_extension_case(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/12- " + "n" * 60 + ".BES": bes("Title")}
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    assert listing(root) == ["Fixlets/A/12 Title.BES"]
+
+
+def test_names_that_fit_are_left_alone(tmp_path):
+    # its title differs from its name, but it fits; the long one is the control
+    root, files = plain_repo(
+        tmp_path,
+        {
+            "Fixlets/A/1- short.bes": bes("A completely different title"),
+            "Fixlets/A/2- " + "n" * 60 + ".bes": bes("Two"),
+        },
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    assert listing(root) == ["Fixlets/A/1- short.bes", "Fixlets/A/2 Two.bes"]
+
+
+def test_unfixable_and_ungathered_files_are_not_renamed(tmp_path):
+    root, files = plain_repo(
+        tmp_path,
+        {
+            "Archive/0042- X.bes": None,  # W800: not gathered
+            "Fixlets/A/Name \u20ac.bes": None,  # E800: no ID
+            "Fixlets/" + "f" * 40 + "/7- a.bes": None,  # E802: folders too long
+            "Fixlets/A/0009- control.bes": None,
+        },
+    )
+    found = run(root, files=files, prefix=SHORT_PREFIX, max_path=55, check=False)
+    assert found["Fixlets/" + "f" * 40 + "/7- a.bes"] == ["E802"]
+    assert "E803" not in found.get("Archive/0042- X.bes", [])
+    assert "E804" not in found.get("Fixlets/A/Name \u20ac.bes", [])
+    assert listing(root) == sorted(
+        [
+            "Archive/0042- X.bes",
+            "Fixlets/A/Name \u20ac.bes",
+            "Fixlets/" + "f" * 40 + "/7- a.bes",
+            "Fixlets/A/9- control.bes",
+        ]
+    )
+
+
+def test_e806_collision_with_a_tracked_file_ignoring_case(tmp_path):
+    root, files = plain_repo(
+        tmp_path,
+        {
+            "Fixlets/A/0042- X.bes": None,
+            "Fixlets/B/42- y.bes": None,
+            "Fixlets/A/42- x.bes": None,
+        },
+    )
+    found = messages(root, files=files, check=False)
+    e806 = [(p, m) for p, c, m in found if c == "E806"]
+    assert [p for p, m in e806] == ["Fixlets/A/0042- X.bes"]
+    assert "Fixlets/A/42- x.bes" in e806[0][1]
+    assert "Fixlets/A/0042- X.bes" in listing(root)  # left alone
+
+
+def test_e806_collision_between_two_planned_renames(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/007- X.bes": None, "Fixlets/A/07- X.bes": None}
+    )
+    found = run(root, files=files, check=True)
+    assert found["Fixlets/A/007- X.bes"] == ["E801", "E803"]
+    assert found["Fixlets/A/07- X.bes"] == ["E801", "E806"]
+
+
+def test_e806_never_overwrites_an_untracked_file(tmp_path):
+    root, files = plain_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    (root / "Fixlets/A/42- X.bes").write_text("untracked", encoding="utf-8")
+    found = run(root, files=files, check=False)
+    assert found == {"Fixlets/A/0042- X.bes": ["E806"]}
+    assert (root / "Fixlets/A/42- X.bes").read_text(encoding="utf-8") == "untracked"
+    assert (root / "Fixlets/A/0042- X.bes").is_file()
+
+
+def test_disable_a_fix_code_skips_that_fix(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/0042- X \u20ac.bes": None, "Fixlets/A/0043- Y.bes": None}
+    )
+    hook.check_repo(str(root), files, disabled={"E803"}, check=False)
+    assert listing(root) == ["Fixlets/A/0042- X EUR.bes", "Fixlets/A/0043- Y.bes"]
+
+
+def test_disable_e805_skips_the_length_fix(tmp_path):
+    # the other fixes still run: 0013- y.bes is the control
+    root, files = plain_repo(
+        tmp_path,
+        {"Fixlets/A/12- " + "n" * 60 + ".bes": None, "Fixlets/A/0013- y.bes": None},
+    )
+    hook.check_repo(
+        str(root),
+        files,
+        prefix=SHORT_PREFIX,
+        max_path=50,
+        disabled={"E805"},
+        check=False,
+    )
+    assert listing(root) == [
+        "Fixlets/A/12- " + "n" * 60 + ".bes",
+        "Fixlets/A/13- y.bes",
+    ]
+
+
+def test_fix_is_idempotent(tmp_path):
+    root, files = plain_repo(
+        tmp_path, {"Fixlets/A/0012- \u20ac " + "n" * 60 + ".bes": bes("T\u00eftle")}
+    )
+    hook.check_repo(str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False)
+    assert listing(root) == ["Fixlets/A/12 Title.bes"]
+    assert run(root, files=listing(root), prefix=SHORT_PREFIX, max_path=50) == {}
+
+
+def test_main_renames_with_git_mv(tmp_path, monkeypatch, capsys):
+    repo = make_repo(
+        tmp_path, {"Fixlets/A/0042- X.bes": None, "Fixlets/A/1- ok.bes": None}
+    )
+    monkeypatch.chdir(repo)
+    assert hook.main([]) == 1
+    out = capsys.readouterr().out
+    assert "[E803] auto-fixed" in out
+    assert "review" in out.lower()
+    # staged as a rename, with nothing left unstaged
+    status = git(repo, "status", "--porcelain")
+    assert "R  Fixlets/A/0042- X.bes -> Fixlets/A/42- X.bes" in status
+    assert listing(repo) == ["Fixlets/A/1- ok.bes", "Fixlets/A/42- X.bes"]
+    # nothing left to do
+    assert hook.main([]) == 0
+
+
+def test_main_git_mv_keeps_unstaged_edits(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+    (repo / "Fixlets/A/0042- X.bes").write_text(bes("edited"), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert hook.main([]) == 1
+    assert "edited" in (repo / "Fixlets/A/42- X.bes").read_text(encoding="utf-8")
+
+
+def test_main_check_renames_nothing(tmp_path, monkeypatch, capsys):
+    repo = make_repo(tmp_path, {"Fixlets/A/0042- X.bes": None})
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check"]) == 1
+    assert "[E803]" in capsys.readouterr().out
+    assert listing(repo) == ["Fixlets/A/0042- X.bes"]
+    assert git(repo, "status", "--porcelain") == "A  Fixlets/A/0042- X.bes\n"
