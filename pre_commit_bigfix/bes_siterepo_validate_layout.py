@@ -102,6 +102,11 @@ DEFAULT_SERVER_ROOT = "C:\\Program Files (x86)\\BigFix Enterprise\\BES Server"
 DEFAULT_BRANCH = "main"
 # MAX_PATH is 260 including the terminating NUL
 DEFAULT_MAX_PATH = 259
+# a root server may run Linux (RHEL) instead, and one repo site may serve
+# both, so the stricter limit always applies. Linux limits each file or
+# folder name to NAME_MAX bytes (UTF-8). Its PATH_MAX (4096 bytes) needs no
+# check of its own: 259 UTF-16 units are at most 777 bytes in UTF-8.
+NAME_MAX = 255
 # the server names the clone <repo>_<branch>_<8 hex>; the hash is unknown here
 # and only its length matters
 HASH_PLACEHOLDER = "0" * 8
@@ -119,14 +124,16 @@ KNOWN_CODES = frozenset(
         "E804",
         "E805",
         "E806",
+        "E807",
+        "E808",
         "W800",
         "W801",
         "W802",
         "W803",
         "W804",
-        "W805",
         "W806",
         "W807",
+        "W808",
     }
 )
 
@@ -189,6 +196,18 @@ def server_path_length(prefix, rel_path):
     """
     full = prefix + rel_path.replace("/", "\\")
     return len(full.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def name_bytes(name):
+    """Bytes `name` takes in UTF-8, as a Linux file system counts NAME_MAX.
+
+    A name git listed as bytes that are not UTF-8 holds surrogate escapes
+    (os.fsdecode); surrogateescape turns those back into their bytes.
+    """
+    try:
+        return len(name.encode("utf-8", "surrogateescape"))
+    except UnicodeEncodeError:  # a surrogate that is not an escape
+        return len(name.encode("utf-8", "surrogatepass"))
 
 
 def repo_name_from_url(url):
@@ -456,8 +475,24 @@ def _check_layout(results, site, site_files, config):
     """W800-W804 for one site; return the .bes files in its .bes folder."""
     bes_dir = config.bes_dir
     bes_paths = []
+    case_reported = set()
     for path in site_files:
         rel = _within(path, site)
+        for folder in (bes_dir, config.nonclient_dir, config.other_dir):
+            actual = rel[: len(folder)]
+            if (
+                _within(rel, folder) is not None
+                and actual != folder
+                and actual not in case_reported
+            ):
+                case_reported.add(actual)
+                results.issue(
+                    _join(site, actual),
+                    "W808",
+                    f"folder {actual}/ is the {folder}/ the site uses only when "
+                    "case is ignored; a case-sensitive root server (RHEL) may "
+                    "not find it",
+                )
         inside = _within(rel, bes_dir)
         if inside is None:
             if _is_bes(path):
@@ -471,6 +506,13 @@ def _check_layout(results, site, site_files, config):
         name = inside.rsplit("/", 1)[-1]
         if _is_bes(path):
             bes_paths.append(path)
+            if not path.endswith(".bes"):
+                results.issue(
+                    path,
+                    "W808",
+                    f"extension {path[-4:]} is .bes only when case is ignored; "
+                    "a case-sensitive root server (RHEL) may not gather it",
+                )
             depth = inside.count("/")
             if depth == 0 or depth > 2:
                 where = "directly in" if depth == 0 else "more than two folders into"
@@ -482,7 +524,13 @@ def _check_layout(results, site, site_files, config):
                     "server handles this is undocumented)",
                 )
         elif name.lower() == "digest.xml":
-            continue
+            if name != "digest.xml":
+                results.issue(
+                    path,
+                    "W808",
+                    f"{name} is digest.xml only when case is ignored; a "
+                    "case-sensitive root server (RHEL) may not find it",
+                )
         elif name.lower().endswith(".xsd"):
             results.issue(
                 path,
@@ -530,29 +578,72 @@ def _shortest_name(path):
     return f"{folder}/{short}" if folder else short
 
 
-def _check_lengths(results, files, gathered, prefix, max_path, disabled=frozenset()):
-    """W805 and E802: server paths over `max_path`.
+def _check_limits(results, files, gathered, prefix, max_path, disabled=frozenset()):
+    """E802, E807 and E808: names and paths a root server cannot hold.
 
-    `gathered` are the .bes files in a site's .bes folder; the rename fix
-    can shorten those, so only one even the shortest name cannot bring
-    under the limit is reported here (E802), or, with the E805 fix
-    disabled, any of them that is too long. Every other tracked file is a
-    W805: the server clones the whole repo, so a long path anywhere breaks
-    the sync, but actions may refer to those files by name.
+    Path: the server path must be at most `max_path` (Windows). Name: each
+    file and folder name must be at most NAME_MAX bytes (Linux). `gathered`
+    are the .bes files in a site's .bes folder; the rename fix can shorten
+    those that have an ID, so only one even the shortest name cannot bring
+    under the path limit is reported here (E802), or, with the E805 fix
+    disabled, any of them over a limit. Every other tracked file over a
+    limit is an error too (E807, E808): the server clones the whole repo, so
+    one long path anywhere fails the sync. Those are not renamed, since
+    actions may refer to them by name, and a folder is not renamed since
+    that changes its .fxf or digest.
     """
+    long_folders = set()
     for path in files:
-        length = server_path_length(prefix, path)
-        if length <= max_path:
+        parts = path.split("/")
+        for depth, part in enumerate(parts[:-1], start=1):
+            folder = "/".join(parts[:depth])
+            size = name_bytes(part)
+            if size > NAME_MAX and folder not in long_folders:
+                long_folders.add(folder)
+                results.issue(
+                    folder,
+                    "E808",
+                    f"folder name is {size} bytes in UTF-8, over the {NAME_MAX}-"
+                    "byte limit of Linux file systems, so a RHEL root server "
+                    "cannot check it out; rename it by hand",
+                )
+        fixable = path in gathered and _id_of(path) is not None
+        _check_path_length(
+            results, path, path in gathered, fixable, prefix, max_path, disabled
+        )
+        size = name_bytes(parts[-1])
+        if size <= NAME_MAX:
             continue
-        over = f"server path is {length} characters, over the {max_path} limit"
-        if path not in gathered:
-            results.issue(
-                path,
-                "W805",
-                f"{over}; shorten it by hand (not renamed automatically, since "
-                "actions may refer to it by name)",
-            )
-        elif _id_of(path) is None:
+        if fixable and "E805" not in disabled:
+            continue  # the rename makes it ASCII and short
+        if (
+            fixable
+            and "E804" not in disabled
+            and name_bytes(fold_ascii(parts[-1])) <= NAME_MAX
+        ):
+            continue  # folding it to ASCII is enough
+        results.issue(
+            path,
+            "E808",
+            f"file name is {size} bytes in UTF-8, over the {NAME_MAX}-byte limit "
+            "of Linux file systems, so a RHEL root server cannot check it out"
+            + ("; renaming it would fix it, but E805 is disabled" if fixable else "")
+            + ("" if fixable else "; shorten it by hand"),
+        )
+
+
+def _check_path_length(results, path, gathered, fixable, prefix, max_path, disabled):
+    """E802 or E807 for `path` if its server path is over `max_path`.
+
+    `gathered`: it is a .bes file in a site's .bes folder; `fixable`: one
+    with an ID, which the E805 rename can shorten.
+    """
+    length = server_path_length(prefix, path)
+    if length <= max_path:
+        return
+    over = f"server path is {length} characters, over the {max_path} limit"
+    if not fixable:
+        if gathered:  # a gathered .bes file with no ID
             results.issue(
                 path,
                 "E802",
@@ -560,23 +651,31 @@ def _check_lengths(results, files, gathered, prefix, max_path, disabled=frozense
                 "rename it to",
             )
         else:
-            shortest = _shortest_name(path)
-            shortest_length = server_path_length(prefix, shortest)
-            if shortest_length > max_path:
-                results.issue(
-                    path,
-                    "E802",
-                    f"{over}, and even the shortest name ({shortest}) would be "
-                    f"{shortest_length}: the folders are too long. Renaming a "
-                    "folder changes its .fxf or digest, so this is not fixed",
-                )
-            elif "E805" in disabled:
-                results.issue(
-                    path,
-                    "E802",
-                    f"{over}; renaming it to <ID> <Title> would fix it, but "
-                    "E805 is disabled",
-                )
+            results.issue(
+                path,
+                "E807",
+                f"{over}, so a Windows root server cannot check it out; "
+                "shorten it by hand (it is not renamed automatically, since "
+                "actions may refer to it by name)",
+            )
+        return
+    shortest = _shortest_name(path)
+    shortest_length = server_path_length(prefix, shortest)
+    if shortest_length > max_path:
+        results.issue(
+            path,
+            "E802",
+            f"{over}, and even the shortest name ({shortest}) would be "
+            f"{shortest_length}: the folders are too long. Renaming a folder "
+            "changes its .fxf or digest, so this is not fixed",
+        )
+    elif "E805" in disabled:
+        results.issue(
+            path,
+            "E802",
+            f"{over}; renaming it to <ID> <Title> would fix it, but E805 is "
+            "disabled",
+        )
 
 
 class _Renamer:
@@ -616,11 +715,25 @@ class _Renamer:
             new = fold_ascii(new)
             reasons.append(("E804", "non-ASCII characters in the file name"))
         length = self._length(_join(folder, new))
-        if "E805" not in self.disabled and length > self.max_path:
+        size = name_bytes(new)
+        if "E805" not in self.disabled and (length > self.max_path or size > NAME_MAX):
             extension = os.path.splitext(name)[1]
             stem = _join(folder, f"{number} ")
-            room = self.max_path - self._length(stem + extension)
-            if room >= 1:  # otherwise _check_lengths reported E802
+            room = min(
+                self.max_path - self._length(stem + extension),
+                NAME_MAX - name_bytes(f"{number} {extension}"),
+            )
+            if length > self.max_path:
+                why = (
+                    f"server path is {length} characters, over the "
+                    f"{self.max_path} limit"
+                )
+            else:
+                why = (
+                    f"file name is {size} bytes in UTF-8, over the {NAME_MAX}-"
+                    "byte limit of Linux file systems"
+                )
+            if room >= 1:  # otherwise _check_limits reported E802
                 title = read_title(os.path.join(self.root, path))
                 # a Title of only forbidden characters would give `42 ___`
                 if title is None or not any(c.isalnum() for c in safe_title(title)):
@@ -629,22 +742,12 @@ class _Renamer:
                 short = safe_title(title)[:room].rstrip(" .-")
                 if short:
                     new = f"{number} {short}{extension}"
-                    reasons.append(
-                        (
-                            "E805",
-                            (
-                                f"server path is {length} characters, over the "
-                                f"{self.max_path} limit"
-                            ),
-                        )
-                    )
+                    reasons.append(("E805", why))
                 else:
                     results.issue(
                         path,
                         "E802",
-                        f"server path is {length} characters, over the "
-                        f"{self.max_path} limit, and there is no title to "
-                        "build a shorter name from",
+                        f"{why}, and there is no title to build a shorter " "name from",
                     )
         return new, reasons
 
@@ -917,7 +1020,7 @@ def check_repo(
         bes_paths = _check_layout(results, site, site_files, config)
         _check_ids(results, bes_paths)
         gathered.update(bes_paths)
-    _check_lengths(results, files, gathered, prefix, max_path, disabled)
+    _check_limits(results, files, gathered, prefix, max_path, disabled)
     renamer = _Renamer(root, files, prefix, max_path, disabled, held)
     renamer.temporary_index = temporary_index
     for path in sorted(gathered):
