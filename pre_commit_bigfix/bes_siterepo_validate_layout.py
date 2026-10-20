@@ -907,6 +907,11 @@ def _pre_commit_home(environ):
     return os.path.join(cache, "pre-commit")
 
 
+def _is_windows():
+    """True on Windows; a function so tests can pretend either way."""
+    return os.name == "nt"
+
+
 def _parent_pid_windows(pid):
     """The parent of process `pid` on Windows, from a Toolhelp snapshot."""
     import ctypes  # pylint: disable=import-outside-toplevel
@@ -947,7 +952,7 @@ def _parent_pid_windows(pid):
 def _parent_pid(pid):
     """The parent of process `pid`, or None when it cannot be told."""
     try:
-        if os.name == "nt":
+        if _is_windows():
             return _parent_pid_windows(pid)
         out = subprocess.run(
             ["ps", "-o", "ppid=", "-p", str(pid)],
@@ -966,11 +971,13 @@ def pre_commit_stashed_paths(root, pid=None, environ=None):
     Before running hooks on staged files, pre-commit saves unstaged changes
     as a patch named `patch<time>-<its pid>` in its cache folder, checks
     them out, and re-applies the patch afterwards. Its pid is this hook's
-    parent's (`pid` defaults to os.getppid()), or, when a launcher sits in
-    between (a console script on Windows is an .exe that starts python.exe
-    as its child), its grandparent's; up to three generations are tried.
-    Verified on macOS only; on Windows the parent comes from a Toolhelp
-    snapshot, and if that fails only `pid` itself is tried. A file renamed in between
+    parent's (`pid` defaults to os.getppid()). On Windows a launcher may sit
+    in between (a console script is an .exe that starts python.exe as its
+    child), so there the grandparent and great-grandparent are tried too,
+    found with a Toolhelp snapshot; if that fails, only `pid` is tried. Not
+    on Linux or macOS: there those are git and a shell, and pre-commit never
+    deletes old patches, so one whose pid matches theirs would hold a file
+    with no unstaged changes. Verified on macOS only. A file renamed in between
     is not where the patch expects it, so pre-commit cannot restore those
     changes and stops with an error. The file names are read with
     `git apply --numstat -z`, which applies nothing. Outside a pre-commit
@@ -981,7 +988,7 @@ def pre_commit_stashed_paths(root, pid=None, environ=None):
     pid = os.getppid() if pid is None else pid
     environ = os.environ if environ is None else environ
     pids = [pid]
-    while len(pids) < 3 and pids[-1] is not None:
+    while _is_windows() and len(pids) < 3 and pids[-1] is not None:
         pids.append(_parent_pid(pids[-1]))
     home = glob.escape(_pre_commit_home(environ))
     patches = []
