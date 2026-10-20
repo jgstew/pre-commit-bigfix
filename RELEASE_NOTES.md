@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.13.0
 
 ### Added (bes-siterepo-validate-layout)
 
