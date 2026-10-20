@@ -1334,3 +1334,50 @@ def test_temporary_index_reported_under_e806(tmp_path):
     # --check reports the fix as usual: nothing is renamed either way
     found = messages(root, files=files, temporary_index=True, check=True)
     assert [c for p, c, m in found] == ["E803"]
+
+
+# --- names that are not UTF-8 -------------------------------------------------
+
+
+def add_raw_name(repo, raw_path, text="x"):
+    """Stage `text` under the bytes path `raw_path`, in the index only.
+
+    macOS refuses such names on disk, so the work tree does not have it.
+    """
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input=text.encode(),
+        check=True,
+        capture_output=True,
+    ).stdout.strip()
+    subprocess.run(
+        [
+            b"git",
+            b"update-index",
+            b"--add",
+            b"--cacheinfo",
+            b"100644," + blob + b"," + raw_path,
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_non_utf8_name_is_reported_not_a_crash(tmp_path, monkeypatch, capfd):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- ok.bes": None})
+    add_raw_name(repo, b"Fixlets/A/2- calf\xe9.bes", bes())
+    add_raw_name(repo, b"OtherFiles/n\xe9e.txt")
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check"]) == 1
+    out = capfd.readouterr().out
+    assert "[E804]" in out and "would be renamed to 2- calf_.bes" in out
+    assert "\\udce9" in out  # the undecodable byte, shown escaped
+    # fix mode: the file is not on disk here, so git mv fails: E806, no crash
+    assert hook.main([]) == 1
+    assert "[E806]" in capfd.readouterr().out
+
+
+def test_server_path_length_of_an_undecodable_name():
+    assert hook.server_path_length("", "a\udce9.bes") == 6
