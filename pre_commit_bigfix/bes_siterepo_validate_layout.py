@@ -10,7 +10,12 @@ hook checks the site as a whole, so pre-commit runs it once per commit
 Each site root (--site-root, repeatable; default the repo root) may hold a
 siteConfig.xml naming its folders (BesFileDir, NonClientFilesDir,
 OtherFilesDir); the defaults are Fixlets, NonClientFiles and OtherFiles.
-Folder names are matched ignoring case, as on the Windows server.
+
+A root server may run Windows or RHEL, and one repo site may serve both, so
+names and paths must be valid on both: the stricter limit always applies.
+Folder names, the .bes extension and digest.xml are matched ignoring case,
+as on Windows, so nothing goes unchecked, but a name that matches only that
+way is a warning (W808), since RHEL is case-sensitive.
 
 Checks (E-codes fail the hook; W-codes are advisory unless --strict):
 
@@ -19,59 +24,83 @@ Checks (E-codes fail the hook; W-codes are advisory unless --strict):
           `42 Name.bes`); the server skips it
     E801  two or more .bes files in one site share an ID, compared as
           integers (0042 and 42 collide); each names the others
-    E802  a .bes file's server path is over the limit and cannot be fixed:
-          even `<ID> X.bes` is too long (the folders are), or it has no ID.
-          Renaming a folder changes its .fxf or digest, so it is not done
-    E803  fix: zero padding in the ID (0042- X.bes -> 42- X.bes)
+    E802  a .bes file's server path is over the limit and the rename cannot
+          fix it: even `<ID> X.bes` is too long (the folders are), it has no
+          ID, or E805 is disabled. Renaming a folder changes its .fxf or
+          digest, so that is not done
+    E803  fix: zero padding in the ID (0042- X.bes -> 42- X.bes); done even
+          when the ID is a duplicate (E801), since the ID does not change
     E804  fix: non-ASCII characters in the name, folded to ASCII
-    E805  fix: the server path is over the limit; renamed `<ID> <Title>.bes`
+    E805  fix: the server path is over the limit, or the name is over 255
+          bytes; renamed `<ID> <Title>.bes`
     E806  a rename was skipped: the new name is taken, ignoring case (by a
           tracked file, another planned rename or an untracked file), the
-          file has unstaged changes pre-commit set aside, or the rename failed
+          file has unstaged changes pre-commit set aside, the commit uses a
+          temporary index (git commit -a, git commit <paths>), or the
+          rename failed
+    E807  any other tracked file whose server path is over the limit, in or
+          outside the site roots (the server clones the whole repo); it is
+          not renamed, since actions may refer to it by name
+    E808  a file or folder name over 255 bytes in UTF-8 that the rename
+          cannot fix; a folder is reported once
     W800  a .bes file outside the .bes folder; it is not gathered
     W801  a .bes file directly in the .bes folder, or deeper than
           <BesFileDir>/<fxf>/<digest>/ (server behavior undocumented)
     W802  a file in the .bes folder other than .bes or digest.xml (an .xsd
           too: bes-schema-validate already has the schemas)
     W803  a folder siteConfig.xml renames does not exist (has no files); a
-          default name spelled out, as the template does, is not checked
+          default name spelled out, as the template does, is not checked,
+          since those folders are optional
     W804  a site with no content: no .bes files in the .bes folder and no
           files in the NonClient or Other folders (server files alone pass)
-    W805  any other tracked file whose server path is over the limit; it is
-          not renamed, since actions may refer to it by name
     W806  an ID outside 1..2147483647 (the range is undocumented)
     W807  siteConfig.xml is not readable XML; the default folders are used
+    W808  a folder, .bes extension or digest.xml that matches the expected
+          name only when case is ignored
 
-Server path: the server clones the whole repo to
+Path limit (Windows): the server clones the whole repo to
 `<server-root>\\RepositorySiteGather\\Sites\\<repo>_<branch>_<8 hex>\\Source\\`
 and each file's path relative to the REPO root (not the site root) follows
 that. It must be at most --max-path (259: MAX_PATH 260 includes the NUL),
 counted in UTF-16 units. <repo> is the git repo's name (--repo-name, default
 the origin remote's, else the repo folder's), not the BigFix site name.
-Over-long paths fail on 11.0.7 even with Windows long paths enabled.
+Over-long paths fail on 11.0.7 even with Windows long paths enabled. Only
+this Windows layout is confirmed; the RHEL clone path is not, so it is
+the one measured.
+
+Name limit (Linux): each file and folder name must be at most NAME_MAX, 255
+bytes in UTF-8. Linux's PATH_MAX (4096 bytes) cannot be reached once the
+Windows limit holds, so it has no check of its own.
 
 Auto-fix (the default; --check is a dry run that reports and changes
 nothing): each .bes file in the .bes folder is renamed at most once, combining
-E803, E804 and, if the path is still too long, E805. E805 builds
+E803, E804 and, if the path or name is still too long, E805. E805 builds
 `<ID> <Title><extension>` (no hyphen) from the first content object's
-<Title> (or the current name without its ID, if there is none), made ASCII
-and Windows-safe, cut to fit, with trailing spaces, dots and hyphens dropped.
-A name that already fits is left alone, even when it differs from <Title>.
-The ID never changes and no file moves between folders. Files without an ID
-are not given one: assigning IDs is a policy decision (CommunityContent uses
-a counter file; max+1 would reuse the IDs of deleted content), so there is
-no --assign-ids.
+<Title> (or the current name without its ID, if the Title has no letter or
+digit), made ASCII and Windows-safe, cut to fit both limits, with trailing
+spaces, dots and hyphens dropped. A name that already fits is left alone,
+even when it differs from <Title>. The ID never changes and no file moves
+between folders. Files without an ID are not given one: --assign-ids is
+deferred (assigning IDs is a policy decision; CommunityContent uses a
+counter file, and max+1 would reuse the IDs of deleted content).
 
-How files are renamed: a tracked file with `git mv`, anything else with a
-plain rename. git mv stages the rename, so the next commit carries both the
-new name and the removal of the old one; a plain rename would leave an
-unstaged deletion plus an untracked file, and `git commit -a` (or
-`git add -u`) would then commit the deletion alone, dropping the content
-from the repo. Inside a pre-commit run the work tree matches the index,
-because pre-commit stashed unstaged changes in a patch it re-applies after
-the hooks; it cannot re-apply that patch to a renamed file, so a file named
-in the patch is left alone (E806; see pre_commit_stashed_paths). Any rename
-makes the hook exit 1, so the commit stops and the renames can be reviewed.
+How files are renamed: a tracked file with `git mv`, anything else (only a
+file list a caller passes in) with a plain rename. git mv stages the
+rename, so the next commit carries both the new name and the removal of the
+old one; a plain rename would leave an unstaged deletion plus an untracked
+file, and `git commit -a` (or `git add -u`) would then commit the deletion
+alone, dropping the content from the repo. Three cases rename nothing
+(E806), because the rename would be lost:
+  - git commit -a and git commit <paths> give the hook a temporary index
+    that git discards when the hook fails (see uses_real_index);
+  - inside a pre-commit run, pre-commit has stashed unstaged changes in a
+    patch it re-applies after the hooks, and cannot re-apply it to a
+    renamed file, so a file named in the patch is left alone (see
+    pre_commit_stashed_paths; `pre-commit try-repo` uses a temporary cache,
+    where the patch is not found);
+  - --check.
+Any rename makes the hook exit 1, so the commit stops and the renames can
+be reviewed.
 
 Not in scope: more than one object per .bes file and Baselines (repository
 sites are thought to handle both); case conflicts and names Windows forbids

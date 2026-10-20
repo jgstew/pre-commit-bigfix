@@ -641,28 +641,35 @@ The site root is the repo root, or each `--site-root DIR` (repeatable, for a
 repo of several sites like CommunityContent's `Sites/<name>/`). Its
 `siteConfig.xml`, if tracked, names the folders (`BesFileDir`,
 `NonClientFilesDir`, `OtherFilesDir`); the defaults are `Fixlets`,
-`NonClientFiles` and `OtherFiles`. Folder names match ignoring case, as on
-the Windows server.
+`NonClientFiles` and `OtherFiles`.
+
+A root server can run Windows or RHEL, and one repo site may serve both, so
+names and paths must be valid on both: the stricter limit always applies.
+Folder names, the `.bes` extension and `digest.xml` match ignoring case, as
+on Windows, so nothing goes unchecked; one that matches only that way is a
+warning (`W808`), since RHEL is case-sensitive.
 
 | code | meaning |
 | --- | --- |
 | `E800` | a `.bes` file in the `.bes` folder whose name does not start with a numeric ID and a space or hyphen; `42- Name.bes` and `42 Name.bes` both work |
 | `E801` | two or more `.bes` files in one site share an ID, compared as integers, so `0042` and `42` collide; each names the others |
-| `E802` | a `.bes` file's server path is too long and cannot be fixed: even `<ID> X.bes` is too long (the folders are), or it has no ID. Renaming a folder changes its `.fxf` or digest, so that is left to you |
-| `E803` | fix: zero padding in the ID (`0042- X.bes` -> `42- X.bes`) |
+| `E802` | a `.bes` file's server path is too long and the rename cannot fix it: even `<ID> X.bes` is too long (the folders are), it has no ID, or `E805` is disabled. Renaming a folder changes its `.fxf` or digest, so that is left to you |
+| `E803` | fix: zero padding in the ID (`0042- X.bes` -> `42- X.bes`); done even when the ID is a duplicate (`E801`), since the ID does not change |
 | `E804` | fix: non-ASCII characters in the name, folded to ASCII |
-| `E805` | fix: the server path is too long, so the file is renamed `<ID> <Title>.bes` |
-| `E806` | a rename was skipped: the new name is taken (ignoring case), the file has unstaged changes pre-commit set aside, or the rename failed |
+| `E805` | fix: the server path is too long, or the name is over 255 bytes, so the file is renamed `<ID> <Title>.bes` |
+| `E806` | a rename was skipped: the new name is taken (ignoring case), the file has unstaged changes pre-commit set aside, the commit uses a temporary index (`git commit -a`, `git commit <paths>`), or the rename failed |
+| `E807` | another tracked file's server path is too long, inside the site roots or not (the server clones the whole repo). It is not renamed, since actions may refer to it by name |
+| `E808` | a file or folder name over 255 bytes in UTF-8 (Linux `NAME_MAX`) that the rename cannot fix; each folder once |
 | `W800` | a `.bes` file outside the `.bes` folder; the server does not gather it |
 | `W801` | a `.bes` file directly in the `.bes` folder, or deeper than `<BesFileDir>/<fxf>/<digest>/` (how the server handles either is undocumented) |
 | `W802` | a file in the `.bes` folder other than `.bes` or `digest.xml`; an `.xsd` too, since `bes-schema-validate` already has the schemas |
 | `W803` | a folder `siteConfig.xml` renames has no files (a default name spelled out, as the template does, is not checked: those folders are optional) |
 | `W804` | the site has no content: no `.bes` files and no files in the NonClient or Other folders. A site of server files only passes |
-| `W805` | another file's server path is too long. It is not renamed, since actions may refer to it by name |
 | `W806` | an ID outside 1..2147483647 (the range is undocumented) |
 | `W807` | `siteConfig.xml` is not readable XML; the default folders are used (`bes-schema-validate` reports why) |
+| `W808` | a folder, `.bes` extension or `digest.xml` that matches the expected name only when case is ignored (`fixlets/` for `Fixlets`, `.BES`); a RHEL server may not find it |
 
-**Path length.** The server clones the whole repo to
+**Path and name limits.** The server clones the whole repo to
 `<server-root>\RepositorySiteGather\Sites\<repo>_<branch>_<8 hex>\Source\`,
 and each file's path relative to the repo root (not the site root) is added
 to that. The result must be at most 259 characters (`MAX_PATH` is 260 with
@@ -671,7 +678,14 @@ paths enabled. For example, `bigfix-site-reporting-jgstew` on the `main`
 branch is cloned to
 `C:\Program Files (x86)\BigFix Enterprise\BES Server\RepositorySiteGather\Sites\bigfix-site-reporting-jgstew_main_27eb797e\Source\`,
 129 characters, leaving 130 for the path in the repo. `<repo>` is the git
-repo's name, not the site's name in BigFix. The options:
+repo's name, not the site's name in BigFix. The length is counted in UTF-16
+units, as Windows counts it. Only this Windows layout is confirmed (the
+clone path on a RHEL server is not), so it is the path that is measured. On
+Linux each file and folder name must also be at most 255 bytes in UTF-8
+(`NAME_MAX`); Linux's 4096-byte `PATH_MAX` cannot be reached once the
+Windows limit holds. In a repo of several sites, paths are still measured
+from the repo root: CommunityContent's `Sites/<name>/Fixlets/...` paths
+count in full. The options:
 
 | option | default |
 | --- | --- |
@@ -684,24 +698,35 @@ repo's name, not the site's name in BigFix. The options:
 most once, combining the fixes it needs: zero padding stripped from the ID
 (`E803`), non-ASCII folded to ASCII (`E804`: the euro sign becomes `EUR`, a
 curly apostrophe `'`, accents are dropped, and `_` stands in when there is no
-equivalent), and, if the path is
-still too long, `<ID> <Title>.bes` cut to fit (`E805`). The title comes from
-the file's `<Title>`, or from its current name if it has none; it is made
+equivalent), and, if the path or name is still too long, `<ID> <Title>.bes`
+cut to fit both limits (`E805`). The title comes from the file's `<Title>`,
+or from its current name if the title has no letter or digit; it is made
 ASCII and safe on Windows, cut short, and any trailing space, dot or hyphen
 is dropped. A name that already fits is left alone, even when it differs
 from the title. The ID never changes and no file moves between folders.
 
 Tracked files are renamed with `git mv`, so the renames are staged and the
 next commit carries them whole; a plain rename would leave an unstaged
-deletion that `git commit -a` could commit without the new file. A file with
-unstaged changes that pre-commit set aside for the run is left alone
-(`E806`): pre-commit could not put those changes back on a renamed file.
+deletion that `git commit -a` could commit without the new file. Nothing is
+renamed (`E806`) where the rename would be lost:
+
+- `git commit -a` and `git commit <paths>` run the hook on a temporary index
+  that git throws away when the hook fails. `git add` the changes and run a
+  plain `git commit` (or `pre-commit run`) to get the renames.
+- A file with unstaged changes that pre-commit set aside for the run: it
+  could not put them back on a renamed file. The hook finds pre-commit's
+  stash file by the pid of its parent, grandparent or great-grandparent (a
+  Windows `.exe` launcher sits in between); this is verified on macOS only.
+  `pre-commit try-repo` keeps its stash in a temporary cache that the hook
+  cannot see, so there such a file is renamed and pre-commit then fails to
+  restore the changes (they stay in its patch file).
 Any rename makes the hook exit 1, so review the renames and commit again.
 `--check` is a dry run that reports what would be renamed.
 
-Files with no ID are reported (`E800`), not given one: choosing IDs is a
-policy decision, and taking the highest ID plus one could reuse a deleted
-item's ID. There is no `--assign-ids` option.
+Files with no ID are reported (`E800`), not given one. An opt-in
+`--assign-ids` is deferred: choosing IDs is a policy decision, best backed
+by a counter file as CommunityContent does, since taking the highest ID plus
+one could reuse a deleted item's ID.
 
 Not checked here: more than one object in a `.bes` file, or Baselines
 (repository sites are thought to handle both); schemas, GroupRelevance and

@@ -14,7 +14,13 @@
   padding stripped from the ID (#33), non-ASCII folded to ASCII (#32), and a
   name too long for the server path shortened to `<ID> <Title>.bes`. The ID
   never changes. Any rename fails the hook so it can be reviewed; `--check`
-  is a dry run. Codes `E800`-`E806` and `W800`-`W807`; see the README.
+  is a dry run. Nothing is renamed under `git commit -a` or
+  `git commit <paths>`, whose temporary index git discards when the hook
+  fails.
+- Names and paths must suit both Windows and RHEL root servers: a server
+  path of at most 259 characters, and at most 255 bytes per file or folder
+  name. Codes `E800`-`E808` and `W800`-`W808` (no `W805`); see the README.
+- `--assign-ids` is deferred.
 
 ## v1.12.0
 
