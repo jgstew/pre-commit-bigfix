@@ -285,3 +285,185 @@ def test_main_uses_injected_file_list(tmp_path, monkeypatch):
 
     assert hook.main([], list_files=lister) == 0
     assert os.path.realpath(seen[0]) == os.path.realpath(repo)
+
+
+# --- E800 numeric ID prefix ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "42- Name.bes",  # the documented form
+        "42 Name.bes",  # reported to work, James's ruling
+        "42-Name.bes",  # every CommunityContent file
+        "7200101 Paint.net-Update.bes",  # BigFix-ExtendedContent
+        "42 - Name.bes",
+    ],
+)
+def test_e800_accepts_id_then_space_or_hyphen(tmp_path, name):
+    # Bad.bes is the control: it shows the check ran and only it was flagged
+    repo = make_repo(tmp_path, {f"Fixlets/A/{name}": None, "Fixlets/A/Bad.bes": None})
+    assert run(repo, check=True) == {"Fixlets/A/Bad.bes": ["E800"]}
+
+
+@pytest.mark.parametrize(
+    "name", ["Name.bes", "42_Name.bes", "42.bes", "x42- Name.bes", "Name.BES"]
+)
+def test_e800_flags_names_without_an_id_prefix(tmp_path, name):
+    repo = make_repo(tmp_path, {f"Fixlets/A/{name}": None})
+    found = messages(repo, check=True)
+    assert [code for _path, code, _msg in found] == ["E800"]
+    path, _code, message = found[0]
+    assert path == f"Fixlets/A/{name}"
+    assert "42- Name.bes" in message  # says what the name should look like
+
+
+def test_e800_only_inside_the_bes_folder(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/Name.bes": None, "tests/Name.bes": None})
+    found = run(repo, check=True)
+    assert "E800" in found["Fixlets/A/Name.bes"]
+    assert "E800" not in found.get("tests/Name.bes", [])
+
+
+def test_e800_uses_the_bes_folder_from_site_config(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": "<SiteConfig><BesFileDir>Content</BesFileDir></SiteConfig>",
+            "Content/A/Name.bes": None,
+            "Fixlets/A/Other.bes": None,
+        },
+    )
+    found = run(repo, check=True)
+    assert "E800" in found["Content/A/Name.bes"]
+    assert "E800" not in found.get("Fixlets/A/Other.bes", [])
+
+
+def test_e800_bes_folder_matches_case_insensitively(tmp_path):
+    # the server runs on Windows, where fixlets\ and Fixlets\ are one folder
+    repo = make_repo(tmp_path, {"fixlets/A/Name.bes": None})
+    assert "E800" in run(repo, check=True)["fixlets/A/Name.bes"]
+
+
+# --- E801 duplicate IDs -------------------------------------------------------
+
+
+def test_e801_compares_ids_as_integers(tmp_path):
+    repo = make_repo(
+        tmp_path, {"Fixlets/A/0042- X.bes": None, "Fixlets/B/42- Y.bes": None}
+    )
+    found = [m for m in messages(repo, check=True) if m[1] == "E801"]
+    assert sorted(path for path, _code, _msg in found) == [
+        "Fixlets/A/0042- X.bes",
+        "Fixlets/B/42- Y.bes",
+    ]
+    by_path = {path: msg for path, _code, msg in found}
+    assert "Fixlets/B/42- Y.bes" in by_path["Fixlets/A/0042- X.bes"]
+    assert "Fixlets/A/0042- X.bes" in by_path["Fixlets/B/42- Y.bes"]
+    assert "42" in by_path["Fixlets/A/0042- X.bes"]
+
+
+def test_e801_names_every_other_file(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/7- a.bes": None,
+            "Fixlets/A/7 b.bes": None,
+            "Fixlets/A/7-c.bes": None,
+        },
+    )
+    found = {p: m for p, c, m in messages(repo, check=True) if c == "E801"}
+    assert len(found) == 3
+    assert "Fixlets/A/7 b.bes" in found["Fixlets/A/7- a.bes"]
+    assert "Fixlets/A/7-c.bes" in found["Fixlets/A/7- a.bes"]
+
+
+def test_e801_distinct_ids_pass(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/1- a.bes": None,
+            "Fixlets/A/10- a.bes": None,
+            "Fixlets/A/5- x.bes": None,  # the control pair
+            "Fixlets/A/5 y.bes": None,
+        },
+    )
+    assert run(repo, check=True) == {
+        "Fixlets/A/5 y.bes": ["E801"],
+        "Fixlets/A/5- x.bes": ["E801"],
+    }
+
+
+def test_e801_is_per_site(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Sites/A/Fixlets/X/1- a.bes": None,
+            "Sites/B/Fixlets/X/1- b.bes": None,
+            "Sites/B/Fixlets/Y/01- c.bes": None,
+        },
+    )
+    found = run(repo, ["Sites/A", "Sites/B"], check=True)
+    assert "E801" not in found.get("Sites/A/Fixlets/X/1- a.bes", [])
+    assert "E801" in found["Sites/B/Fixlets/X/1- b.bes"]
+    assert "E801" in found["Sites/B/Fixlets/Y/01- c.bes"]
+
+
+def test_e801_ignores_bes_files_outside_the_bes_folder(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/1- a.bes": None,
+            "Fixlets/B/1 b.bes": None,
+            "Archive/1- old.bes": None,
+        },
+    )
+    flagged = sorted(p for p, c, m in messages(repo, check=True) if c == "E801")
+    assert flagged == ["Fixlets/A/1- a.bes", "Fixlets/B/1 b.bes"]
+    assert "Archive" not in str(messages(repo, check=True))
+
+
+# --- W806 ID range ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("prefix", "flagged"),
+    [
+        ("0", True),
+        ("000", True),
+        ("1", False),
+        ("2147483647", False),
+        ("2147483648", True),
+        ("99999999999999999999", True),
+    ],
+)
+def test_w806_id_out_of_range(tmp_path, prefix, flagged):
+    # Fixlets/B/0- control.bes is always flagged: it shows the check ran
+    repo = make_repo(
+        tmp_path,
+        {f"Fixlets/A/{prefix}- a.bes": None, "Fixlets/B/0- control.bes": None},
+    )
+    found = run(repo, check=True)
+    assert "W806" in found["Fixlets/B/0- control.bes"]
+    assert ("W806" in found.get(f"Fixlets/A/{prefix}- a.bes", [])) is flagged
+
+
+def test_w806_is_a_warning_main_passes(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/2147483648- a.bes": None})
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check"]) == 0
+    assert hook.main(["--check", "--strict"]) == 1
+
+
+def test_main_fails_on_e800(tmp_path, monkeypatch, capsys):
+    repo = make_repo(tmp_path, {"Fixlets/A/Name.bes": None})
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check"]) == 1
+    assert "Fixlets/A/Name.bes:1: [E800]" in capsys.readouterr().out
+
+
+def test_disable_drops_a_code(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/Name.bes": None})
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check", "--disable", "E800"]) == 0
+    assert run(repo, check=True, disabled={"E800"}) == {}
