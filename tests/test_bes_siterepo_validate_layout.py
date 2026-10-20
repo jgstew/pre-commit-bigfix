@@ -648,3 +648,139 @@ def test_w803_not_for_default_names_spelled_out(tmp_path):
     found = messages(repo, ["", "Sites/B"], check=True)
     assert [(p, c) for p, c, m in found] == [("Sites/B/siteConfig.xml", "W803")]
     assert "Srv/" in found[0][2]
+
+
+# --- path length --------------------------------------------------------------
+
+# a 10-character prefix keeps the arithmetic readable: limit 50 leaves 40
+SHORT_PREFIX = "C:\\Source\\"
+
+
+def test_w805_long_non_bes_path(tmp_path):
+    long_name = "OtherFiles/" + "x" * 25 + ".txt"  # 40 characters
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/1- a.bes": None,
+            long_name: "x",
+            "OtherFiles/" + "y" * 26 + ".txt": "x",  # 41
+        },
+    )
+    found = messages(repo, check=True, prefix=SHORT_PREFIX, max_path=50)
+    assert [(p, c) for p, c, m in found] == [
+        ("OtherFiles/" + "y" * 26 + ".txt", "W805")
+    ]
+    message = found[0][2]
+    assert "51" in message and "50" in message
+    assert "rename" in message.lower()  # says why it is not renamed
+
+
+def test_w805_counts_the_prefix(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None, "OtherFiles/x.txt": "x"})
+    # 16 characters of path; 50 - 16 = 34 left for the prefix
+    assert run(repo, check=True, prefix="P" * 34, max_path=50) == {}
+    assert run(repo, check=True, prefix="P" * 35, max_path=50) == {
+        "OtherFiles/x.txt": ["W805"]
+    }
+
+
+def test_w805_bes_outside_the_bes_folder(tmp_path):
+    repo = make_repo(
+        tmp_path, {"Fixlets/A/1- a.bes": None, "Archive/" + "z" * 40 + ".bes": None}
+    )
+    found = run(repo, check=True, prefix=SHORT_PREFIX, max_path=50)
+    assert found == {"Archive/" + "z" * 40 + ".bes": ["W800", "W805"]}
+
+
+def test_w805_files_outside_every_site_root(tmp_path):
+    # the server clones the whole repo, so every tracked file counts
+    repo = make_repo(
+        tmp_path,
+        {"Sites/A/Fixlets/X/1- a.bes": None, "tools/" + "t" * 40 + ".py": "x"},
+    )
+    found = run(repo, ["Sites/A"], check=True, prefix=SHORT_PREFIX, max_path=50)
+    assert found == {"tools/" + "t" * 40 + ".py": ["W805"]}
+
+
+def test_path_measured_from_the_repo_root_not_the_site_root(tmp_path):
+    # Sites/A/OtherFiles/abc.txt is 26 characters; OtherFiles/abc.txt only 18
+    repo = make_repo(
+        tmp_path,
+        {"Sites/A/Fixlets/X/1- a.bes": None, "Sites/A/OtherFiles/abc.txt": "x"},
+    )
+    assert run(repo, ["Sites/A"], check=True, prefix="", max_path=26) == {}
+    found = run(repo, ["Sites/A"], check=True, prefix="", max_path=25)
+    assert found["Sites/A/OtherFiles/abc.txt"] == ["W805"]
+
+
+def test_e802_folders_alone_too_long(tmp_path):
+    folder = "Fixlets/" + "f" * 30  # 38 characters
+    repo = make_repo(
+        tmp_path,
+        {
+            f"{folder}/123- a.bes": None,  # shortest name 123 a.bes: 48 + 10 = 58
+            "Fixlets/A/7- " + "n" * 40 + ".bes": None,  # fixable, so not E802
+        },
+    )
+    found = messages(repo, check=True, prefix=SHORT_PREFIX, max_path=57)
+    by_path = {p: (c, m) for p, c, m in found}
+    assert by_path[f"{folder}/123- a.bes"][0] == "E802"
+    assert "folder" in by_path[f"{folder}/123- a.bes"][1]
+    assert "E802" not in str(by_path.get("Fixlets/A/7- " + "n" * 40 + ".bes"))
+    # one more character of limit and `123 a.bes` fits
+    found = run(repo, check=True, prefix=SHORT_PREFIX, max_path=58)
+    assert "E802" not in found.get(f"{folder}/123- a.bes", [])
+
+
+def test_e802_bes_without_an_id(tmp_path):
+    # no ID to build a short name from, so it cannot be fixed either
+    repo = make_repo(tmp_path, {"Fixlets/A/" + "n" * 50 + ".bes": None})
+    found = run(repo, check=True, prefix=SHORT_PREFIX, max_path=50)
+    assert found == {"Fixlets/A/" + "n" * 50 + ".bes": ["E800", "E802"]}
+
+
+def test_confirmed_server_prefix_leaves_130(tmp_path, monkeypatch, capsys):
+    ok = "OtherFiles/" + "o" * 115 + ".txt"  # 130
+    over = "OtherFiles/" + "p" * 116 + ".txt"  # 131
+    repo = make_repo(
+        tmp_path,
+        {"Fixlets/A/1- a.bes": None, ok: "x", over: "x"},
+        name="bigfix-site-reporting-jgstew",
+    )
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check"]) == 0  # W805 is a warning
+    out = capsys.readouterr().out
+    assert over in out and "[W805]" in out
+    assert ok not in out
+
+
+def test_main_path_options(tmp_path, monkeypatch, capsys):
+    rel = "OtherFiles/" + "o" * 115 + ".txt"  # 130: fits the default prefix
+    repo = make_repo(
+        tmp_path,
+        {"Fixlets/A/1- a.bes": None, rel: "x"},
+        name="bigfix-site-reporting-jgstew",
+    )
+    monkeypatch.chdir(repo)
+    for args in (
+        ["--repo-name", "bigfix-site-reporting-jgstew2"],
+        ["--branch", "mainx"],
+        ["--server-root", hook.DEFAULT_SERVER_ROOT + "x"],
+        ["--max-path", "258"],
+    ):
+        capsys.readouterr()
+        assert hook.main(["--check", "--strict", *args]) == 1, args
+        assert "[W805]" in capsys.readouterr().out
+    assert hook.main(["--check", "--strict", "--server-root", "C:\\BES"]) == 0
+
+
+def test_main_repo_name_defaults_to_origin(tmp_path, monkeypatch, capsys):
+    rel = "OtherFiles/" + "o" * 115 + ".txt"
+    repo = make_repo(tmp_path, {"Fixlets/A/1- a.bes": None, rel: "x"}, name="x")
+    git(repo, "remote", "add", "origin", "https://h/o/bigfix-site-reporting-jgstew.git")
+    monkeypatch.chdir(repo)
+    assert hook.main(["--check", "--strict"]) == 0  # 129 + 130 = 259
+    git(
+        repo, "remote", "set-url", "origin", "git@h:o/bigfix-site-reporting-jgstewX.git"
+    )
+    assert hook.main(["--check", "--strict"]) == 1
