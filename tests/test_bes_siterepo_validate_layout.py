@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Tests for pre_commit_bigfix/bes_siterepo_validate_layout.py.
+
+The hook checks a Git External Custom Site ("repository site") repo as a
+whole: its file list comes from `git ls-files`, so most tests build a small
+git repo in tmp_path. Covered here: the server path prefix (pinned to the
+path confirmed on a real server), the repo-name default, the file list,
+siteConfig.xml folder names, the naming and duplicate-ID errors, the layout
+warnings, path length, the rename auto-fix, --check, and main()'s exit codes.
+"""
+
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from pre_commit_bigfix import bes_siterepo_validate_layout as hook
+
+# confirmed on James's BigFix server for jgstew/bigfix-site-reporting-jgstew
+CONFIRMED_SOURCE = (
+    "C:\\Program Files (x86)\\BigFix Enterprise\\BES Server\\RepositorySiteGather"
+    "\\Sites\\bigfix-site-reporting-jgstew_main_27eb797e\\Source\\"
+)
+
+BES_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+    'xsi:noNamespaceSchemaLocation="BES.xsd">\n'
+    "\t<Task>\n\t\t<Title>{title}</Title>\n"
+    "\t\t<Description>d</Description>\n\t\t<Relevance>true</Relevance>\n"
+    "\t</Task>\n</BES>\n"
+)
+
+
+def bes(title="Example Task"):
+    """A minimal Task whose <Title> is `title` (raw XML text)."""
+    return BES_TEMPLATE.format(title=title)
+
+
+def git(repo, *args):
+    """Run git in `repo` and return its stdout."""
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout
+
+
+def make_repo(root, files, name="site-repo", add=True):
+    """Create a git repo under `root` named `name` holding `files`.
+
+    `files` maps repo-relative paths to text (a .bes with None gets bes()).
+    With `add`, every file is staged, which is all `git ls-files` needs.
+    """
+    repo = Path(root) / name
+    repo.mkdir(parents=True, exist_ok=True)
+    git(repo, "init", "-q")
+    for rel, text in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            text = bes(Path(rel).stem)
+        path.write_text(text, encoding="utf-8")
+    if add and files:
+        git(repo, "add", "-A")
+    return repo
+
+
+def run(repo, *args, files=None, **kwargs):
+    """Run check_repo() on `repo` with its tracked files; return {path: codes}."""
+    if files is None:
+        files = hook.git_ls_files(repo)
+    results = hook.check_repo(str(repo), files, *args, **kwargs)
+    return {
+        path: sorted(code for _line, code, _msg in issues + fixed)
+        for path, issues, fixed in results
+        if issues or fixed
+    }
+
+
+def messages(repo, *args, files=None, **kwargs):
+    """Run check_repo() on `repo`; return every (path, code, message) reported."""
+    if files is None:
+        files = hook.git_ls_files(repo)
+    found = []
+    for path, issues, fixed in hook.check_repo(str(repo), files, *args, **kwargs):
+        found += [(path, code, msg) for _line, code, msg in issues + fixed]
+    return found
+
+
+# --- server path prefix -----------------------------------------------------
+
+
+def test_server_prefix_matches_the_path_confirmed_on_a_server():
+    prefix = hook.server_prefix(
+        hook.DEFAULT_SERVER_ROOT,
+        "bigfix-site-reporting-jgstew",
+        "main",
+        commit_hash="27eb797e",
+    )
+    assert prefix == CONFIRMED_SOURCE
+    assert len(prefix) == 129
+
+
+def test_server_prefix_placeholder_hash_is_eight_characters():
+    prefix = hook.server_prefix(
+        hook.DEFAULT_SERVER_ROOT, "bigfix-site-reporting-jgstew", "main"
+    )
+    assert len(prefix) == 129
+    assert prefix.startswith(hook.DEFAULT_SERVER_ROOT + "\\RepositorySiteGather\\")
+
+
+def test_server_prefix_other_server_root_and_trailing_separator():
+    prefix = hook.server_prefix(
+        "E:\\Program Files\\BigFix Enterprise\\BES Server\\", "AACBigFix", "HX90"
+    )
+    assert prefix.startswith(
+        "E:\\Program Files\\BigFix Enterprise\\BES Server\\RepositorySiteGather"
+        "\\Sites\\AACBigFix_HX90_"
+    )
+    assert "\\\\" not in prefix
+    assert prefix.endswith("\\Source\\")
+
+
+def test_server_path_length_uses_backslashes_and_whole_relative_path():
+    prefix = hook.server_prefix(
+        hook.DEFAULT_SERVER_ROOT, "bigfix-site-reporting-jgstew", "main"
+    )
+    # 129 + 130 = 259, the limit; one more is over
+    rel = "Fixlets/" + "a" * 118 + ".bes"
+    assert len(rel) == 130
+    assert hook.server_path_length(prefix, rel) == 259
+
+
+def test_server_path_length_counts_utf16_units():
+    # Windows MAX_PATH counts UTF-16 code units: an astral character is two
+    assert hook.server_path_length("", "a\U0001f600.bes") == 7
+
+
+# --- repo name ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "name"),
+    [
+        ("https://github.com/jgstew/bigfix-site-reporting-jgstew.git", None),
+        ("https://github.com/jgstew/bigfix-site-reporting-jgstew", None),
+        ("https://github.com/jgstew/bigfix-site-reporting-jgstew/", None),
+        ("git@github.com:jgstew/bigfix-site-reporting-jgstew.git", None),
+        ("ssh://git@host:2222/jgstew/bigfix-site-reporting-jgstew.git", None),
+        ("git@github.com:acapasso/AACBigFix.git", "AACBigFix"),
+        ("git@host:AACBigFix.git", "AACBigFix"),
+    ],
+)
+def test_repo_name_from_url(url, name):
+    assert hook.repo_name_from_url(url) == (name or "bigfix-site-reporting-jgstew")
+
+
+def test_default_repo_name_uses_origin(tmp_path):
+    repo = make_repo(tmp_path, {}, name="local-folder")
+    git(repo, "remote", "add", "origin", "git@github.com:owner/remote-name.git")
+    assert hook.default_repo_name(str(repo)) == "remote-name"
+
+
+def test_default_repo_name_falls_back_to_folder(tmp_path):
+    repo = make_repo(tmp_path, {}, name="local-folder")
+    assert hook.default_repo_name(str(repo)) == "local-folder"
+
+
+# --- file list ----------------------------------------------------------------
+
+
+def test_git_ls_files_lists_tracked_files_only(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/1- A.bes": None,
+            "Fixlets/2- Euro \u20ac.bes": None,
+            "Sites/With Space/x.txt": "x",
+            ".gitignore": "ignored.bes\n",
+        },
+    )
+    (repo / "Fixlets" / "3- untracked.bes").write_text(bes(), encoding="utf-8")
+    (repo / "ignored.bes").write_text(bes(), encoding="utf-8")
+    assert hook.git_ls_files(str(repo)) == [
+        ".gitignore",
+        "Fixlets/1- A.bes",
+        "Fixlets/2- Euro \u20ac.bes",
+        "Sites/With Space/x.txt",
+    ]
+
+
+# --- siteConfig.xml -----------------------------------------------------------
+
+
+def test_site_config_defaults_without_file(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/1- A.bes": None})
+    config = hook.read_site_config(str(repo), "", hook.git_ls_files(repo))
+    assert config.bes_dir == "Fixlets"
+    assert config.nonclient_dir == "NonClientFiles"
+    assert config.other_dir == "OtherFiles"
+    assert config.named == ()
+    assert config.issue is None
+
+
+def test_site_config_renamed_folders(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "siteConfig.xml": (
+                '<?xml version="1.0" encoding="UTF-8"?>\n<SiteConfig>\n'
+                "  <BesFileDir>Content</BesFileDir>\n"
+                "  <NonClientFilesDir> ServerFiles </NonClientFilesDir>\n"
+                "  <OtherFilesDir>ClientFiles/</OtherFilesDir>\n</SiteConfig>\n"
+            )
+        },
+    )
+    config = hook.read_site_config(str(repo), "", hook.git_ls_files(repo))
+    assert (config.bes_dir, config.nonclient_dir, config.other_dir) == (
+        "Content",
+        "ServerFiles",
+        "ClientFiles",
+    )
+    assert set(config.named) == {"Content", "ServerFiles", "ClientFiles"}
+
+
+def test_site_config_partial_keeps_other_defaults(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Sites/A/siteConfig.xml": (
+                "<SiteConfig><NonClientFilesDir>Srv</NonClientFilesDir></SiteConfig>"
+            )
+        },
+    )
+    config = hook.read_site_config(str(repo), "Sites/A", hook.git_ls_files(repo))
+    assert (config.bes_dir, config.nonclient_dir, config.other_dir) == (
+        "Fixlets",
+        "Srv",
+        "OtherFiles",
+    )
+    assert config.named == ("Srv",)
+
+
+def test_site_config_malformed_warns_and_uses_defaults(tmp_path):
+    repo = make_repo(tmp_path, {"siteConfig.xml": "<SiteConfig><BesFileDir>X"})
+    config = hook.read_site_config(str(repo), "", hook.git_ls_files(repo))
+    assert config.bes_dir == "Fixlets"
+    assert config.issue[1] == "W807"
+
+
+def test_site_config_untracked_is_ignored(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/1- A.bes": None})
+    (repo / "siteConfig.xml").write_text(
+        "<SiteConfig><BesFileDir>Content</BesFileDir></SiteConfig>", encoding="utf-8"
+    )
+    config = hook.read_site_config(str(repo), "", hook.git_ls_files(repo))
+    assert config.bes_dir == "Fixlets"
+
+
+# --- main ---------------------------------------------------------------------
+
+
+def test_main_clean_site_passes(tmp_path, monkeypatch, capsys):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- A.bes": None, "Fixlets/A/2 B.bes": None})
+    monkeypatch.chdir(repo)
+    assert hook.main([]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_main_outside_git_fails(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    assert hook.main([]) == 1
+    assert "git" in capsys.readouterr().out.lower()
+
+
+def test_main_uses_injected_file_list(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/1- A.bes": None})
+    monkeypatch.chdir(repo)
+    seen = []
+
+    def lister(root):
+        seen.append(root)
+        return ["Fixlets/A/1- A.bes"]
+
+    assert hook.main([], list_files=lister) == 0
+    assert os.path.realpath(seen[0]) == os.path.realpath(repo)
