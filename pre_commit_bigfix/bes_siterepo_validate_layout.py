@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 
 from lxml import etree
 
@@ -37,6 +38,10 @@ KNOWN_CODES = frozenset(
         "E800",
         "E801",
         "E802",
+        "E803",
+        "E804",
+        "E805",
+        "E806",
         "W800",
         "W801",
         "W802",
@@ -52,6 +57,31 @@ KNOWN_CODES = frozenset(
 ID_PREFIX_RE = re.compile(r"^([0-9]+)[ -]")
 # undocumented; the largest signed 32-bit integer is the likely ceiling
 MAX_ID = 2147483647
+
+# non-ASCII characters NFKD does not fold, or folds to something unwanted:
+# currency from #32, typographic quotes and dashes (the one non-ASCII name
+# found in the corpora was Docker\u2019s). Double quotes become ' because
+# Windows forbids " in file names.
+ASCII_TABLE = {
+    "\u20ac": "EUR",
+    "\u00a3": "GBP",
+    "\u00df": "ss",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u201c": "'",
+    "\u201d": "'",
+    "\u201e": "'",
+    "\u201f": "'",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+}
+# characters Windows forbids in a file name (control characters too)
+WINDOWS_FORBIDDEN = frozenset('<>:"/\\|?*')
+FIX_CODES = ("E803", "E804", "E805")
 
 SiteConfig = collections.namedtuple(
     "SiteConfig", "bes_dir nonclient_dir other_dir named issue"
@@ -176,6 +206,55 @@ def read_site_config(root, site_root, files):
         if name.lower() != default.lower()
     )
     return SiteConfig(*found, named=named, issue=None)
+
+
+def _windows_safe(char):
+    """True for a printable ASCII character Windows allows in a file name."""
+    return " " <= char <= "~" and char not in WINDOWS_FORBIDDEN
+
+
+def fold_ascii(text):
+    """Return `text` with each non-ASCII character replaced by ASCII (#32).
+
+    ASCII_TABLE first, then Unicode NFKD with the combining marks dropped
+    (\u00e9 -> e, \u2122 -> TM); a character with no Windows-safe ASCII
+    equivalent becomes `_`. ASCII characters are left as they are.
+    """
+    out = []
+    for char in text:
+        if char.isascii():
+            out.append(char)
+        elif char in ASCII_TABLE:
+            out.append(ASCII_TABLE[char])
+        else:
+            decomposed = "".join(
+                c
+                for c in unicodedata.normalize("NFKD", char)
+                if not unicodedata.combining(c)
+            )
+            ok = decomposed and all(_windows_safe(c) for c in decomposed)
+            out.append(decomposed if ok else "_")
+    return "".join(out)
+
+
+def safe_title(title):
+    """Turn a Title into ASCII text that is safe in a Windows file name.
+
+    Runs of whitespace become one space, and the ends are trimmed; then
+    non-ASCII is folded and anything Windows forbids becomes `_`.
+    """
+    text = fold_ascii(re.sub(r"\s+", " ", title).strip())
+    return "".join(c if _windows_safe(c) else "_" for c in text)
+
+
+def read_title(path):
+    """The first content object's <Title> in a .bes file, or None."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    try:
+        titles = etree.parse(path, parser).xpath("/BES/*/Title")
+    except (OSError, etree.XMLSyntaxError):
+        return None
+    return "".join(titles[0].itertext()) if titles else None
 
 
 def _within(rel, folder):
@@ -392,6 +471,147 @@ def _check_lengths(results, files, gathered, prefix, max_path):
                 )
 
 
+class _Renamer:
+    """Plans the one rename each gathered .bes file may get, then makes them.
+
+    The new name combines E803 (zero padding stripped from the ID), E804
+    (non-ASCII folded) and, when the server path is still too long, E805
+    (`<ID> <Title>` cut to fit). The ID never changes and the file never
+    leaves its folder. A name already taken, ignoring case, by a tracked
+    file, another planned rename or anything on disk is E806 instead.
+    """
+
+    def __init__(self, root, files, prefix, max_path, disabled):
+        self.root = root
+        self.prefix = prefix
+        self.max_path = max_path
+        self.disabled = disabled
+        # lowercased path -> the path holding that name
+        self.taken = {path.lower(): path for path in files}
+        self.renames = []  # (old path, new path, [(code, reason)])
+
+    def _length(self, path):
+        return server_path_length(self.prefix, path)
+
+    def _new_name(self, results, path):
+        """Return (new name, [(code, reason)]) for `path`; reasons may be []."""
+        folder, _, name = path.rpartition("/")
+        digits = ID_PREFIX_RE.match(name).group(1)
+        number = int(digits)
+        new, reasons = name, []
+        if "E803" not in self.disabled and digits != str(number):
+            new = str(number) + new[len(digits) :]
+            reasons.append(("E803", f"zero-padded ID {digits} is {number}"))
+        if "E804" not in self.disabled and not new.isascii():
+            new = fold_ascii(new)
+            reasons.append(("E804", "non-ASCII characters in the file name"))
+        length = self._length(_join(folder, new))
+        if "E805" not in self.disabled and length > self.max_path:
+            extension = os.path.splitext(name)[1]
+            stem = _join(folder, f"{number} ")
+            room = self.max_path - self._length(stem + extension)
+            if room >= 1:  # otherwise _check_lengths reported E802
+                title = read_title(os.path.join(self.root, path))
+                if title is None or not safe_title(title):
+                    # the current name, without its ID prefix
+                    title = os.path.splitext(name[len(digits) :])[0].lstrip(" -")
+                short = safe_title(title)[:room].rstrip(" .-")
+                if short:
+                    new = f"{number} {short}{extension}"
+                    reasons.append(
+                        (
+                            "E805",
+                            (
+                                f"server path is {length} characters, over the "
+                                f"{self.max_path} limit"
+                            ),
+                        )
+                    )
+                else:
+                    results.issue(
+                        path,
+                        "E802",
+                        f"server path is {length} characters, over the "
+                        f"{self.max_path} limit, and there is no title to "
+                        "build a shorter name from",
+                    )
+        return new, reasons
+
+    def plan(self, results, path):
+        """Plan the rename of gathered .bes file `path`, if it needs one."""
+        if ID_PREFIX_RE.match(path.rsplit("/", 1)[-1]) is None:
+            return  # E800: no ID to keep
+        new, reasons = self._new_name(results, path)
+        if not reasons:
+            return
+        new_path = _join(path.rpartition("/")[0], new)
+        holder = self._holder(path, new_path)
+        if holder:
+            why = "; ".join(reason for _code, reason in reasons)
+            results.issue(
+                path,
+                "E806",
+                f"not renamed to {new} ({why}): {holder} has that name "
+                "(names are compared ignoring case); rename it by hand",
+            )
+            return
+        self.renames.append((path, new_path, reasons))
+
+    def _holder(self, path, new_path):
+        """Describe what already has the name `new_path`, or return None."""
+        key = new_path.lower()
+        if key == path.lower():
+            return None  # only the file itself
+        if key in self.taken:
+            return self.taken[key]
+        for old, planned, _reasons in self.renames:
+            if key == planned.lower():
+                return f"{old}, which is being renamed to it,"
+        if os.path.lexists(os.path.join(self.root, new_path)):
+            return "an untracked file"
+        return None
+
+    def apply(self, results, check, use_git):
+        """Make the planned renames (or, under `check`, report them)."""
+        for old, new_path, reasons in self.renames:
+            new = new_path.rsplit("/", 1)[-1]
+            if check:
+                for code, reason in reasons:
+                    results.issue(
+                        old,
+                        code,
+                        f"{reason}; would be renamed to {new} (run without --check)",
+                    )
+                continue
+            error = _rename(self.root, old, new_path, use_git)
+            if error:
+                results.issue(old, "E806", f"could not rename to {new}: {error}")
+                continue
+            for code, reason in reasons:
+                results.fixed[old].append((1, code, f"{reason}; renamed to {new}"))
+
+
+def _rename(root, old, new, use_git):
+    """Rename repo-relative `old` to `new`; return an error message or None."""
+    if use_git:
+        try:
+            result = subprocess.run(
+                ["git", "mv", "--", old, new],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as err:
+            return str(err)
+        return result.stderr.strip() or "git mv failed" if result.returncode else None
+    try:
+        os.rename(os.path.join(root, old), os.path.join(root, new))
+    except OSError as err:
+        return str(err)
+    return None
+
+
 def check_repo(
     root,
     files,
@@ -400,7 +620,8 @@ def check_repo(
     prefix=None,
     max_path=DEFAULT_MAX_PATH,
     disabled=frozenset(),
-    **_options,
+    check=False,
+    use_git=False,
 ):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
@@ -409,6 +630,11 @@ def check_repo(
     root). `prefix` is the server folder the repo is cloned into (see
     server_prefix(); by default the default server root, the repo's name and
     branch main). This is the programmatic entry point: it does no printing.
+
+    Unless `check`, the .bes files the fix codes (E803-E805) apply to are
+    renamed: with `git mv` when `use_git` (main() always does), otherwise
+    with a plain filesystem rename. Codes in `disabled` are dropped; for a
+    fix code that also stops that part of the rename.
     """
     if prefix is None:
         prefix = server_prefix(
@@ -424,6 +650,10 @@ def check_repo(
         _check_ids(results, bes_paths)
         gathered.update(bes_paths)
     _check_lengths(results, files, gathered, prefix, max_path)
+    renamer = _Renamer(root, files, prefix, max_path, disabled)
+    for path in sorted(gathered):
+        renamer.plan(results, path)
+    renamer.apply(results, check, use_git)
     return results.as_list(disabled)
 
 
@@ -525,8 +755,14 @@ def main(argv=None, list_files=git_ls_files):
             max_path=args.max_path,
             disabled=disabled,
             check=args.check,
+            use_git=True,
         )
     )
+    if fix_count:
+        print(
+            f"\nrenamed .bes file(s) ({fix_count} fix(es)); the renames are staged "
+            "with git mv: review them and commit again."
+        )
     if warning_count:
         print(f"{warning_count} site layout warning(s).")
     if issue_count:

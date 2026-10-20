@@ -895,13 +895,13 @@ def test_e805_shortens_to_id_and_title(tmp_path):
     root, files = plain_repo(
         tmp_path, {long_name: bes("Install: Widget/Pro \u2013 v2.0 for Windows")}
     )
-    # Fixlets/A/12 = 12 characters; 10 + 12 + 1 + 4 = 27, so 50 leaves 23
+    # 10 + len("Fixlets/A/12 ") 13 + len(".bes") 4 = 27, so 53 leaves 26
     results = hook.check_repo(
-        str(root), files, prefix=SHORT_PREFIX, max_path=50, check=False
+        str(root), files, prefix=SHORT_PREFIX, max_path=53, check=False
     )
     new = "Fixlets/A/12 Install_ Widget_Pro - v2.0.bes"
     assert listing(root) == [new]
-    assert hook.server_path_length(SHORT_PREFIX, new) <= 50
+    assert hook.server_path_length(SHORT_PREFIX, new) == 53
     ((_path, issues, fixed),) = results
     assert issues == [] and [c for _l, c, _m in fixed] == ["E805"]
 
@@ -1054,14 +1054,16 @@ def test_main_renames_with_git_mv(tmp_path, monkeypatch, capsys):
     repo = make_repo(
         tmp_path, {"Fixlets/A/0042- X.bes": None, "Fixlets/A/1- ok.bes": None}
     )
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
     monkeypatch.chdir(repo)
     assert hook.main([]) == 1
     out = capsys.readouterr().out
     assert "[E803] auto-fixed" in out
     assert "review" in out.lower()
     # staged as a rename, with nothing left unstaged
-    status = git(repo, "status", "--porcelain")
-    assert "R  Fixlets/A/0042- X.bes -> Fixlets/A/42- X.bes" in status
+    staged = git(repo, "diff", "--cached", "--name-status", "-M", "-z").split("\0")
+    assert staged[:3] == ["R100", "Fixlets/A/0042- X.bes", "Fixlets/A/42- X.bes"]
+    assert git(repo, "diff", "--name-only") == ""
     assert listing(repo) == ["Fixlets/A/1- ok.bes", "Fixlets/A/42- X.bes"]
     # nothing left to do
     assert hook.main([]) == 0
@@ -1082,4 +1084,5 @@ def test_main_check_renames_nothing(tmp_path, monkeypatch, capsys):
     assert hook.main(["--check"]) == 1
     assert "[E803]" in capsys.readouterr().out
     assert listing(repo) == ["Fixlets/A/0042- X.bes"]
-    assert git(repo, "status", "--porcelain") == "A  Fixlets/A/0042- X.bes\n"
+    staged = git(repo, "diff", "--cached", "--name-status", "-z")
+    assert staged == "A\0Fixlets/A/0042- X.bes\0"
