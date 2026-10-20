@@ -136,3 +136,18 @@ def test_bes_schema_validate_files_pattern(path, matched):
     """Match `files` the way pre-commit does: re.search on the repo path."""
     pattern = load_hooks()["bes-schema-validate"]["files"]
     assert bool(re.search(pattern, path)) is matched
+
+
+def test_bes_siterepo_validate_layout_checks_the_whole_repo():
+    """It reads `git ls-files` itself, so pre-commit must not pass file names,
+    and it must run even when no staged file matches (a deletion can leave a.
+
+    site without content, say).
+    """
+    hook = load_hooks()["bes-siterepo-validate-layout"]
+    assert hook["entry"] == "bes-siterepo-validate-layout"
+    assert hook["pass_filenames"] is False
+    assert hook["always_run"] is True
+    assert console_scripts()["bes-siterepo-validate-layout"] == (
+        "pre_commit_bigfix.bes_siterepo_validate_layout:main"
+    )
