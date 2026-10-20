@@ -760,13 +760,70 @@ def _pre_commit_home(environ):
     return os.path.join(cache, "pre-commit")
 
 
+def _parent_pid_windows(pid):
+    """The parent of process `pid` on Windows, from a Toolhelp snapshot."""
+    import ctypes  # pylint: disable=import-outside-toplevel
+    from ctypes import wintypes  # pylint: disable=import-outside-toplevel
+
+    class ProcessEntry(ctypes.Structure):  # PROCESSENTRY32W
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snapshot = kernel32.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        return None
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.th32ProcessID == pid:
+                return entry.th32ParentProcessID
+            found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        return None
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _parent_pid(pid):
+    """The parent of process `pid`, or None when it cannot be told."""
+    try:
+        if os.name == "nt":
+            return _parent_pid_windows(pid)
+        out = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        return int(out) if out else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def pre_commit_stashed_paths(root, pid=None, environ=None):
     """Return the files whose unstaged changes pre-commit set aside for this run.
 
     Before running hooks on staged files, pre-commit saves unstaged changes
     as a patch named `patch<time>-<its pid>` in its cache folder, checks
     them out, and re-applies the patch afterwards. Its pid is this hook's
-    parent's (`pid` defaults to os.getppid()). A file renamed in between
+    parent's (`pid` defaults to os.getppid()), or, when a launcher sits in
+    between (a console script on Windows is an .exe that starts python.exe
+    as its child), its grandparent's; up to three generations are tried.
+    Verified on macOS only; on Windows the parent comes from a Toolhelp
+    snapshot, and if that fails only `pid` itself is tried. A file renamed in between
     is not where the patch expects it, so pre-commit cannot restore those
     changes and stops with an error. The file names are read with
     `git apply --numstat -z`, which applies nothing. Outside a pre-commit
@@ -776,9 +833,16 @@ def pre_commit_stashed_paths(root, pid=None, environ=None):
     """
     pid = os.getppid() if pid is None else pid
     environ = os.environ if environ is None else environ
-    pattern = os.path.join(glob.escape(_pre_commit_home(environ)), f"patch*-{pid}")
+    pids = [pid]
+    while len(pids) < 3 and pids[-1] is not None:
+        pids.append(_parent_pid(pids[-1]))
+    home = glob.escape(_pre_commit_home(environ))
+    patches = []
+    for candidate in pids:
+        if candidate is not None:
+            patches += glob.glob(os.path.join(home, f"patch*-{candidate}"))
     paths = set()
-    for patch in glob.glob(pattern):
+    for patch in patches:
         out = _git(root, "apply", "--numstat", "-z", os.path.abspath(patch))
         # records are `added<TAB>deleted<TAB>path`; a rename is
         # `added<TAB>deleted<TAB>`, then the old and new paths
