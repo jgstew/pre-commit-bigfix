@@ -1722,3 +1722,19 @@ def test_parent_pid_windows_declares_ctypes_types(monkeypatch):
         assert function.restype is wintypes.BOOL, name
     assert kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
     assert kernel32.CloseHandle.calls == [(5,)]
+
+
+def test_no_title_left_reports_the_limit_that_was_hit(tmp_path):
+    # nothing usable: no readable Title, and the name after the ID is only
+    # dots, which the cut strips. Listed but not on disk (--check reads no
+    # more than the Title), since macOS cannot hold a 268-character name.
+    root = tmp_path / "plain"
+    root.mkdir()
+    name = "Fixlets/A/12- " + "." * 250 + ".bes"  # 268 bytes, 268 characters
+    # the name limit triggered the rename: E808, the name code
+    found = messages(root, files=[name], check=True, prefix="", max_path=4000)
+    assert [c for p, c, m in found] == ["E808"]
+    assert "255" in found[0][2] and "no title" in found[0][2]
+    # the path limit triggered it: E802, the path code
+    found = messages(root, files=[name], check=True, prefix="", max_path=270)
+    assert [c for p, c, m in found] == ["E802"]
