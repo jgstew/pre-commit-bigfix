@@ -24,14 +24,12 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/jgstew/pre-commit-bigfix
-    rev: v0.3.1
+    rev: v1.13.0
     hooks:
-      # `validate-bes` and `check-bes-conventions` are the deprecated aliases of
-      # `bes-schema-validate` and `bes-conventions-check`; they are used here
-      # because rev v0.2.0 predates the renames. Switch both to the new ids
-      # (and bump the rev) once a release carrying them is tagged.
-      - id: validate-bes
-      - id: check-bes-conventions
+      - id: bes-schema-validate
+        # the bad site and signature examples are invalid on purpose
+        exclude: ^tests/examples/site-bad/
+      - id: bes-conventions-check
         # the bad example and the raw console exports are kept as-is on purpose
         exclude: ^tests/examples/(example-test-bad|Example-Group-Relevance-[A-Za-z]+)\.bes$
 

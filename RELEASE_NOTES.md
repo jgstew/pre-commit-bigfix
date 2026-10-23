@@ -1,5 +1,25 @@
 # Release Notes
 
+## v2.0.0
+
+### Added (pre-commit-bigfix command)
+
+- New `pre-commit-bigfix` command that runs every hook over files or folders
+  without pre-commit: `uvx --from git+https://github.com/jgstew/pre-commit-bigfix
+  pre-commit-bigfix [PATH ...]`. It is read-only (`--auto-fix=no`, or
+  `--check` for `bes-relevance-convert-group` and
+  `bes-siterepo-validate-layout`), skips hidden folders unless
+  `--include-hidden` is given, runs `bes-siterepo-validate-layout` in each
+  git repo holding a given path, and exits 1 if any hook fails. `--skip HOOK`
+  leaves a hook out. See "Run without pre-commit" in the README.
+
+### Removed
+
+- **Breaking:** the deprecated hook ids `validate-bes` and
+  `check-bes-conventions`, and the console scripts of the same names. Use
+  `bes-schema-validate` and `bes-conventions-check`; a config that still names
+  an old id fails with pre-commit's "hook id not found" error.
+
 ## v1.13.0
 
 ### Added (bes-siterepo-validate-layout)
