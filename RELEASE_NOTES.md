@@ -1,5 +1,27 @@
 # Release Notes
 
+## v2.1.0
+
+### Changed (`pre-commit-bigfix` command)
+
+- A hook with more than 20 results is now summarized (a count per code and
+  the files with the most results) instead of listed. A whole-repo hook is
+  summarized over all its repos together. When the output is summarized and
+  no log file is being written, the summary says to run again with
+  `--log-file`. The summary table at the end shows each hook's result count.
+- New `--log-file [FILE]` option: writes every hook's full output, and what
+  it writes to stderr, to FILE (default `pre-commit-bigfix-results.log`),
+  replacing the file if it exists. It refuses (exit 2) a FILE that is a
+  given path or a file some hook checks, so `--log-file x.bes` cannot empty
+  `x.bes`.
+- `bes-siterepo-validate-layout` is skipped, and not counted as a failure, in
+  a git repo that tracks no `site.xml`, `siteConfig.xml`, `Fixlets/`,
+  `NonClientFiles/` or `OtherFiles/` at its top (names compared ignoring
+  case). Before, every git repo got its W800/W804 findings.
+- A file name the console cannot show (an ASCII or cp1252 console) is
+  escaped instead of crashing the run. If the run is interrupted (Ctrl-C),
+  what the running hook had printed is still shown.
+
 ## v2.0.1
 
 ### Changed (release)
