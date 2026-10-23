@@ -64,7 +64,8 @@ line per hook is printed at the end. The exit code is 1 if any hook fails, and
   `OtherFiles` folder at its top (names compared ignoring case).
 - A hook with more than 20 results is summarized instead of listed: a count
   per code, and the files with the most results. The summary table at the end
-  shows each hook's result count.
+  shows each hook's result count. If anything was summarized and no log file
+  is being written, the last line says to run again with `--log-file`.
 - `--log-file [FILE]` writes every hook's full output to FILE (default
   `pre-commit-bigfix-results.log`), replacing it if it exists. This is the
   only file the command writes, and it will not replace a given path or a

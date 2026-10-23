@@ -1,5 +1,13 @@
 # Release Notes
 
+## v2.1.1
+
+### Changed (`pre-commit-bigfix` command)
+
+- The "Run again with --log-file" hint is printed once, as the last line of
+  the run after a blank line, and only if some hook's output was summarized.
+  Before, each summarized hook printed it.
+
 ## v2.1.0
 
 ### Changed (`pre-commit-bigfix` command)

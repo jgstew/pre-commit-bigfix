@@ -475,14 +475,37 @@ def test_more_than_20_results_are_summarized(tmp_path, monkeypatch, capsys):
     write_invalid_files(tmp_path, 21)
     monkeypatch.chdir(tmp_path)
     assert run_all.main([]) == 1
-    out = section(capsys.readouterr().out, "bes-schema-validate")
+    full = capsys.readouterr().out
+    out = section(full, "bes-schema-validate")
     assert "invalid00.bes:3:" not in out
     assert "21 results in 21 file(s)" in out
     assert "(no code)  21" in out
-    # with no log file, it says how to get every result
-    assert "Run again with --log-file" in out
-    assert run_all.DEFAULT_LOG_FILE in out
+    assert "Run again" not in out  # the hint is at the end, not per hook
     assert not (tmp_path / run_all.DEFAULT_LOG_FILE).exists()
+
+
+def test_rerun_hint_is_the_last_line_once(tmp_path, monkeypatch, capsys):
+    """With no log file, one hint after the table, a blank line above it."""
+    write_invalid_files(tmp_path, 21)  # schema and conventions both summarized
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main([]) == 1
+    out = capsys.readouterr().out
+    assert out.count("Run again with --log-file") == 1
+    lines = out.splitlines()
+    assert lines[-1].startswith("Run again with --log-file")
+    assert run_all.DEFAULT_LOG_FILE in lines[-1]
+    assert lines[-2] == ""
+    assert re.match(r"bes-siterepo-validate-layout \.+ ", lines[-3])
+
+
+def test_no_rerun_hint_when_nothing_is_summarized(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 20)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main([]) == 1
+    out = capsys.readouterr().out
+    assert "Run again" not in out
+    assert "--log-file" not in out
+    assert re.match(r"bes-siterepo-validate-layout \.+ ", out.splitlines()[-1])
 
 
 def test_summary_counts_by_code(tmp_path, monkeypatch, capsys):

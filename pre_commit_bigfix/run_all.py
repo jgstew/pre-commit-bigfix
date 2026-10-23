@@ -28,7 +28,8 @@ OtherFiles folder at its top (names compared ignoring case).
 
 A hook that reports more than 20 results (`path:line: message` or
 `path: message` lines) has them summarized, counted by code and by file,
-instead of listed. --log-file writes the full output of every hook to FILE
+instead of listed; with no --log-file, the last line of the run then says
+how to get them all. --log-file writes the full output of every hook to FILE
 (default pre-commit-bigfix-results.log), replacing it if it exists; that is
 the only file this command writes. It will not replace a PATH or a file some
 hook checks. Give PATHs before --log-file, or use --log-file=FILE, so a PATH
@@ -132,6 +133,11 @@ SUMMARY_OVER = 20
 # files and folders listed in the summary, most results first
 SUMMARY_TOP_FILES = 5
 DEFAULT_LOG_FILE = "pre-commit-bigfix-results.log"
+# the last line of a run that summarized something and wrote no log
+RERUN_HINT = (
+    f"Run again with --log-file to write all of them to {DEFAULT_LOG_FILE}"
+    " (or --log-file=FILE)."
+)
 
 # one result line: `path:line: message`, maybe `[CODE] ` first; a Windows
 # drive letter (C:\...) does not end the path, as `:\d+: ` must follow it
@@ -292,11 +298,7 @@ def summarize(results, other, log_path):
     lines += other
     if log_path:
         lines.append(f"All of them are in {log_path}.")
-    else:
-        lines.append(
-            "Run again with --log-file to write all of them to"
-            f" {DEFAULT_LOG_FILE} (or --log-file=FILE)."
-        )
+    # with no log, main() prints RERUN_HINT once, at the very end
     return "\n".join(lines) + "\n"
 
 
@@ -330,6 +332,7 @@ class Report:
     def __init__(self, log=None, log_path=None):
         self.log = log
         self.log_path = log_path
+        self.summarized = False  # some hook's output was summarized
 
     def show(self, text):
         """Write `text` to stdout only."""
@@ -398,6 +401,7 @@ class Report:
             if len(folders) > 1:
                 self.show(f"=== {hook.id} ({', '.join(folders)})\n")
             self.show(summarize(results, other, self.log_path))
+            self.summarized = True
         else:
             for header, text in zip(headers, texts):
                 self.show(text if len(folders) == 1 else header + text)
@@ -505,7 +509,11 @@ def main(argv=None):
     roots = repo_roots(args.paths)
 
     if not args.log_file:
-        return _run_all(args, files, roots, Report())
+        report = Report()
+        code = _run_all(args, files, roots, report)
+        if report.summarized:
+            print(f"\n{RERUN_HINT}")
+        return code
     if _would_replace_input(args.log_file, args.paths):
         print(
             f"pre-commit-bigfix: --log-file {args.log_file} is a file to check,"
