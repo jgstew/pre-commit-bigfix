@@ -8,10 +8,9 @@ on:
     paths:
       - "**.yaml"
       - "**.yml"
+  # no paths filter: yamllint is a required check on main, and a PR that
+  # changes no YAML would otherwise never report it and could not merge
   pull_request:
-    paths:
-      - "**.yaml"
-      - "**.yml"
 
 permissions:
   contents: read

@@ -13,15 +13,9 @@ on:
       - "requirements.txt"
       - ".github/workflows/test_build.yaml"
       - ".github/workflows/tag_and_release.yaml"
+  # no paths filter: test_build is a required check on main, and a PR that
+  # changes none of the paths above would otherwise never report it
   pull_request:
-    paths:
-      - "**.py"
-      - "setup.cfg"
-      - "MANIFEST.in"
-      - "pyproject.toml"
-      - "requirements.txt"
-      - ".github/workflows/test_build.yaml"
-      - ".github/workflows/tag_and_release.yaml"
 
 permissions:
   contents: read
