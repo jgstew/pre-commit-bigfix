@@ -54,6 +54,41 @@ def test_report_prints_and_counts(capsys):
     assert "[W1]" not in capsys.readouterr().out
 
 
+LINENO_SOURCES = ["", "x", "\n", "\n\n", "a\nb", "a\nb\n", "<BES>\n<Task>\n\n</Task>\n"]
+
+
+@pytest.mark.parametrize("src", LINENO_SOURCES)
+def test_lineno_counts_the_newlines_before_pos(src):
+    # every offset, including the one just past the end and one beyond it
+    for pos in range(len(src) + 2):
+        assert bes_common.lineno(src, pos) == src.count("\n", 0, pos) + 1
+
+
+def test_lineno_follows_the_text_it_is_given():
+    # an auto-fix hands later checks a new text; interleaving texts must not
+    # return one text's line numbers for another
+    before = "a\nb\nc"
+    after = "a\n\n\nb\nc"
+    assert bes_common.lineno(before, 4) == 3
+    assert bes_common.lineno(after, 4) == 4
+    assert bes_common.lineno(before, 4) == 3
+    assert bes_common.lineno("".join(["a\nb", "\nc"]), 4) == 3  # equal, not same
+
+
+def test_lineno_is_right_after_older_texts_are_evicted():
+    # more distinct texts than the offsets cache holds, then the first again
+    texts = ["\n" * n + "x" for n in range(10)]
+    for _ in range(2):
+        for n, src in enumerate(texts):
+            assert bes_common.lineno(src, len(src)) == n + 1
+
+
+def test_lineno_of_a_negative_offset_is_the_first_line():
+    # no caller passes one; this is pinned on purpose. (The old str.count form
+    # read a negative end as a slice index and so counted from the end.)
+    assert bes_common.lineno("a\nb\n", -1) == 1
+
+
 # --- schema guard -------------------------------------------------------------
 
 validate_bes_xml = pytest.importorskip("validate_bes_xml")

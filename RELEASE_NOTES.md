@@ -17,6 +17,13 @@
 - README links point at GitHub, so they work on the PyPI project page, and
   the Python classifiers now list 3.8 to 3.12 (was only 3.9).
 
+### Changed (performance)
+
+- Reported line numbers are now found by binary search over the file's line
+  offsets instead of counting newlines from the start for every finding.
+  `bes-conventions-check` on a 12 MB `.bes` file drops from about 20 s to
+  4.5 s, with identical output (#48).
+
 ## v2.0.0
 
 ### Added (pre-commit-bigfix command)
