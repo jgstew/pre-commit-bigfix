@@ -10,6 +10,8 @@ SchemaGuard also lives here. It is what keeps an auto-fix from turning a
 schema-valid file into one that fails BES.xsd validation.
 """
 
+import bisect
+import functools
 import os
 import re
 import sys
@@ -49,9 +51,21 @@ def encode(src, was_crlf):
     return (src.replace("\n", "\r\n") if was_crlf else src).encode("utf-8")
 
 
+@functools.lru_cache(maxsize=4)
+def _newline_offsets(src):
+    """The offset of every LF in `src`, in order (cached per text)."""
+    return [match.start() for match in re.finditer("\n", src)]
+
+
 def lineno(src, pos):
-    """Return the 1-based line number of character offset `pos` in `src`."""
-    return src.count("\n", 0, pos) + 1
+    """Return the 1-based line number of character offset `pos` in `src`.
+
+    Hooks call this once per match, so counting LFs from the start each time
+    is quadratic on a large file (a 12 MB file spent most of its time here).
+    Instead the LF offsets are found once per text and bisected; a text
+    changed by an auto-fix is a new string and gets its own offsets.
+    """
+    return bisect.bisect_left(_newline_offsets(src), pos) + 1
 
 
 def discover_bes_files(root=".", extensions=(".bes",)):
