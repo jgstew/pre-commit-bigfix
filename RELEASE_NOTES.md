@@ -1,5 +1,37 @@
 # Release Notes
 
+## v2.0.1
+
+### Changed (release)
+
+- The release workflow can now publish to PyPI with trusted publishing
+  (#46). Publishing is off until the PyPI trusted publisher exists and the
+  `PYPI_PUBLISH` repository variable is set to `true`, so this release is on
+  GitHub only. Until the package is on PyPI, use
+  `uvx --from git+https://github.com/jgstew/pre-commit-bigfix pre-commit-bigfix`.
+  Hook usage through pre-commit is unchanged: pre-commit still installs from
+  the git tag.
+- The release workflow now waits for the test workflow and the manual-stage
+  pre-commit hooks directly instead of polling for other checks, and pins
+  every action to a commit SHA. It builds once in a job with no write access
+  and no OIDC token. Then one job tags and releases those files, and a
+  separate job, the only one that can mint a PyPI token, uploads the same
+  files. It releases from `main` only. A failed upload can be retried: the
+  release step skips a release that already exists, and publishing checks
+  whether PyPI has the version rather than whether the tag exists. It
+  attaches the sdist and SHA256SUMS.txt as well as the wheel, marks a
+  pre-release version as a pre-release, and uses this file's section for the
+  version as the release body.
+- README links point at GitHub, so they work on the PyPI project page, and
+  the Python classifiers now list 3.8 to 3.12 (was only 3.9).
+
+### Changed (performance)
+
+- Reported line numbers are now found by binary search over the file's line
+  offsets instead of counting newlines from the start for every finding.
+  `bes-conventions-check` on a 12 MB `.bes` file drops from about 20 s to
+  4.5 s, with identical output (#48).
+
 ## v2.0.0
 
 ### Added (pre-commit-bigfix command)
