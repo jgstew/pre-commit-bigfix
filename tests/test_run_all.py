@@ -10,6 +10,7 @@ rename, come through a run unchanged.
 """
 
 import configparser
+import io
 import os
 import re
 import shutil
@@ -448,3 +449,342 @@ def test_a_named_file_is_kept_even_if_no_hook_matches_it(tmp_path):
     assert run_all.discover([str(tmp_path / "notes.txt")]) == [
         str(tmp_path / "notes.txt")
     ]
+
+
+# --- summarized output and --log-file ----------------------------------------------
+
+
+def write_invalid_files(root, count):
+    """`count` invalid .bes files: bes-schema-validate reports one result each."""
+    for i in range(count):
+        write_invalid(Path(root) / f"invalid{i:02}.bes")
+
+
+def section(out, hook_id):
+    """The output under `=== hook_id`, up to the next hook or the summary table."""
+    match = re.search(
+        rf"^=== {re.escape(hook_id)}\b.*?\n(.*?)(?=^=== |^\n|\Z)",
+        out,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"no section for {hook_id}"
+    return match.group(1)
+
+
+def test_more_than_20_results_are_summarized(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 21)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main([]) == 1
+    out = section(capsys.readouterr().out, "bes-schema-validate")
+    assert "invalid00.bes:3:" not in out
+    assert "21 results in 21 file(s)" in out
+    assert "(no code)  21" in out
+    # with no log file, it says how to get every result
+    assert "Run again with --log-file" in out
+    assert run_all.DEFAULT_LOG_FILE in out
+    assert not (tmp_path / run_all.DEFAULT_LOG_FILE).exists()
+
+
+def test_summary_counts_by_code(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 21)
+    monkeypatch.chdir(tmp_path)
+    run_all.main([])
+    out = section(capsys.readouterr().out, "bes-conventions-check")
+    assert re.search(r"^  E208 +21$", out, re.MULTILINE)
+    # the hook's own count line is kept
+    assert "BES-convention issue(s)." in out
+
+
+def test_20_results_are_listed(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 20)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main([]) == 1
+    out = section(capsys.readouterr().out, "bes-schema-validate")
+    assert out.count("invalid") == 20
+    assert "summarized" not in out
+    assert "--log-file" not in out
+
+
+def test_summary_table_shows_result_counts(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 21)
+    monkeypatch.chdir(tmp_path)
+    run_all.main([])
+    out = capsys.readouterr().out
+    assert re.search(r"^bes-schema-validate \.+ failed \(21 results\)$", out, re.M)
+
+
+def test_log_file_default_name_holds_every_result(tmp_path, monkeypatch, capsys):
+    write_invalid_files(tmp_path, 21)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["--log-file"]) == 1
+    out = capsys.readouterr().out
+    log = (tmp_path / run_all.DEFAULT_LOG_FILE).read_text(encoding="utf-8")
+    schema = section(log, "bes-schema-validate")
+    assert all(f"invalid{i:02}.bes:3:" in schema for i in range(21))
+    assert "summarized" not in log
+    assert re.search(r"^bes-schema-validate \.+ failed", log, re.MULTILINE)
+    # the terminal is still summarized, pointing at the log, not at --log-file
+    terminal = section(out, "bes-schema-validate")
+    assert "invalid00.bes:3:" not in terminal
+    assert f"All of them are in {run_all.DEFAULT_LOG_FILE}" in terminal
+    assert "Run again" not in out
+
+
+def test_log_file_is_replaced(tmp_path, monkeypatch, capsys):
+    shutil.copy(GOOD, tmp_path / GOOD.name)
+    log = tmp_path / run_all.DEFAULT_LOG_FILE
+    log.write_text("OLD RUN\n" * 100, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["--log-file"]) == 0
+    capsys.readouterr()
+    text = log.read_text(encoding="utf-8")
+    assert "OLD RUN" not in text
+    assert "=== bes-schema-validate" in text
+
+
+def test_log_file_given_path(tmp_path, monkeypatch, capsys):
+    (tmp_path / "content").mkdir()
+    write_invalid_files(tmp_path / "content", 2)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["content", "--log-file", "out/results.txt"]) == 2
+    capsys.readouterr()  # out/ does not exist: an error, before any hook runs
+    (tmp_path / "out").mkdir()
+    assert run_all.main(["content", "--log-file=out/results.txt"]) == 1
+    assert "invalid01.bes:3:" in (tmp_path / "out/results.txt").read_text("utf-8")
+    assert not (tmp_path / run_all.DEFAULT_LOG_FILE).exists()
+    assert "Full results written to out/results.txt" in capsys.readouterr().out
+
+
+def test_log_file_gets_stderr_too(tmp_path, monkeypatch, capsys):
+    """A crash's traceback goes to stderr as before, and into the log."""
+
+    class Broken:
+        @staticmethod
+        def main(argv):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(run_all.Hook, "load", lambda hook: Broken)
+    shutil.copy(GOOD, tmp_path / GOOD.name)
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["--log-file"]) == 1
+    assert "boom" in capsys.readouterr().err
+    assert "boom" in (tmp_path / run_all.DEFAULT_LOG_FILE).read_text("utf-8")
+
+
+def test_split_output():
+    text = (
+        "a.bes:3: [W602] warning: x\n"
+        "    suggested fix: y\n"
+        "C:\\site\\b.bes:12: Element 'X': not expected.\n"
+        "2 warning(s).\n"
+        "Traceback (most recent call last):\n"
+        "  File ...\n"
+    )
+    results, other = run_all.split_output(text)
+    assert results == [("a.bes", "W602"), ("C:\\site\\b.bes", None)]
+    assert other == [
+        "2 warning(s).",
+        "Traceback (most recent call last):",
+        "  File ...",
+    ]
+
+
+# --- the layout hook runs only in a site repo --------------------------------------
+
+
+def test_layout_hook_skips_a_repo_that_is_not_a_site(tmp_path, monkeypatch, capsys):
+    """No site file or folder: its W800/W804 findings are noise, and not a failure."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shutil.copy(GOOD, repo / GOOD.name)
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    monkeypatch.chdir(repo)
+    assert run_all.main([]) == 0
+    out = capsys.readouterr().out
+    assert "=== bes-siterepo-validate-layout" not in out
+    assert "[W80" not in out
+    assert re.search(
+        r"^bes-siterepo-validate-layout \.+ skipped: not a site repo$", out, re.M
+    )
+
+
+@pytest.mark.parametrize(
+    "sign",
+    [
+        "site.xml",
+        "siteConfig.xml",
+        "Fixlets/",
+        "NonClientFiles/",
+        "OtherFiles/",
+        "fixlets/",
+    ],
+)
+def test_layout_hook_runs_in_a_repo_with_a_site_sign(
+    sign, tmp_path, monkeypatch, capsys
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    if sign.endswith("/"):
+        (repo / sign).mkdir()
+        (repo / sign / "keep.txt").write_text("x", encoding="utf-8")
+    else:
+        shutil.copy(EXAMPLES / "site" / sign, repo / sign)
+    shutil.copy(GOOD, repo / GOOD.name)
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    monkeypatch.chdir(repo)
+    run_all.main(["--skip", "bes-schema-validate"])
+    out = capsys.readouterr().out
+    assert "=== bes-siterepo-validate-layout" in out
+    assert "[W800]" in out  # example-test.bes is outside Fixlets/
+
+
+def test_a_folder_named_like_a_site_file_is_not_a_sign(tmp_path):
+    (tmp_path / "site.xml").mkdir()
+    (tmp_path / "site.xml/x").write_text("x", encoding="utf-8")
+    (tmp_path / "Fixlets").write_text("x", encoding="utf-8")
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", "-A")
+    assert not run_all.looks_like_site(tmp_path)
+
+
+def test_an_untracked_site_folder_is_not_a_sign(tmp_path, monkeypatch, capsys):
+    """The layout hook sees only `git ls-files`, so an untracked folder does not
+    count.
+    """
+    repo = tmp_path / "repo"
+    (repo / "Fixlets").mkdir(parents=True)
+    (repo / "Fixlets/untracked.txt").write_text("x", encoding="utf-8")
+    shutil.copy(GOOD, repo / GOOD.name)
+    git(repo, "init", "-q")
+    git(repo, "add", GOOD.name)
+    assert not run_all.looks_like_site(repo)
+    git(repo, "add", "-A")
+    assert run_all.looks_like_site(repo)
+
+
+def test_looks_like_site_outside_git_is_false(tmp_path):
+    (tmp_path / "site.xml").write_text("x", encoding="utf-8")
+    assert not run_all.looks_like_site(tmp_path)
+
+
+def test_a_failing_site_layout_still_fails_the_run(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "site"
+    (repo / "Fixlets/A").mkdir(parents=True)
+    shutil.copy(GOOD, repo / "Fixlets/A/no id.bes")  # E800
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    monkeypatch.chdir(repo)
+    assert run_all.main([]) == 1
+    out = capsys.readouterr().out
+    assert "[E800]" in out
+    assert re.search(r"^bes-siterepo-validate-layout \.+ failed", out, re.M)
+
+
+# --- review fixes ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["keep.bes", "Fixlets/site.xml", "x.ojo"])
+def test_log_file_will_not_replace_a_file_a_hook_checks(
+    name, tmp_path, monkeypatch, capsys
+):
+    """`--log-file keep.bes` (a PATH taken as FILE) must not empty keep.bes."""
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("IMPORTANT", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["--log-file", name]) == 2
+    assert path.read_text(encoding="utf-8") == "IMPORTANT"
+    assert "--log-file" in capsys.readouterr().err
+
+
+def test_log_file_will_not_replace_a_named_path(tmp_path, monkeypatch, capsys):
+    (tmp_path / "notes.txt").write_text("IMPORTANT", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert run_all.main(["notes.txt", "--log-file=./notes.txt"]) == 2
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "IMPORTANT"
+    capsys.readouterr()
+
+
+def test_a_console_that_cannot_show_a_name_does_not_crash(tmp_path, monkeypatch):
+    """An ASCII (or cp1252) console: an unshowable character is escaped."""
+    write_invalid(tmp_path / "x\u00e9.bes")
+    monkeypatch.chdir(tmp_path)
+    raw = io.BytesIO()
+    monkeypatch.setattr(run_all.sys, "stdout", io.TextIOWrapper(raw, "ascii"))
+    assert run_all.main([]) == 1
+    run_all.sys.stdout.flush()
+    assert b"x\\xe9.bes:3:" in raw.getvalue()
+
+
+def test_results_without_a_line_number_are_counted():
+    """Bes-schema-validate prints `path: message` when there is no line."""
+    text = (
+        "a.bes: no schema to validate this file against\n"
+        "dir: x/b.bes: Document is empty\n"
+        "3 file(s) failed.\n"
+    )
+    results, other = run_all.split_output(text, {"a.bes", "dir: x/b.bes"})
+    assert results == [("a.bes", None), ("dir: x/b.bes", None)]
+    assert other == ["3 file(s) failed."]
+    # without the hook's file names, such a line is not taken for a result
+    assert run_all.split_output(text)[0] == []
+
+
+def site_repo_with_results(repo, count):
+    """A git site repo whose layout check reports `count` W800 results (+ W804)."""
+    repo.mkdir()
+    shutil.copy(EXAMPLES / "site" / "site.xml", repo / "site.xml")
+    for i in range(count):
+        shutil.copy(GOOD, repo / f"stray{i:02}.bes")
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+
+
+def test_a_whole_repo_hook_is_summarized_over_all_its_repos(
+    tmp_path, monkeypatch, capsys
+):
+    """More than 20 results from one hook in all, though each repo has fewer."""
+    site_repo_with_results(tmp_path / "one", 10)
+    site_repo_with_results(tmp_path / "two", 10)
+    monkeypatch.chdir(tmp_path)
+    skip = [h.id for h in run_all.HOOKS if h.files]
+    run_all.main(["one", "two", *(f"--skip={hook_id}" for hook_id in skip)])
+    out = capsys.readouterr().out
+    assert "stray00.bes:1:" not in out
+    assert "22 results in" in out
+    assert re.search(r"^=== bes-siterepo-validate-layout \(.*one, .*two\)$", out, re.M)
+    assert re.search(
+        r"^bes-siterepo-validate-layout \.+ passed \(22 results\)$", out, re.M
+    )
+
+
+def test_a_whole_repo_hook_under_the_limit_is_listed_per_repo(
+    tmp_path, monkeypatch, capsys
+):
+    site_repo_with_results(tmp_path / "one", 2)
+    site_repo_with_results(tmp_path / "two", 2)
+    monkeypatch.chdir(tmp_path)
+    run_all.main(["one", "two"])
+    out = capsys.readouterr().out
+    assert re.search(r"^=== bes-siterepo-validate-layout \(.*one\)$", out, re.M)
+    assert re.search(r"^=== bes-siterepo-validate-layout \(.*two\)$", out, re.M)
+    assert out.count("stray00.bes:1: [W800]") == 2
+
+
+def test_ctrl_c_keeps_what_the_hook_printed(tmp_path, monkeypatch, capsys):
+    class Interrupted:
+        @staticmethod
+        def main(argv):
+            print("half.bes:1: [E999] printed before Ctrl-C")
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(run_all.Hook, "load", lambda hook: Interrupted)
+    shutil.copy(GOOD, tmp_path / GOOD.name)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        run_all.main(["--log-file"])
+    assert "printed before Ctrl-C" in capsys.readouterr().out
+    log = (tmp_path / run_all.DEFAULT_LOG_FILE).read_text("utf-8")
+    assert "printed before Ctrl-C" in log

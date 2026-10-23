@@ -58,7 +58,18 @@ line per hook is printed at the end. The exit code is 1 if any hook fails, and
 - Symlinked files found while searching are skipped, as pre-commit skips
   them. A file named on the command line that no hook checks is reported.
 - `bes-siterepo-validate-layout` runs once in each git repo that holds a given
-  path, and is skipped when none does.
+  path, and is skipped when none does. It is also skipped, and not counted
+  as a failure, in a repo that shows no sign of being a site: git tracks no
+  `site.xml` or `siteConfig.xml` file and no `Fixlets`, `NonClientFiles` or
+  `OtherFiles` folder at its top (names compared ignoring case).
+- A hook with more than 20 results is summarized instead of listed: a count
+  per code, and the files with the most results. The summary table at the end
+  shows each hook's result count.
+- `--log-file [FILE]` writes every hook's full output to FILE (default
+  `pre-commit-bigfix-results.log`), replacing it if it exists. This is the
+  only file the command writes, and it will not replace a given path or a
+  file some hook checks. Give paths to check before `--log-file`, or use
+  `--log-file=FILE`, so a path is not taken as FILE.
 - `--skip HOOK` (repeatable) leaves a hook out.
 
 ## Hooks
