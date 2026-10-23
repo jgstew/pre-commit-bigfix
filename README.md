@@ -11,7 +11,7 @@ Add this to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/jgstew/pre-commit-bigfix
-    rev: v0.3.1
+    rev: v2.0.0
     hooks:
       - id: bes-schema-validate
       - id: bes-conventions-check
@@ -25,8 +25,41 @@ repos:
 ```
 
 The hooks were renamed to a consistent `bes-<aspect>-<action>` scheme in
-v0.3.0. The previous ids (`validate-bes`, `check-bes-conventions`) still work
-as deprecated aliases, so existing configs need no changes.
+v0.3.0. The deprecated aliases for the previous ids (`validate-bes`,
+`check-bes-conventions`) have since been removed, along with the console
+scripts of the same names: a config using them now fails with pre-commit's
+"hook id not found" error. Use `bes-schema-validate` and
+`bes-conventions-check` instead.
+
+## Run without pre-commit
+
+The `pre-commit-bigfix` command runs every hook over a folder, without
+pre-commit or a git commit:
+
+```bash
+uvx --from git+https://github.com/jgstew/pre-commit-bigfix pre-commit-bigfix
+```
+
+Once the package is on PyPI, this is just `uvx pre-commit-bigfix`. Give one or
+more files or folders to check (default: the current folder). Each hook gets
+the files its `files` pattern matches, with its default `args`, and a summary
+line per hook is printed at the end. The exit code is 1 if any hook fails, and
+2 for a path that does not exist or a bad option.
+
+- It is **read-only**. Under pre-commit several hooks fix files in place; here
+  each is run with `--auto-fix=no` (or `--check` for
+  `bes-relevance-convert-group` and `bes-siterepo-validate-layout`), so
+  fixable problems are reported, not fixed. Run a hook directly, or use
+  pre-commit, to apply fixes.
+- Hidden folders (a name starting with `.`, or the hidden flag on macOS and
+  Windows) are not searched; pass `--include-hidden` to search them.
+  `__pycache__` and `node_modules` are never searched. A folder named on the
+  command line is always searched.
+- Symlinked files found while searching are skipped, as pre-commit skips
+  them. A file named on the command line that no hook checks is reported.
+- `bes-siterepo-validate-layout` runs once in each git repo that holds a given
+  path, and is skipped when none does.
+- `--skip HOOK` (repeatable) leaves a hook out.
 
 ## Hooks
 
@@ -88,10 +121,7 @@ Sites/Foo/Fixlets/A/digest.xml:4: Element 'DigestRelevanceEvaluationPeriod': [fa
 unknown.bes: no schema to validate this file against
 ```
 
-Renamed from `validate-bes`, which is kept as a deprecated alias so existing
-configs keep working: both ids run the same entry point, so there is no
-behavior difference and no rush to migrate. New configs should use
-`bes-schema-validate`.
+Renamed from `validate-bes`, whose deprecated alias has been removed.
 
 ### bes-conventions-check
 
@@ -133,9 +163,8 @@ entirely (the checks and their auto-fixes still run, unlike `--disable`).
 basename matches its first content object's Title. Unparsable files are
 skipped (`bes-schema-validate` owns validity).
 
-Renamed from `check-bes-conventions`, which is kept as a deprecated alias so
-existing configs keep working; both ids run the same entry point. Note that
-the file-level opt-out marker moved with it, from `pre-commit-skip:
+Renamed from `check-bes-conventions`, whose deprecated alias has been
+removed. The file-level opt-out marker moved with it, from `pre-commit-skip:
 bes-conventions` to `pre-commit-skip: bes-conventions-check`.
 
 See the docstring in

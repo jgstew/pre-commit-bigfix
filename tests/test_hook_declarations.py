@@ -9,11 +9,8 @@ only some of them. These checks tie them together:
       setup.cfg actually declares
     - every `python <path>` local hook in .pre-commit-config.yaml points at a
       file that exists
-    - the deprecated `validate-bes` id is still declared, and is a true alias:
-      same entry and same file matching as `bes-schema-validate`
-
-The alias check is what keeps existing user configs working across the rename;
-without it, dropping the old id would be a silent breaking change.
+    - the removed `validate-bes` and `check-bes-conventions` aliases stay
+      removed, as hook ids and as console scripts
 """
 
 import configparser
@@ -29,8 +26,8 @@ HOOKS_FILE = REPO / ".pre-commit-hooks.yaml"
 CONFIG_FILE = REPO / ".pre-commit-config.yaml"
 SETUP_CFG = REPO / "setup.cfg"
 
-# hook ids kept only so pre-rename configs keep working: {old id: current id}
-DEPRECATED_ALIASES = {
+# pre-rename hook ids, removed after v1.13.0: {old id: current id}
+REMOVED_ALIASES = {
     "validate-bes": "bes-schema-validate",
     "check-bes-conventions": "bes-conventions-check",
 }
@@ -92,25 +89,12 @@ def test_local_hook_script_paths_exist():
     assert checked >= 3  # the three local python hooks
 
 
-@pytest.mark.parametrize(("old_id", "new_id"), sorted(DEPRECATED_ALIASES.items()))
-def test_deprecated_alias_is_declared_and_thin(old_id, new_id):
-    hooks = load_hooks()
-    assert old_id in hooks, f"deprecated alias {old_id} was dropped"
-    assert new_id in hooks
-    alias, current = hooks[old_id], hooks[new_id]
-    # a true alias: same program, same files, same filename handling
-    assert alias["entry"] == current["entry"]
-    assert alias["files"] == current["files"]
-    assert alias.get("types") == current.get("types")
-    assert alias.get("pass_filenames") == current.get("pass_filenames")
-
-
-@pytest.mark.parametrize("old_id", sorted(DEPRECATED_ALIASES))
-def test_deprecated_alias_says_so(old_id):
-    """The alias must be labeled, so nobody adopts it in a new config."""
-    hook = load_hooks()[old_id]
-    text = f"{hook['name']} {hook.get('description', '')}".lower()
-    assert "deprecated" in text
+@pytest.mark.parametrize("old_id", sorted(REMOVED_ALIASES))
+def test_removed_alias_is_not_declared(old_id):
+    """The deprecated aliases are gone: a config using one gets pre-commit's error."""
+    assert old_id not in load_hooks()
+    assert REMOVED_ALIASES[old_id] in load_hooks()
+    assert old_id not in console_scripts()
 
 
 @pytest.mark.parametrize(

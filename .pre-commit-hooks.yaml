@@ -11,23 +11,6 @@
   pass_filenames: True
   types: [text]
   files: \.(bes|ojo)$|(^|/)(siteConfig|site|digest)\.xml$|(^|/)Signatures/[^/]+\.xml$
-# Deprecated alias: `validate-bes` was this hook's id before it was renamed to
-# `bes-schema-validate` (type-subtype-action naming). It is kept so existing
-# .pre-commit-config.yaml files keep working, and runs the very same entry
-# point -- there is no behavior difference. Prefer the new id in new configs.
-# tests/test_hook_declarations.py asserts the two stay in lockstep.
-- id: validate-bes
-  name: Validate BigFix BES Files (deprecated alias for bes-schema-validate)
-  description: >
-    DEPRECATED alias for bes-schema-validate, kept so pre-rename configs keep
-    working; it runs the same entry point. Use bes-schema-validate instead.
-    Validates BES, OJO, Git External Custom Site and BigFix Inventory signature
-    files against the schemas bundled with validate_bes_xml.
-  entry: bes-schema-validate
-  language: python
-  pass_filenames: True
-  types: [text]
-  files: \.(bes|ojo)$|(^|/)(siteConfig|site|digest)\.xml$|(^|/)Signatures/[^/]+\.xml$
 - id: bes-conventions-check
   name: Check BigFix BES conventions
   description: >
@@ -67,21 +50,6 @@
     fixes, the trailing-whitespace strip, the XML declaration); a group that
     would make a schema-valid file invalid is not written, the others are
     (E222; --disable E222 writes it anyway).
-  language: python
-  pass_filenames: True
-  entry: bes-conventions-check
-  types: [text]
-  files: \.bes$
-# Deprecated alias: `check-bes-conventions` was this hook's id before it was
-# renamed to `bes-conventions-check` (type-subtype-action naming). It is kept
-# so existing .pre-commit-config.yaml files keep working, and runs the very
-# same entry point -- there is no behavior difference. Prefer the new id in new
-# configs. tests/test_hook_declarations.py asserts the two stay in lockstep.
-- id: check-bes-conventions
-  name: Check BigFix BES conventions (deprecated alias for bes-conventions-check)
-  description: >
-    DEPRECATED alias for bes-conventions-check, kept so pre-rename configs keep
-    working; it runs the same entry point. Use bes-conventions-check instead.
   language: python
   pass_filenames: True
   entry: bes-conventions-check
