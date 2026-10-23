@@ -168,7 +168,7 @@ removed. The file-level opt-out marker moved with it, from `pre-commit-skip:
 bes-conventions` to `pre-commit-skip: bes-conventions-check`.
 
 See the docstring in
-[bes_conventions_check.py](pre_commit_bigfix/bes_conventions_check.py)
+[bes_conventions_check.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/bes_conventions_check.py)
 for the full list of check codes, opt-out markers, and options.
 
 Auto-fixes are checked against BES.xsd in three groups: all the per-block
@@ -182,9 +182,9 @@ back every block fix in the file.
 
 Lints every `<ActionScript>` body in BES files against the BigFix console's
 own lexical grammar: the vendored
-[ExpandedActionScript.schclass](pre_commit_bigfix/schclass_data/ExpandedActionScript.schclass)
+[ExpandedActionScript.schclass](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/schclass_data/ExpandedActionScript.schclass)
 (the lex schema the console's editor uses, 323 command verbs) merged with a
-[small override file](pre_commit_bigfix/schclass_data/bigfix_overrides.schclass)
+[small override file](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/schclass_data/bigfix_overrides.schclass)
 of validation corrections the display grammar needs.
 
 The rule: the first token of every line must be a known command verb, a `//`
@@ -213,9 +213,9 @@ Unparsable files are skipped (`bes-schema-validate` owns validity). Non-`.bes`
 paths passed explicitly are linted as raw ActionScript text, so you can widen the
 hook's `files` pattern to cover standalone ActionScript files.
 
-The underlying schclass loader ([schclass.py](pre_commit_bigfix/schclass.py))
+The underlying schclass loader ([schclass.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/schclass.py))
 and tokenizer engine
-([schclass_tokenizer.py](pre_commit_bigfix/schclass_tokenizer.py)) are
+([schclass_tokenizer.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/schclass_tokenizer.py)) are
 generic: point them at any `.schclass` file and they lex that language.
 
 This hook's scope is deliberately limited to what the schclass grammar can
@@ -231,7 +231,7 @@ place, and an auto-fixed file fails the hook so it is reviewed and re-staged;
 `args: ["--auto-fix", "no"]` reports them without rewriting.
 
 See the docstring in
-[bes_actionscript_lint_schclass.py](pre_commit_bigfix/bes_actionscript_lint_schclass.py)
+[bes_actionscript_lint_schclass.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/bes_actionscript_lint_schclass.py)
 for the full list of check codes, opt-out markers, and options.
 
 The case fixes are checked against BES.xsd together. If they would turn a
@@ -361,7 +361,7 @@ auto-fix fail the hook; pass `--strict` to also fail on warnings. Unparsable
 files are skipped (`bes-schema-validate` owns validity).
 
 See the docstring in
-[bes_actionscript_validate_prefetch.py](pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
+[bes_actionscript_validate_prefetch.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/bes_actionscript_validate_prefetch.py)
 for the full list of check codes, opt-out markers, and options.
 
 Auto-fixes are checked against BES.xsd one pass at a time, in the order
@@ -536,7 +536,7 @@ hook; pass
 `--strict` to also fail on warnings.
 
 See the docstring in
-[bes_actionscript_validate_script.py](pre_commit_bigfix/bes_actionscript_validate_script.py)
+[bes_actionscript_validate_script.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/bes_actionscript_validate_script.py)
 for the full list of check codes, opt-out markers, and options.
 
 Auto-fixes are checked against BES.xsd one pass at a time: `W503`, `W506`,
@@ -618,7 +618,7 @@ so failing there would only be an unfixable red build. On 3.11+ a missing
 analyzer is a broken install, and the hook still fails.
 
 See the docstring in
-[bes_relevance_lint.py](pre_commit_bigfix/bes_relevance_lint.py) for the full
+[bes_relevance_lint.py](https://github.com/jgstew/pre-commit-bigfix/blob/main/pre_commit_bigfix/bes_relevance_lint.py) for the full
 list of check codes and options.
 
 ### bes-relevance-convert-group

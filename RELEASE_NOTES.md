@@ -1,5 +1,22 @@
 # Release Notes
 
+## v2.0.1
+
+### Changed (release)
+
+- Releases can now also be published to PyPI with trusted publishing (#46),
+  so `uvx pre-commit-bigfix` and `pip install pre-commit-bigfix` work.
+  Publishing stays off until the PyPI trusted publisher exists and the
+  `PYPI_PUBLISH` repository variable is set to `true`. Hook usage through
+  pre-commit is unchanged: pre-commit still installs from the git tag.
+- The release workflow now waits for the test workflow and the manual-stage
+  pre-commit hooks directly instead of polling for other checks, and pins
+  every action to a commit SHA. It attaches the sdist and SHA256SUMS.txt
+  as well as the wheel, and the release body is this file's section for the
+  version.
+- README links point at GitHub, so they work on the PyPI project page, and
+  the Python classifiers now list 3.8 to 3.12 (was only 3.9).
+
 ## v2.0.0
 
 ### Added (pre-commit-bigfix command)
