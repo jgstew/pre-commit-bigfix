@@ -20,6 +20,7 @@ repos:
       - id: bes-actionscript-validate-script
       - id: bes-relevance-lint
       - id: bes-relevance-convert-group
+      - id: bes-content-score-risk
       # only in a Git External Custom Site (repository site) repo:
       - id: bes-siterepo-validate-layout
 ```
@@ -668,6 +669,41 @@ The hook converts by default and exits 1 when it changed anything, so the
 rewrite shows up for review; `--check` only reports. With no files given it
 checks every `*.bes` below the current folder and never rewrites. A file opts
 out with `<!-- pre-commit-skip: bes-relevance-convert-group -->`.
+
+### bes-content-score-risk
+
+Scores how risky a BES file's content is and lists the reasons, so content
+that needs a careful human review is flagged before it is trusted. It is a
+triage signal, not a verdict, and it never changes a file. Each finding adds
+points; a file at or over `--fail-score` (default 50, the HIGH band) fails
+with `E900`.
+
+| code | points | signal |
+| --- | --- | --- |
+| `W901` | 20 | script in a Description: `<script>`, `javascript:`, an `on*=` handler |
+| `W902` | 25 | session relevance in a Description: `<?relevance ...?>`, `EvaluateRelevance(` |
+| `W903` | 15 | both in one Description |
+| `W910` | 25 | ActionScript `download` / `download now`: not hashed. A later `continue if {sha1 of ...}` does not excuse it; use a prefetch |
+| `W911` | 25 | `add nohash prefetch item` |
+| `W912` | 10 | a download or prefetch URL over plain `http://` or to a raw IP |
+| `W913` | 15 | a download command in script content (`curl`, `wget`, `Invoke-WebRequest`, `DownloadString`, `bitsadmin`, ...) |
+| `W920` | 2 | base64 that really is an image of its `data:image/` type |
+| `W921` | 20 | base64 (80+ characters) anywhere else |
+| `W922` | 25 | a decoded payload is an executable or a script |
+| `W923` | 20 | a decode-and-run command: `certutil -decode`, `base64 -d`, `FromBase64String`, `powershell -EncodedCommand` |
+| `W924` | 15 | other obfuscation: `\x`, `\u`, `%XX` or hex runs decoding to ASCII; `eval(`, `unescape(`, `atob(`, `Function(`, `fromCharCode(` |
+| `W925` | 15 | a decoded payload is gzip, zlib or zip compressed |
+| `W926` | 30 | base64 labelled `data:image/` whose bytes are not that image |
+| `W927` | 10 + inner | a decoded payload holds findings of its own; names the decode path (`base64->gzip->text`) |
+| `W900` | | a MEDIUM score (25-49) |
+| `W908` | | not parseable XML; skipped |
+| `E900` | | the score is at or over `--fail-score` |
+
+Every encoded blob is decoded and scanned again: base64 as UTF-8 and as
+UTF-16LE (PowerShell `-EncodedCommand`), compressed data decompressed, up to
+3 layers and 4 MB per file. `--weight CODE=N` changes a signal's points,
+`--disable CODES` skips signals, and `--fail-score N` moves the threshold.
+The default weights are a starting point, to be tuned against real content.
 
 ### bes-siterepo-validate-layout
 

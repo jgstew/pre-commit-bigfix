@@ -369,6 +369,30 @@
   pass_filenames: True
   types: [text]
   files: \.bes$
+- id: bes-content-score-risk
+  name: Score BigFix BES content risk for careful review
+  description: >
+    Computes a risk score per BES file and lists why, to flag content for a
+    careful human review; it never changes files. Signals: script (W901) or
+    session relevance (W902, both W903) in a Description; ActionScript
+    download / download now (W910, not hashed -- use a prefetch, a later sha1
+    check does not excuse it), nohash prefetch items (W911), plain-http or
+    raw-IP URLs (W912), download commands in script content (W913); base64
+    of a real image of its data:image/ type (W920, low), other base64 (W921),
+    image-labelled base64 that is not that image (W926); decode-and-run
+    commands (W923) and other obfuscation (W924: \x, \u, %XX and hex runs,
+    eval/unescape/atob/Function/fromCharCode). Every encoded blob is decoded
+    and inspected -- UTF-16LE for PowerShell -EncodedCommand, gzip/zlib/zip
+    decompressed (W925) -- an executable or script payload is W922, and
+    findings inside a payload score as W927 with the decode path, up to 3
+    layers deep. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
+    file at or over --fail-score (default 50); --weight CODE=N and --disable
+    tune it. W908 an unparsable file is skipped.
+  entry: bes-content-score-risk
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: \.bes$
 - id: bes-siterepo-validate-layout
   name: Validate a BigFix Git External Custom Site's layout and file names
   description: >

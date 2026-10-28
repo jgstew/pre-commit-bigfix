@@ -1,5 +1,18 @@
 # Release Notes
 
+## v2.2.0
+
+### Added
+
+- New hook `bes-content-score-risk` (also run by `pre-commit-bigfix`). It
+  computes a risk score per BES file to flag content for careful review:
+  script and session relevance in Descriptions, unhashed downloads (`download
+  now`, nohash prefetch items, plain-http or raw-IP URLs, download commands
+  in scripts), base64 outside real images, decode-and-run commands and other
+  obfuscation. Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
+  gzip/zlib/zip) and scanned again, up to 3 layers. A file scoring 50 or more
+  (HIGH) fails with E900; `--fail-score`, `--weight` and `--disable` tune it.
+
 ## v2.1.1
 
 ### Changed (`pre-commit-bigfix` command)
