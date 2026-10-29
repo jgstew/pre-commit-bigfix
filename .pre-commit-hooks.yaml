@@ -395,7 +395,19 @@
     remote content or reaches outside the page (W932: <script src> or
     <iframe src> to a URL, ActiveXObject, WScript.Shell, XMLHttpRequest,
     fetch, document.cookie). Signals favor recall over precision: a finding
-    a reviewer accepts is cheap, a missed one is not. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
+    a reviewer accepts is cheap, a missed one is not. W940-W991 cover BigFix
+    client tampering, relay redirection, endpoint uploads, REST API calls,
+    all-computer targeting, settings-as-commands, time bombs, host pinning,
+    parameters in command lines, credential stores and dumping, weakened
+    credential protection, data sent off the endpoint, risky URL hosts and
+    embedded credentials, TLS checks turned off, new root CAs, hosts/DNS/
+    proxy changes, remote access, AMSI bypass and run-time compiling,
+    LOLBins, keyword obfuscation, bidi characters, stopping security tools,
+    hidden or backdated files, kernel modules, setuid and world-writable
+    files, offensive tools, persistence, destructive disk and SQL commands,
+    Description password fields, UNC links, remote images, redirects and
+    hidden elements, very large createfile payloads, and check-titled Tasks
+    that write. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
     file at or over --fail-score (default 50); --weight CODE=N and --disable
     tune it. W908 an unparsable file is skipped.
   entry: bes-content-score-risk

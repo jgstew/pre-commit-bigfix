@@ -13,7 +13,11 @@
   hardcoded secrets (the value is not printed), commands that weaken
   security (disabling UAC, Defender or a firewall, deleting shadow copies,
   adding an administrator), and Descriptions that load remote content or use
-  ActiveX. Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
+  ActiveX. It also scores BigFix-platform risks (client tampering, relay
+  redirection, uploads to the root server, REST API calls, all-computer
+  targets, time bombs), credential access and data leaving the endpoint,
+  weakened TLS, remote access, persistence, evasion, destructive commands,
+  risky Description HTML, and content that is hard to review (W940-W991). Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
   gzip/zlib/zip) and scanned again, up to 3 layers. A file scoring 50 or more
   (HIGH) fails with E900; `--fail-score`, `--weight` and `--disable` tune it.
 
