@@ -718,3 +718,109 @@ def test_main_rejects_a_bad_weight(tmp_path):
 def test_unparsable_file_is_skipped(tmp_path, capsys):
     assert hook.main([write(tmp_path, "bad.bes", "<BES><Task>")]) == 0
     assert "[W908]" in capsys.readouterr().out
+
+
+# --- review fixes (PR 55) ------------------------------------------------------------
+
+
+def _corrupt_zip_base64():
+    """Base64 of a zip whose deflate stream is damaged."""
+    import io
+    import random
+    import zipfile
+
+    rng = random.Random(55)
+    text = "".join(rng.choice("abcdefghij \n") for _ in range(4000)).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("a.txt", text)
+    data = bytearray(buffer.getvalue())
+    for offset in range(60, 120):  # inside the compressed data
+        data[offset] ^= 0xFF
+    return b64(bytes(data))
+
+
+def test_corrupt_zip_does_not_crash():
+    hook.score_text(bes(actionscript=f"wait cmd /c echo {_corrupt_zip_base64()}"))
+
+
+def test_hex_encoded_executable_is_inspected():
+    hex_mz = (b"MZ\x90\x00" + bytes(range(256))).hex()
+    assert {"W924", "W922"} <= set(codes(bes(actionscript=f"// {hex_mz}")))
+
+
+def test_x_escaped_binary_shellcode_is_flagged():
+    shellcode = "\\x90" * 16 + "\\xcc\\xeb\\xfe" * 4
+    assert "W924" in codes(bes(actionscript=f"// {shellcode}"))
+
+
+def test_utf8_text_in_percent_encoding_is_not_flagged():
+    japanese = "".join(f"%{b:02X}" for b in "RiBenYufuairu".encode())
+    assert "W924" not in codes(
+        bes(actionscript=f"// https://example.com/{japanese}.zip")
+    )
+
+
+def test_decode_budget_exhausted_still_checks_executables(monkeypatch):
+    monkeypatch.setattr(hook, "MAX_DECODED", 200)
+    padding = b64(bytes(range(256)) * 2)
+    mz = b64(b"MZ\x90\x00" + bytes(range(200)))
+    found = codes(bes(actionscript=f"// {padding}\n// {mz}"))
+    assert "W922" in found and "W928" in found
+
+
+def test_w955_does_not_print_the_password(tmp_path, capsys):
+    path = tmp_path / "r.bes"
+    path.write_text(
+        bes(
+            actionscript="download now as a.exe https://admin:Hunter2Secret@host.example/a.exe"
+        ),
+        encoding="utf-8",
+    )
+    hook.main([str(path)])
+    out = capsys.readouterr().out
+    assert "[W955]" in out and "Hunter2Secret" not in out and "admin:***@" in out
+
+
+def test_entity_escaped_bidi_character_is_seen():
+    extra = "<MIMEField><Name>x</Name><Value>a&#x202E;b</Value></MIMEField>\n"
+    assert "W963" in codes(bes(extra=extra))
+
+
+def test_entity_escaped_secret_is_seen():
+    extra = (
+        "<MIMEField><Name>x</Name>"
+        "<Value>password=&quot;Hunter2Secret&quot;</Value></MIMEField>\n"
+    )
+    assert "W930" in codes(bes(extra=extra))
+
+
+def test_success_criteria_relevance_is_scanned():
+    extra = '<SuccessCriteria Option="CustomRelevance">exists file "/etc/shadow"</SuccessCriteria>\n'
+    assert "W950" in codes(bes(extra=extra))
+
+
+def test_svg_rescan_respects_the_decode_budget(monkeypatch):
+    monkeypatch.setattr(hook, "MAX_DECODED", 10)
+    svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    found = codes(bes(description=f'<img src="data:image/svg+xml;base64,{b64(svg)}">'))
+    assert "W927" not in found and "W928" in found
+
+
+def test_main_rejects_an_unknown_disable_code(tmp_path):
+    path = tmp_path / "r.bes"
+    path.write_text(bes(), encoding="utf-8")
+    with pytest.raises(SystemExit):
+        hook.main(["--disable", "W92l", str(path)])
+
+
+def test_dtd_entity_is_not_expanded_but_its_text_is_scanned():
+    doc = bes(
+        extra="<MIMEField><Name>x</Name><Value>&s;</Value></MIMEField>\n"
+    ).replace(
+        "<BES ",
+        '<!DOCTYPE BES [<!ENTITY s "password=Hunter2Secret">]>\n<BES ',
+        1,
+    )
+    found = codes(doc)
+    assert "W930" in found and "W929" in found

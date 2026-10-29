@@ -30,6 +30,11 @@ Signals (default points in brackets; --weight CODE=N changes one):
     W926  [30] base64 labelled data:image/ whose bytes are not that image
     W927  [10] a decoded payload itself holds findings: scores their points
           plus 10 per layer, and names the decode path (base64->gzip->text)
+    W928  [15] decoding stopped: MAX_DECODED bytes were spent, so later
+          payloads were only checked for an executable header
+    W929  [20] a DTD or entity declaration: entities are not expanded, so
+          what they hold is hidden from the parsed view (it is still scanned
+          as file text)
     W930  [25] a hardcoded secret: password= / token= / api_key: with a literal
           value (not a {parameter}, $var or %VAR%), a private key, an AWS key
     W931  [20] a command that weakens security: disables UAC, Defender, a
@@ -131,6 +136,10 @@ Signals favor recall: a finding that a reviewer decides is fine costs a
 minute, a missed one may cost far more. Content written by createfile is
 scanned like any other script content.
 
+Character references (&#x202E;, &quot;) are decoded before the whole-file
+scans, so escaping content does not hide it. The XML is parsed without
+resolving entities or touching the network.
+
 Every encoded blob is decoded and inspected: base64 is tried as UTF-8 and as
 UTF-16LE (PowerShell -EncodedCommand), compressed data is decompressed, and
 decoded text is scanned again with the same signals, at most MAX_DEPTH layers
@@ -170,6 +179,8 @@ WEIGHTS = {
     "W925": 15,
     "W926": 30,
     "W927": 10,
+    "W928": 15,
+    "W929": 20,
     "W930": 25,
     "W931": 20,
     "W932": 30,
@@ -275,6 +286,11 @@ REMOTE_CONTENT_RE = re.compile(
 # included) and every line of decoded text; "relevance" is each Relevance and
 # Analysis Property; "desc" is each Description; "file" is the whole file.
 SCRIPT, RELEVANCE, DESC, FILE = "script", "relevance", "desc", "file"
+# the same hardening bes_siterepo_validate_layout uses for untrusted XML
+XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
+# the five predefined entities and numeric character references
+CHARACTER_REFERENCE_RE = re.compile(r"&(#[xX][0-9A-Fa-f]+|#\d+|quot|amp|lt|gt|apos);")
+NAMED_REFERENCES = {"quot": '"', "amp": "&", "lt": "<", "gt": ">", "apos": "'"}
 
 
 def _rule(code, scopes, label, pattern, flags=re.IGNORECASE):
@@ -317,6 +333,7 @@ RULES = (
     _rule(
         "W944", [FILE], "an action targeting all computers", r"<AllComputers>\s*true"
     ),
+    _rule("W929", [FILE], "a DTD or entity declaration", r"<!DOCTYPE|<!ENTITY"),
     _rule(
         "W945",
         [SCRIPT],
@@ -689,6 +706,7 @@ class _Scanner:
         self.weights = {**WEIGHTS, **(weights or {})}
         self.disabled = set(disabled or ())
         self.budget = MAX_DECODED
+        self.budget_reported = False
 
     def finding(self, line, code, message, points=None):
         """A Finding, or None for a disabled code."""
@@ -761,8 +779,11 @@ class _Scanner:
             for match in regex.finditer(src):
                 if code == "W963" and match.start() == 0 and match[0] == "\ufeff":
                     continue  # a byte-order mark opening the file
+                shown = match[0]
+                if code == "W955":  # the password itself stays out of the report
+                    shown = re.sub(r"(://[^:/@]*:)[^@]*@", r"\1***@", shown)
                 found.append(
-                    self.finding(line_of(match.start()), code, f"{label}: {match[0]!r}")
+                    self.finding(line_of(match.start()), code, f"{label}: {shown!r}")
                 )
         return found
 
@@ -888,11 +909,14 @@ class _Scanner:
                     data = decoder(match[0])
                 except (ValueError, OverflowError):
                     continue
-                if not data.isascii():
+                if not data.isascii() and _is_utf8_text(data):
                     continue  # non-English text, not hidden ASCII
                 line = line_of(match.start())
+                kind = "text" if data.isascii() else "binary"
                 found.append(
-                    self.finding(line, "W924", f"{len(match[0])} characters of {label}")
+                    self.finding(
+                        line, "W924", f"{len(match[0])} characters of {label} ({kind})"
+                    )
                 )
                 found.extend(self._payload(data, [label], line, depth))
         return found
@@ -922,8 +946,14 @@ class _Scanner:
             if kind == "svg+xml":
                 text = _as_text(data)
                 if text is not None and "<svg" in text.lower():
+                    image_finding = self.finding(line, "W920", "base64 SVG image")
+                    self.budget -= len(data)
+                    if self.budget < 0:
+                        return [image_finding, self._budget_spent(line)]
+                    if depth >= MAX_DEPTH:
+                        return [image_finding]
                     return [
-                        self.finding(line, "W920", "base64 SVG image"),
+                        image_finding,
                         *self._text(text, ["base64", "svg"], line, depth),
                     ]
             elif data.startswith(IMAGE_MAGIC.get(kind, (b"\x00\x00no",))):
@@ -941,10 +971,32 @@ class _Scanner:
             *self._payload(data, ["base64"], line, depth),
         ]
 
+    def _budget_spent(self, line):
+        """W928 the first time the decode budget runs out, else None."""
+        if self.budget_reported:
+            return None
+        self.budget_reported = True
+        return self.finding(
+            line,
+            "W928",
+            f"stopped decoding after {MAX_DECODED} bytes; later payloads were "
+            "only checked for an executable header",
+        )
+
     def _payload(self, data, path, line, depth):
         """Inspect decoded bytes: W922, W925, and W927 for what they hold."""
         self.budget -= len(data)
-        if self.budget < 0 or depth >= MAX_DEPTH:
+        if self.budget < 0:
+            # out of budget: report that once, and still do the free header check
+            found = [self._budget_spent(line)]
+            if data.startswith(EXECUTABLE_MAGIC):
+                found.append(
+                    self.finding(
+                        line, "W922", f"decoded {'->'.join(path)} is an executable"
+                    )
+                )
+            return found
+        if depth >= MAX_DEPTH:
             return []
         found = []
         if data.startswith(EXECUTABLE_MAGIC):
@@ -1057,6 +1109,34 @@ def _secret_label(text):
     return f"{name} set to a literal value"
 
 
+def _is_utf8_text(data):
+    """True for bytes that are printable UTF-8 text (non-English, say)."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return all(c.isprintable() or c in "\r\n\t" for c in text)
+
+
+def _decode_references(src):
+    """`src` with character references decoded, line breaks kept in place.
+
+    A reference to a CR or LF becomes a space, so line numbers still match.
+    """
+
+    def decode(match):
+        name = match[1]
+        if name in NAMED_REFERENCES:
+            return NAMED_REFERENCES[name]
+        try:
+            char = chr(int(name, 0) if name[1] in "xX" else int(name[1:]))
+        except (ValueError, OverflowError):
+            return match[0]
+        return " " if char in "\r\n" else char
+
+    return CHARACTER_REFERENCE_RE.sub(decode, src)
+
+
 def _inflate(data):
     """(kind, decompressed bytes) for gzip, zlib or zip data, else None."""
     if data.startswith(b"PK\x03\x04"):
@@ -1067,7 +1147,14 @@ def _inflate(data):
                     return None
                 with archive.open(names[0]) as member:
                     return "zip", member.read(MAX_INFLATE)
-        except (zipfile.BadZipFile, OSError, RuntimeError, ValueError):
+        except (
+            zipfile.BadZipFile,
+            OSError,
+            RuntimeError,
+            ValueError,
+            EOFError,
+            zlib.error,
+        ):
             return None
     for kind, magic, wbits in (
         ("gzip", (b"\x1f\x8b",), 31),
@@ -1107,23 +1194,29 @@ def score_text(src, weights=None, disabled=()):
 
     Raises etree.XMLSyntaxError if it does not parse.
     """
-    root = etree.fromstring(src.encode("utf-8"))
+    root = etree.fromstring(src.encode("utf-8"), XML_PARSER)
     scanner = _Scanner(weights, disabled)
     found = []
     for element in root.iter("Description"):
         found.extend(scanner.description(element))
     for element in root.iter("ActionScript"):
         found.extend(scanner.actionscript(element))
-    for element in root.iter("Relevance", "Property"):
+    for element in root.iter(
+        "Relevance", "Property", "SuccessCriteria", "CustomRelevance"
+    ):
         found.extend(scanner.relevance(element))
     found.extend(_read_only_titles(scanner, root))
 
-    def line_of(pos):
-        return bes_common.lineno(src, pos)
+    # the whole-file scans read the text with character references decoded,
+    # so `&#x202E;` or `&quot;` cannot hide what they spell
+    view = _decode_references(src)
 
-    found.extend(scanner.secrets(src, line_of))
-    found.extend(scanner.file(src, line_of))
-    found.extend(scanner.encoded(src, line_of, 0))
+    def line_of(pos):
+        return bes_common.lineno(view, pos)
+
+    found.extend(scanner.secrets(view, line_of))
+    found.extend(scanner.file(view, line_of))
+    found.extend(scanner.encoded(view, line_of, 0))
     found = [f for f in found if f is not None]
     found.extend(_combinations(scanner, found))
     found = sorted(f for f in found if f is not None)
@@ -1232,6 +1325,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     weights = dict(args.weight)
     disabled = {c.strip().upper() for c in args.disable.split(",") if c.strip()}
+    unknown = sorted(disabled - set(WEIGHTS))
+    if unknown:
+        parser.error(f"--disable: unknown code(s) {', '.join(unknown)}")
     files = args.files or bes_common.discover_bes_files()
     results = []
     for path in files:

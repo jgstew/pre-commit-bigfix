@@ -2,6 +2,15 @@
 
 ## v2.2.0
 
+### Changed (`pre-commit-bigfix` command)
+
+- **New failing check.** `pre-commit-bigfix` now also runs
+  `bes-content-score-risk`, and a file whose risk score reaches 50 (HIGH)
+  fails it with E900. On CommunityContent and bigfix-content about 2% of
+  files fail. To keep using `pre-commit-bigfix` without that gate, run it
+  with `--skip bes-content-score-risk`; in pre-commit, raise the threshold
+  with `args: [--fail-score, "1000"]` to keep the report without failing.
+
 ### Added
 
 - New hook `bes-content-score-risk` (also run by `pre-commit-bigfix`). It
