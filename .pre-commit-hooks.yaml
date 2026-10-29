@@ -49,7 +49,9 @@
     Auto-fixes are checked against BES.xsd in three groups (all per-block
     fixes, the trailing-whitespace strip, the XML declaration); a group that
     would make a schema-valid file invalid is not written, the others are
-    (E222; --disable E222 writes it anyway).
+    (E222; --disable E222 writes it anyway). A DTD (<!DOCTYPE ...>) in the
+    prolog is E223: the BigFix Console refuses to import the file, and BES.xsd
+    cannot catch it.
   language: python
   pass_filenames: True
   entry: bes-conventions-check
@@ -365,6 +367,52 @@
     when it converted anything, so the rewrite can be reviewed; --check is a dry
     run. A file opts out with `pre-commit-skip: bes-relevance-convert-group`.
   entry: bes-relevance-convert-group
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: \.bes$
+- id: bes-content-score-risk
+  name: Score BigFix BES content risk for careful review
+  description: >
+    Computes a risk score per BES file and lists why, to flag content for a
+    careful human review; it never changes files. Signals: script (W901) or
+    session relevance (W902, both W903) in a Description; ActionScript
+    download / download now (W910, not hashed -- use a prefetch, a later sha1
+    check does not excuse it), nohash prefetch items (W911), plain-http or
+    raw-IP URLs (W912), download commands in script content (W913); base64
+    of a real image of its data:image/ type (W920, low), other base64 (W921),
+    image-labelled base64 that is not that image (W926); decode or
+    dynamic-run commands (W923: certutil -decode, base64 -d,
+    -EncodedCommand, Invoke-Expression/iex, PsExec, curl | sh) and other
+    obfuscation (W924: \x, \u, %XX and hex runs,
+    eval/unescape/atob/Function/fromCharCode). Every encoded blob is decoded
+    and inspected -- UTF-16LE for PowerShell -EncodedCommand, gzip/zlib/zip
+    decompressed (W925) -- an executable or script payload is W922, and
+    findings inside a payload score as W927 with the decode path, up to 3
+    layers deep. Also hardcoded secrets (W930: a literal password=/token=/
+    api_key value, a private key, an AWS key; the value is not printed),
+    commands that weaken security (W931: disable UAC, Defender, a firewall,
+    SELinux, Gatekeeper or SIP, delete shadow copies, clear logs, add a user
+    or admin, edit sudoers or authorized_keys), and a Description that loads
+    remote content or reaches outside the page (W932: <script src> or
+    <iframe src> to a URL, ActiveXObject, WScript.Shell, XMLHttpRequest,
+    fetch, document.cookie). Signals favor recall over precision: a finding
+    a reviewer accepts is cheap, a missed one is not. W940-W991 cover BigFix
+    client tampering, relay redirection, endpoint uploads, REST API calls,
+    all-computer targeting, settings-as-commands, time bombs, host pinning,
+    parameters in command lines, credential stores and dumping, weakened
+    credential protection, data sent off the endpoint, risky URL hosts and
+    embedded credentials, TLS checks turned off, new root CAs, hosts/DNS/
+    proxy changes, remote access, AMSI bypass and run-time compiling,
+    LOLBins, keyword obfuscation, bidi characters, stopping security tools,
+    hidden or backdated files, kernel modules, setuid and world-writable
+    files, offensive tools, persistence, destructive disk and SQL commands,
+    Description password fields, UNC links, remote images, redirects and
+    hidden elements, very large createfile payloads, and check-titled Tasks
+    that write. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
+    file at or over --fail-score (default 50); --weight CODE=N and --disable
+    tune it. W908 an unparsable file is skipped.
+  entry: bes-content-score-risk
   language: python
   pass_filenames: True
   types: [text]

@@ -98,6 +98,10 @@ Checks:
           per-block fixes, the trailing-whitespace strip, and the XML
           declaration, and the other groups are still written (--disable
           E222 writes it anyway)
+    E223  the file declares a DTD (<!DOCTYPE ...> before the root element):
+          the BigFix Console refuses to import it ("invalid document
+          structure"), and BES.xsd cannot catch it, since the DTD is gone by
+          the time the schema sees the document
     W200  the file is not parseable BES XML; skipped (advisory --
           bes-schema-validate is the authority on file validity)
     W201  a Task/Fixlet has no x-fixlet-modification-time MIMEField (fixable ->
@@ -529,6 +533,10 @@ FILENAME_ILLEGAL_RE = re.compile(r'[\\/:*?"<>|]')
 XML_DECL_RE = re.compile("^\\ufeff?\\s*<\\?xml\\b([^>]*)\\?>")
 XML_DECL_ENCODING_RE = re.compile(r'encoding\s*=\s*"([^"]*)"', re.IGNORECASE)
 XML_DECL_VERSION_RE = re.compile(r'version\s*=\s*"([^"]*)"', re.IGNORECASE)
+# a DTD in the prolog only (see bes_common.PROLOG_DOCTYPE_RE), so neither a
+# `<!DOCTYPE html>` in a CDATA Description nor a plist's DOCTYPE in an action
+# matches
+DOCTYPE_RE = bes_common.PROLOG_DOCTYPE_RE
 # trailing spaces/tabs at the end of any line (LF-normalized text)
 TRAILING_WS_RE = re.compile(r"[ \t]+$", re.MULTILINE)
 
@@ -651,6 +659,7 @@ KNOWN_CODES = frozenset(
         "E219",  # x-relevance-evaluation-period value not a valid HH:MM:SS duration
         "E221",  # Description <script> block uses a `//` line comment
         "E222",  # auto-fix not written: it would break BES.xsd validity
+        "E223",  # file declares a DTD (<!DOCTYPE ...>)
         "W200",  # not parseable BES XML; skipped
         "W201",  # Task/Fixlet missing x-fixlet-modification-time
         "W202",  # Task/Fixlet missing SourceReleaseDate
@@ -3075,7 +3084,8 @@ def fix_missing_dates(src, now=None, fix_srd=True, fix_modtime=True):
 
 
 # --------------------------------------------------------------------------
-# file-level checks / fixers (E214 XML declaration, W210 trailing whitespace)
+# file-level checks / fixers (E214 XML declaration, E223 DTD, W210 trailing
+# whitespace)
 # --------------------------------------------------------------------------
 
 
@@ -3100,6 +3110,24 @@ def check_xml_declaration(src):
     else:
         return []
     return [(1, "E214", f"{message}; add `{XML_DECL_MARKER}` if intentional")]
+
+
+def check_doctype(src):
+    """E223: a DTD, which the BigFix Console refuses to import."""
+    match = DOCTYPE_RE.match(src)
+    if match is None:
+        return []
+    return [
+        (
+            bes_common.lineno(src, match.start(1)),
+            "E223",
+            (
+                "file declares a DTD (<!DOCTYPE ...>); the BigFix Console "
+                'refuses to import it ("invalid document structure"); remove '
+                "it, writing out any entities it declares"
+            ),
+        )
+    ]
 
 
 def check_trailing_whitespace(src):
@@ -3281,6 +3309,8 @@ def check_file(
     # these come back clean unless the specific fix was disabled.
     if "E214" not in disabled and XML_DECL_MARKER not in src:
         issues += check_xml_declaration(src)
+    if "E223" not in disabled:
+        issues += check_doctype(src)
     if "W210" not in disabled and TRAILING_WS_MARKER not in src:
         issues += check_trailing_whitespace(src)
     if check_filename and "W217" not in disabled and FILENAME_MARKER not in src:

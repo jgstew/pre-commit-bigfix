@@ -1,5 +1,39 @@
 # Release Notes
 
+## v2.2.0
+
+### Changed (`pre-commit-bigfix` command)
+
+- **New failing check.** `pre-commit-bigfix` now also runs
+  `bes-content-score-risk`, and a file whose risk score reaches 50 (HIGH)
+  fails it with E900. On CommunityContent and bigfix-content about 2% of
+  files fail. To keep using `pre-commit-bigfix` without that gate, run it
+  with `--skip bes-content-score-risk`; in pre-commit, raise the threshold
+  with `args: [--fail-score, "1000"]` to keep the report without failing.
+
+### Added
+
+- New hook `bes-content-score-risk` (also run by `pre-commit-bigfix`). It
+  computes a risk score per BES file to flag content for careful review:
+  script and session relevance in Descriptions, unhashed downloads (`download
+  now`, nohash prefetch items, plain-http or raw-IP URLs, download commands
+  in scripts), base64 outside real images, decode or dynamic-run commands
+  (`Invoke-Expression`, PsExec, `curl | sh`) and other obfuscation,
+  hardcoded secrets (the value is not printed), commands that weaken
+  security (disabling UAC, Defender or a firewall, deleting shadow copies,
+  adding an administrator), and Descriptions that load remote content or use
+  ActiveX. It also scores BigFix-platform risks (client tampering, relay
+  redirection, uploads to the root server, REST API calls, all-computer
+  targets, time bombs), credential access and data leaving the endpoint,
+  weakened TLS, remote access, persistence, evasion, destructive commands,
+  risky Description HTML, and content that is hard to review (W940-W991). Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
+  gzip/zlib/zip) and scanned again, up to 3 layers. A file scoring 50 or more
+  (HIGH) fails with E900; `--fail-score`, `--weight` and `--disable` tune it.
+- `bes-conventions-check` E223: a file that declares a DTD (`<!DOCTYPE ...>`)
+  fails. The BigFix Console refuses to import it ("invalid document
+  structure"), and `bes-schema-validate` cannot catch it, since the schema
+  never sees the DTD.
+
 ## v2.1.1
 
 ### Changed (`pre-commit-bigfix` command)

@@ -118,6 +118,11 @@ HOOKS = (
         read_only=("--check",),
     ),
     Hook(
+        "bes-content-score-risk",
+        "bes_content_score_risk",
+        r"\.bes$",
+    ),
+    Hook(
         "bes-siterepo-validate-layout",
         "bes_siterepo_validate_layout",
         None,

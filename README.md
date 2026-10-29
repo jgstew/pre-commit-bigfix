@@ -20,6 +20,7 @@ repos:
       - id: bes-actionscript-validate-script
       - id: bes-relevance-lint
       - id: bes-relevance-convert-group
+      - id: bes-content-score-risk
       # only in a Git External Custom Site (repository site) repo:
       - id: bes-siterepo-validate-layout
 ```
@@ -144,7 +145,8 @@ action-ui-metadata / CPE-2.3 / CVENames / x-relevance-evaluation-period,
 prefetch-line shape (URL schemes overridable with `--prefetch-url-schemes`)
 and https URLs, CDATA usage, blank-line and
 trailing-whitespace spacing, empty ActionScript, dynamic download statements,
-a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
+a UTF-8 XML declaration, no DTD (`<!DOCTYPE ...>`, `E223`: the BigFix Console
+refuses to import a file that has one), Title placeholders / whitespace / TODO markers,
 non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
 names, unique Analysis Property names/IDs, unique Action IDs, action link text
 free of empty-substitution gaps, SuccessCriteria body/Option consistency, a
@@ -668,6 +670,91 @@ The hook converts by default and exits 1 when it changed anything, so the
 rewrite shows up for review; `--check` only reports. With no files given it
 checks every `*.bes` below the current folder and never rewrites. A file opts
 out with `<!-- pre-commit-skip: bes-relevance-convert-group -->`.
+
+### bes-content-score-risk
+
+Scores how risky a BES file's content is and lists the reasons, so content
+that needs a careful human review is flagged before it is trusted. It is a
+triage signal, not a verdict, and it never changes a file. Each finding adds
+points; a file at or over `--fail-score` (default 50, the HIGH band) fails
+with `E900`.
+
+| code | points | signal |
+| --- | --- | --- |
+| `W901` | 20 | script in a Description: `<script>`, `javascript:`, an `on*=` handler |
+| `W902` | 25 | session relevance in a Description: `<?relevance ...?>`, `EvaluateRelevance(` |
+| `W903` | 15 | both in one Description |
+| `W910` | 25 | ActionScript `download` / `download now`: not hashed. A later `continue if {sha1 of ...}` does not excuse it; use a prefetch |
+| `W911` | 25 | `add nohash prefetch item` |
+| `W912` | 10 | a download or prefetch URL over plain `http://` or to a raw IP |
+| `W913` | 15 | a download command in script content (`curl`, `wget`, `Invoke-WebRequest`, `DownloadString`, `bitsadmin`, ...) |
+| `W920` | 2 | base64 that really is an image of its `data:image/` type |
+| `W921` | 20 | base64 (80+ characters) anywhere else |
+| `W922` | 25 | a decoded payload is an executable or a script |
+| `W923` | 20 | a decode or dynamic-run command: `certutil -decode`, `base64 -d`, `FromBase64String`, `powershell -EncodedCommand`, `Invoke-Expression` / `iex`, PsExec, `curl ... \| sh` |
+| `W924` | 15 | other obfuscation: `\x`, `\u`, `%XX` or hex runs decoding to ASCII; `eval(`, `unescape(`, `atob(`, `Function(`, `fromCharCode(` |
+| `W925` | 15 | a decoded payload is gzip, zlib or zip compressed |
+| `W926` | 30 | base64 labelled `data:image/` whose bytes are not that image |
+| `W927` | 10 + inner | a decoded payload holds findings of its own; names the decode path (`base64->gzip->text`) |
+| `W928` | 15 | decoding stopped: 4 MB were decoded, so later payloads were only checked for an executable header |
+| `W929` | 20 | a DTD in the prolog, once per file: its entities are not expanded, and the BigFix Console refuses the file (`bes-conventions-check` `E223`). A DOCTYPE an action writes out, such as a plist's, does not count |
+| `W930` | 25 | a hardcoded secret: `password=`, `token=`, `api_key:` and the like with a literal value (not a `{parameter}`, `$var` or `%VAR%`), a private key, an AWS access key ID. The value is never printed |
+| `W931` | 20 | a command that weakens security: disables UAC, Defender, a firewall, SELinux, Gatekeeper or SIP; deletes shadow copies or clears event logs; adds a user or an administrator; edits `sudoers` or `authorized_keys` |
+| `W932` | 30 | a Description that loads remote content or reaches outside the page: `<script src>` / `<iframe src>` to a URL, `ActiveXObject`, `WScript.Shell`, `XMLHttpRequest`, `fetch(`, `document.cookie` |
+| `W940` | 30 | tampers with the BigFix client: stops, disables or uninstalls BESClient, deletes `__BESData`, replaces `masthead`/`ActionSite.afxm` |
+| `W941` | 25 | redirects the client to another relay or server (`__RelayServer1/2`, `_BESClient_RelaySelect_*`, ParentRelay, affiliation) |
+| `W942` | 10 | uploads endpoint files to the root server (`archive now`, `_BESClient_ArchiveManager_*`, `_BESClient_UploadManager_*`); the destination cannot be redirected, but the files become readable on the server |
+| `W943` | 25 | calls the BigFix REST API (`/api/actions`, ...): content that can create more content or actions |
+| `W944` | 30 | an action that targets all computers (`<AllComputers>true`) |
+| `W945` | 20 | runs a command taken from a client setting or a file (`wait {value of setting ...}`) |
+| `W946` | 30 | compares `now` to a fixed date in relevance or an action (a time bomb?) |
+| `W947` | 15 | relevance or an action pinned to one host name, IP or MAC |
+| `W948` | 5 | a `{parameter}` placed straight into a command line (command injection?) |
+| `W949` | 20 | uploads files (W942) and reads a credential store (W950) in one file: secrets may end up on the server |
+| `W950` | 30 | reads a credential store: `/etc/shadow`, the SAM or SECURITY hive, SSH keys, browser logins, keychains, `.aws/credentials`, `NTDS.dit`, lsass; in ActionScript, Relevance or an Analysis Property |
+| `W951` | 30 | dumps credentials or prompts for a password: mimikatz, procdump of lsass, `reg save HKLM\SAM`, `Get-Credential`, an AppleScript `with hidden answer` dialog |
+| `W952` | 25 | weakens credential protection: WDigest `UseLogonCredential=1`, `RunAsPPL=0`, `NoLMHash=0` |
+| `W953` | 25 | sends data off the endpoint: `curl -d/-F/-T`, an `Invoke-WebRequest`/`Invoke-RestMethod` POST or PUT, `scp`, `sftp`, `ftp`, `UploadFile` |
+| `W954` | 20 | a URL on a paste site, URL shortener, tunnel (ngrok, trycloudflare), raw.githubusercontent/gist, the Discord CDN, or dynamic DNS |
+| `W955` | 25 | a URL with credentials in it (`https://user:pass@...`) |
+| `W956` | 25 | turns off TLS or host-key verification: `curl -k`, `--no-check-certificate`, `ServerCertificateValidationCallback`, `StrictHostKeyChecking no` |
+| `W957` | 30 | adds a trusted root CA (`certutil -addstore root`, `add-trusted-cert`, `update-ca-certificates`) |
+| `W958` | 20 | changes hosts, DNS or proxy settings |
+| `W959` | 20 | enables remote access: RDP, WinRM, SSH root or password login, SMBv1, the guest account, `LocalAccountTokenFilterPolicy=1` |
+| `W960` | 30 | bypasses AMSI or ETW, loads code reflectively, or compiles it at run time (`Add-Type -TypeDefinition`, `csc.exe`, an MSBuild project, `VirtualAlloc`) |
+| `W961` | 20 | a built-in binary used to run code: `mshta`, `regsvr32 /i:`, `rundll32 javascript:`, `wmic process call create`, `odbcconf`, `forfiles /c`, `cmstp` |
+| `W962` | 20 | keyword obfuscation: PowerShell backticks or cmd carets inside a word, env-var substrings other than `%DATE%`/`%TIME%`, split-and-joined strings, `-bxor`, string reversal |
+| `W963` | 30 | a bidi or zero-width character, which can hide code (a byte-order mark opening the file is fine) |
+| `W964` | 20 | stops or removes a security tool: Defender, an EDR agent, Sysmon, Tanium, osquery, auditd |
+| `W965` | 15 | hides or backdates files (`attrib +h +s`, `touch -t`, `SetFileTime`) |
+| `W966` | 25 | loads a kernel driver or module (`insmod`, `kextload`), or turns on test signing |
+| `W967` | 15 | setuid or world-writable permissions, `Everyone:F` |
+| `W968` | 20 | an offensive, recon or mining tool: nmap, responder, BloodHound, impacket, xmrig, `stratum+tcp` |
+| `W970` | 25 | stealthy persistence: IFEO `Debugger`, sticky-keys replacement, WMI event subscriptions, Winlogon `Userinit`/`Shell`, `AppInit_DLLs`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, shell rc and `profile.d` files |
+| `W971` | 10 | ordinary persistence: a Run key, service, launchd or systemd unit, scheduled task or cron job |
+| `W972` | 30 | a destructive disk operation: `diskpart`, `format`, `dd of=/dev/...`, `mkfs`, `shred`, `cipher /w`, `rm -rf /` |
+| `W973` | 20 | SQL that changes data (`DROP`, `DELETE`, `UPDATE`, `TRUNCATE`, `ALTER`), or `xp_cmdshell` |
+| `W980` | 20 | a password field in a Description: credentials collected in the console |
+| `W981` | 30 | a UNC (`\\server\share`) or `file:` link or image in a Description; rendering it may send the operator's NTLM hash |
+| `W982` | 15 | a remote image or media file in a Description: a beacon on whoever opens it |
+| `W983` | 25 | a `<meta refresh>`, `<base href>`, or a `<form action>` posting to another site, in a Description |
+| `W984` | 10 | a hidden element (`display:none`, `visibility:hidden`) in a Description |
+| `W990` | 10 | a `createfile` payload longer than 200 lines: hard to review |
+| `W991` | 15 | a Task or Fixlet titled like a check (Check, Get, Report, Inventory, ...) whose action changes state |
+| `W900` | | a MEDIUM score (25-49) |
+| `W908` | | not parseable XML; skipped |
+| `E900` | | the score is at or over `--fail-score` |
+
+Every encoded blob is decoded and scanned again: base64 as UTF-8 and as
+UTF-16LE (PowerShell `-EncodedCommand`), compressed data decompressed, up to
+3 layers and 4 MB per file. `--weight CODE=N` changes a signal's points,
+`--disable CODES` skips signals, and `--fail-score N` moves the threshold.
+The default weights are a starting point, to be tuned against real content.
+
+The signals favor recall over precision: it is better to flag something a
+reviewer then accepts than to miss something malicious. Content written by
+`createfile` is scanned like any other script content, so a configuration
+file that only lists tool names (a Sysmon config, say) can still score.
 
 ### bes-siterepo-validate-layout
 
