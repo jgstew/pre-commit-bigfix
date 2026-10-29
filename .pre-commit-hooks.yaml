@@ -49,7 +49,9 @@
     Auto-fixes are checked against BES.xsd in three groups (all per-block
     fixes, the trailing-whitespace strip, the XML declaration); a group that
     would make a schema-valid file invalid is not written, the others are
-    (E222; --disable E222 writes it anyway).
+    (E222; --disable E222 writes it anyway). A DTD (<!DOCTYPE ...>) in the
+    prolog is E223: the BigFix Console refuses to import the file, and BES.xsd
+    cannot catch it.
   language: python
   pass_filenames: True
   entry: bes-conventions-check

@@ -29,6 +29,10 @@
   risky Description HTML, and content that is hard to review (W940-W991). Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
   gzip/zlib/zip) and scanned again, up to 3 layers. A file scoring 50 or more
   (HIGH) fails with E900; `--fail-score`, `--weight` and `--disable` tune it.
+- `bes-conventions-check` E223: a file that declares a DTD (`<!DOCTYPE ...>`)
+  fails. The BigFix Console refuses to import it ("invalid document
+  structure"), and `bes-schema-validate` cannot catch it, since the schema
+  never sees the DTD.
 
 ## v2.1.1
 

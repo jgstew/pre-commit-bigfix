@@ -1523,6 +1523,37 @@ def test_e214_marker_opts_out(tmp_path):
     assert "E214" not in codes(tmp_path, content)
 
 
+# --- E223 DTD ---------------------------------------------------------------
+
+
+def _with_dtd(content):
+    """`content` with an internal DTD after its XML declaration."""
+    return content.replace(
+        "\n<BES", '\n<!DOCTYPE BES [\n<!ENTITY t "Example">\n]>\n<BES', 1
+    )
+
+
+def test_e223_dtd_flagged_on_its_line(tmp_path):
+    path = write(tmp_path, "x.bes", _with_dtd(task()))
+    issues, _ = checker.check_file(path)
+    assert [line for line, code, _ in issues if code == "E223"] == [2]
+
+
+def test_e223_dtd_after_a_comment_flagged(tmp_path):
+    content = _with_dtd(task()).replace("\n<!DOCTYPE", "\n<!-- note -->\n<!DOCTYPE", 1)
+    assert "E223" in codes(tmp_path, content)
+
+
+def test_e223_doctype_text_in_a_description_clean(tmp_path):
+    # only a DTD in the prolog counts, not HTML inside a CDATA Description
+    content = task(description="<!DOCTYPE html><p>A real description.</p>")
+    assert "E223" not in codes(tmp_path, content)
+
+
+def test_e223_can_be_disabled(tmp_path):
+    assert "E223" not in codes(tmp_path, _with_dtd(task()), disabled={"E223"})
+
+
 # --- W210 trailing whitespace ---------------------------------------------
 
 
