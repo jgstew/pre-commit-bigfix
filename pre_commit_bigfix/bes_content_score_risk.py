@@ -318,6 +318,13 @@ class _Scanner:
         # a long path or word run (letters and slashes) does not
         if not re.search(r"[0-9+]", run) or run.count("/") > len(run) // 10 + 2:
             return []
+        # a URL path (a VirusTotal report's /file/<sha256>/analysis) is not a
+        # payload: skip a run in the same token as a `scheme://`
+        token = re.split(
+            r"[\s\"'<>()]", src[max(0, match.start() - 2048) : match.start()]
+        )
+        if "://" in token[-1]:
+            return []
         try:
             data = base64.b64decode(run + "=" * (-len(run) % 4), validate=True)
         except (binascii.Error, ValueError):

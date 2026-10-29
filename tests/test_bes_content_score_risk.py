@@ -218,6 +218,14 @@ def test_hex_hashes_and_short_tokens_are_not_base64():
     assert codes(bes(actionscript=body)) == []
 
 
+def test_url_path_with_a_hash_is_not_base64():
+    # CommunityContent links VirusTotal reports like this; the path run
+    # `en/file/<sha256>/analysis` looked like base64
+    sha = "7ee4f7a0e46e34539e9ed362c32ed751025103ade4cdad75c01ccb558c7015ea"
+    url = f"https://www.virustotal.com/en/file/{sha}/analysis/"
+    assert codes(bes(description=f'<p><a href="{url}">{url}</a></p>')) == []
+
+
 def test_base64_of_executable():
     blob = b64(b"MZ\x90\x00" + bytes(range(256)) * 2)
     assert "W922" in codes(bes(actionscript=f"// {blob}\nwait cmd /c echo"))
