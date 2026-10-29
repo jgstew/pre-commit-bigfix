@@ -8,8 +8,12 @@
   computes a risk score per BES file to flag content for careful review:
   script and session relevance in Descriptions, unhashed downloads (`download
   now`, nohash prefetch items, plain-http or raw-IP URLs, download commands
-  in scripts), base64 outside real images, decode-and-run commands and other
-  obfuscation. Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
+  in scripts), base64 outside real images, decode or dynamic-run commands
+  (`Invoke-Expression`, PsExec, `curl | sh`) and other obfuscation,
+  hardcoded secrets (the value is not printed), commands that weaken
+  security (disabling UAC, Defender or a firewall, deleting shadow copies,
+  adding an administrator), and Descriptions that load remote content or use
+  ActiveX. Encoded payloads are decoded (base64, UTF-16LE, hex, escapes,
   gzip/zlib/zip) and scanned again, up to 3 layers. A file scoring 50 or more
   (HIGH) fails with E900; `--fail-score`, `--weight` and `--disable` tune it.
 

@@ -21,17 +21,31 @@ Signals (default points in brackets; --weight CODE=N changes one):
     W920   [2] base64 of a real image of its declared data:image/ type
     W921  [20] base64 (80+ characters) anywhere else
     W922  [25] a decoded payload is an executable or a script
-    W923  [20] a decode-and-run command: certutil -decode, base64 -d,
-          FromBase64String, powershell -EncodedCommand
+    W923  [20] a decode or dynamic-run command: certutil -decode, base64 -d,
+          FromBase64String, powershell -EncodedCommand, Invoke-Expression /
+          iex, PsExec, a pipe into sh (curl ... | sh)
     W924  [15] other obfuscation: long \\x / \\u / %XX / hex runs that decode
           to ASCII, or eval( unescape( atob( Function( fromCharCode(
     W925  [15] a decoded payload is gzip, zlib or zip compressed
     W926  [30] base64 labelled data:image/ whose bytes are not that image
     W927  [10] a decoded payload itself holds findings: scores their points
           plus 10 per layer, and names the decode path (base64->gzip->text)
+    W930  [25] a hardcoded secret: password= / token= / api_key: with a literal
+          value (not a {parameter}, $var or %VAR%), a private key, an AWS key
+    W931  [20] a command that weakens security: disables UAC, Defender, a
+          firewall, SELinux, Gatekeeper or SIP; deletes shadow copies or
+          clears logs; adds a user or an administrator; edits sudoers or
+          authorized_keys
+    W932  [30] a Description that loads remote content or reaches outside the
+          page: <script src> / <iframe src> to a URL, ActiveXObject,
+          WScript.Shell, XMLHttpRequest, fetch(, document.cookie
     W900       a MEDIUM score (summary line)
     W908       not parseable XML; skipped (bes-schema-validate owns validity)
     E900       the score is at or over --fail-score
+
+Signals favor recall: a finding that a reviewer decides is fine costs a
+minute, a missed one may cost far more. Content written by createfile is
+scanned like any other script content.
 
 Every encoded blob is decoded and inspected: base64 is tried as UTF-8 and as
 UTF-16LE (PowerShell -EncodedCommand), compressed data is decompressed, and
@@ -72,6 +86,9 @@ WEIGHTS = {
     "W925": 15,
     "W926": 30,
     "W927": 10,
+    "W930": 25,
+    "W931": 20,
+    "W932": 30,
 }
 
 MEDIUM = 25
@@ -94,7 +111,39 @@ DOWNLOAD_CMD_RE = re.compile(
 )
 DECODE_CMD_RE = re.compile(
     r"certutil(?:\.exe)?\s+-decode|\bbase64\s+(?:-d|-D|--decode)\b"
-    r"|FromBase64String|\bpowershell(?:\.exe)?\b[^\n]*\s-(?:e|ec|enc|encodedcommand)\s",
+    r"|FromBase64String|\bpowershell(?:\.exe)?\b[^\n]*\s-(?:e|ec|enc|encodedcommand)\s"
+    r"|Invoke-Expression|\biex\b|\bpsexec(?:64)?\b"
+    r"|\|\s*(?:sudo\s+)?(?:bash|zsh|dash|sh)\b",
+    re.IGNORECASE,
+)
+# a literal value after a secret-looking name; a {relevance} substitution,
+# $variable or %VARIABLE% is not one
+SECRET_RE = re.compile(
+    r"\b(?:password|passwd|pwd|secret|api[_-]?key|auth[_-]?token|access[_-]?token"
+    r"|token)\s*[:=]\s*[\"']?(?![\s\"'{$%<])[^\s\"'&;<]{4,}"
+    r"|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b",
+    re.IGNORECASE,
+)
+WEAKEN_RE = re.compile(
+    r"Set-MpPreference\s[^\n]*-Disable|Add-MpPreference\s[^\n]*-Exclusion"
+    r"|DisableAntiSpyware|DisableRealtimeMonitoring"
+    r"|advfirewall\s+set\s+\w+\s+state\s+off|netsh\s+firewall\s+set\s+opmode\s+disable"
+    r"|Set-NetFirewallProfile\s[^\n]*-Enabled\s+(?:\$?false|0)"
+    r"|systemctl\s+(?:stop|disable|mask)\s+(?:firewalld|ufw|iptables|auditd)"
+    r"|\bufw\s+disable|\bsetenforce\s+0|SELINUX=disabled"
+    r"|EnableLUA[^\n]*dword:0+\b|spctl\s+--master-disable|csrutil\s+disable"
+    r"|vssadmin\s+delete\s+shadows|wevtutil\s+(?:cl|clear-log)\b|Clear-EventLog"
+    r"|wbadmin\s+delete|bcdedit\s[^\n]*recoveryenabled\s+no"
+    r"|\bnet\s+user\s+\S+\s+\S+\s+/add|\bnet\s+localgroup\s+administrators\s+\S+\s+/add"
+    r"|Add-LocalGroupMember\s[^\n]*Administrators|\buseradd\b|\badduser\b"
+    r"|usermod\s+-a?G\s+(?:sudo|wheel|admin)|/etc/sudoers|NOPASSWD|authorized_keys",
+    re.IGNORECASE,
+)
+REMOTE_CONTENT_RE = re.compile(
+    r"<(?:script|iframe|frame|embed|object|link)\b[^>]*\b(?:src|href|data)\s*=\s*"
+    r"[\"']?(?:https?:)?//"
+    r"|ActiveXObject|WScript\.Shell|Shell\.Application|Scripting\.FileSystemObject"
+    r"|XMLHttpRequest|\bfetch\s*\(|document\.cookie",
     re.IGNORECASE,
 )
 URL_RE = re.compile(r"\b(?:https?|ftp)://([^\s/\"'<>:]+)", re.IGNORECASE)
@@ -231,6 +280,15 @@ class _Scanner:
                     line, "W924", f"obfuscation call in a Description: {api[0]!r}"
                 )
             )
+        remote = REMOTE_CONTENT_RE.search(view)
+        if remote:
+            found.append(
+                self.finding(
+                    line,
+                    "W932",
+                    f"a Description reaching outside the page: {remote[0]!r}",
+                )
+            )
         return found
 
     def actionscript(self, element):
@@ -274,13 +332,34 @@ class _Scanner:
                 )
 
     def _script_line(self, line, text):
-        """W913 and W923 for a line of script or file content."""
+        """W913, W923 and W931 for a line of script or file content."""
         download = DOWNLOAD_CMD_RE.search(text)
         if download:
             yield self.finding(line, "W913", f"download command: {download[0]!r}")
         decode = DECODE_CMD_RE.search(text)
         if decode:
-            yield self.finding(line, "W923", f"decode-and-run command: {decode[0]!r}")
+            yield self.finding(
+                line, "W923", f"decode or dynamic-run command: {decode[0]!r}"
+            )
+        weaken = WEAKEN_RE.search(text)
+        if weaken:
+            yield self.finding(
+                line, "W931", f"command that weakens security: {weaken[0]!r}"
+            )
+
+    def secrets(self, src, line_of):
+        """W930 for every hardcoded secret in `src`; line_of(pos) -> line."""
+        return [
+            # the value itself is left out of the message, so the report
+            # does not copy the secret somewhere else
+            self.finding(
+                line_of(match.start()),
+                "W930",
+                f"hardcoded secret: {_secret_label(match[0])}",
+            )
+            for match in SECRET_RE.finditer(src)
+            if not _not_a_secret(src, match)
+        ]
 
     # --- encoded content anywhere ---------------------------------------------------
 
@@ -425,6 +504,10 @@ class _Scanner:
         api = OBFUSCATION_API_RE.search(text)
         if api:
             found.append(self.finding(line, "W924", f"obfuscation call {api[0]!r}"))
+        remote = REMOTE_CONTENT_RE.search(text)
+        if remote:
+            found.append(self.finding(line, "W932", f"remote content {remote[0]!r}"))
+        found.extend(self.secrets(text, lambda pos: line))
         for text_line in text.splitlines():
             stripped = text_line.strip()
             if stripped and not stripped.startswith("//"):
@@ -432,6 +515,36 @@ class _Scanner:
                 found.extend(self._script_line(line, stripped))
         found.extend(self.encoded(text, lambda pos: line, depth))
         return found
+
+
+# the `override` option password= takes one of these keywords, not a secret
+# (bes_actionscript_lint_schclass documents the same set)
+OVERRIDE_PASSWORD_VALUES = frozenset({"required", "empty", "impersonate", "system"})
+# an unquoted identifier followed by a call, separator or close: a variable
+# or function in code (`{ secret: params }`, `$PWD = Hash (...)`), not a value
+CODE_REFERENCE_RE = re.compile(r"[A-Za-z_$][\w$.]*\s*[(,})]")
+
+
+def _not_a_secret(src, match):
+    """True for a SECRET_RE match that is plainly not a literal secret."""
+    parts = re.split(r"\s*[:=]\s*", match[0], maxsplit=1)
+    if len(parts) < 2 or parts[1][:1] in "\"'":
+        return False  # a key, or a quoted value: always a finding
+    name, value = parts
+    if name.lower() == "password" and value.lower() in OVERRIDE_PASSWORD_VALUES:
+        return True
+    start = match.end() - len(value)
+    return bool(CODE_REFERENCE_RE.match(src, start))
+
+
+def _secret_label(text):
+    """What a W930 match is, without the secret value."""
+    if text.startswith("-----"):
+        return "a private key"
+    if text[:4].upper() == "AKIA":
+        return "an AWS access key ID"
+    name = re.match(r"[\w-]+", text)[0]
+    return f"{name} set to a literal value"
 
 
 def _inflate(data):
@@ -491,7 +604,12 @@ def score_text(src, weights=None, disabled=()):
         found.extend(scanner.description(element))
     for element in root.iter("ActionScript"):
         found.extend(scanner.actionscript(element))
-    found.extend(scanner.encoded(src, lambda pos: bes_common.lineno(src, pos), 0))
+
+    def line_of(pos):
+        return bes_common.lineno(src, pos)
+
+    found.extend(scanner.secrets(src, line_of))
+    found.extend(scanner.encoded(src, line_of, 0))
     found = sorted(f for f in found if f is not None)
     return found, sum(f.points for f in found)
 

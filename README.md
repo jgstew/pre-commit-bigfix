@@ -690,11 +690,14 @@ with `E900`.
 | `W920` | 2 | base64 that really is an image of its `data:image/` type |
 | `W921` | 20 | base64 (80+ characters) anywhere else |
 | `W922` | 25 | a decoded payload is an executable or a script |
-| `W923` | 20 | a decode-and-run command: `certutil -decode`, `base64 -d`, `FromBase64String`, `powershell -EncodedCommand` |
+| `W923` | 20 | a decode or dynamic-run command: `certutil -decode`, `base64 -d`, `FromBase64String`, `powershell -EncodedCommand`, `Invoke-Expression` / `iex`, PsExec, `curl ... \| sh` |
 | `W924` | 15 | other obfuscation: `\x`, `\u`, `%XX` or hex runs decoding to ASCII; `eval(`, `unescape(`, `atob(`, `Function(`, `fromCharCode(` |
 | `W925` | 15 | a decoded payload is gzip, zlib or zip compressed |
 | `W926` | 30 | base64 labelled `data:image/` whose bytes are not that image |
 | `W927` | 10 + inner | a decoded payload holds findings of its own; names the decode path (`base64->gzip->text`) |
+| `W930` | 25 | a hardcoded secret: `password=`, `token=`, `api_key:` and the like with a literal value (not a `{parameter}`, `$var` or `%VAR%`), a private key, an AWS access key ID. The value is never printed |
+| `W931` | 20 | a command that weakens security: disables UAC, Defender, a firewall, SELinux, Gatekeeper or SIP; deletes shadow copies or clears event logs; adds a user or an administrator; edits `sudoers` or `authorized_keys` |
+| `W932` | 30 | a Description that loads remote content or reaches outside the page: `<script src>` / `<iframe src>` to a URL, `ActiveXObject`, `WScript.Shell`, `XMLHttpRequest`, `fetch(`, `document.cookie` |
 | `W900` | | a MEDIUM score (25-49) |
 | `W908` | | not parseable XML; skipped |
 | `E900` | | the score is at or over `--fail-score` |
@@ -704,6 +707,11 @@ UTF-16LE (PowerShell `-EncodedCommand`), compressed data decompressed, up to
 3 layers and 4 MB per file. `--weight CODE=N` changes a signal's points,
 `--disable CODES` skips signals, and `--fail-score N` moves the threshold.
 The default weights are a starting point, to be tuned against real content.
+
+The signals favor recall over precision: it is better to flag something a
+reviewer then accepts than to miss something malicious. Content written by
+`createfile` is scanned like any other script content, so a configuration
+file that only lists tool names (a Sysmon config, say) can still score.
 
 ### bes-siterepo-validate-layout
 

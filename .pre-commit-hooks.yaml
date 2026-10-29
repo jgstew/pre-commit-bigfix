@@ -379,13 +379,23 @@
     check does not excuse it), nohash prefetch items (W911), plain-http or
     raw-IP URLs (W912), download commands in script content (W913); base64
     of a real image of its data:image/ type (W920, low), other base64 (W921),
-    image-labelled base64 that is not that image (W926); decode-and-run
-    commands (W923) and other obfuscation (W924: \x, \u, %XX and hex runs,
+    image-labelled base64 that is not that image (W926); decode or
+    dynamic-run commands (W923: certutil -decode, base64 -d,
+    -EncodedCommand, Invoke-Expression/iex, PsExec, curl | sh) and other
+    obfuscation (W924: \x, \u, %XX and hex runs,
     eval/unescape/atob/Function/fromCharCode). Every encoded blob is decoded
     and inspected -- UTF-16LE for PowerShell -EncodedCommand, gzip/zlib/zip
     decompressed (W925) -- an executable or script payload is W922, and
     findings inside a payload score as W927 with the decode path, up to 3
-    layers deep. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
+    layers deep. Also hardcoded secrets (W930: a literal password=/token=/
+    api_key value, a private key, an AWS key; the value is not printed),
+    commands that weaken security (W931: disable UAC, Defender, a firewall,
+    SELinux, Gatekeeper or SIP, delete shadow copies, clear logs, add a user
+    or admin, edit sudoers or authorized_keys), and a Description that loads
+    remote content or reaches outside the page (W932: <script src> or
+    <iframe src> to a URL, ActiveXObject, WScript.Shell, XMLHttpRequest,
+    fetch, document.cookie). Signals favor recall over precision: a finding
+    a reviewer accepts is cheap, a missed one is not. Bands LOW < 25 <= MEDIUM (W900) < 50 <= HIGH. E900 fails a
     file at or over --fail-score (default 50); --weight CODE=N and --disable
     tune it. W908 an unparsable file is skipped.
   entry: bes-content-score-risk

