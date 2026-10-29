@@ -467,7 +467,8 @@ RULES = (
         "W963",
         [FILE],
         "a bidi or zero-width character, which can hide code",
-        "[----]",
+        # escapes, not the characters: the source must stay ASCII
+        r"[\u202a-\u202e\u2066-\u2069\u200b-\u200f\u2060-\u2064\ufeff]",
         0,
     ),
     _rule(
