@@ -755,7 +755,9 @@ def test_x_escaped_binary_shellcode_is_flagged():
 
 
 def test_utf8_text_in_percent_encoding_is_not_flagged():
-    japanese = "".join(f"%{b:02X}" for b in "RiBenYufuairu".encode())
+    # UTF-8 for a Japanese file name, as bytes so no hook rewrites it as text
+    utf8 = b"\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x83\x95\xe3\x82\xa1\xe3\x82\xa4"
+    japanese = "".join(f"%{b:02X}" for b in utf8)
     assert "W924" not in codes(
         bes(actionscript=f"// https://example.com/{japanese}.zip")
     )

@@ -289,7 +289,10 @@ SCRIPT, RELEVANCE, DESC, FILE = "script", "relevance", "desc", "file"
 # the same hardening bes_siterepo_validate_layout uses for untrusted XML
 XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 # the five predefined entities and numeric character references
-CHARACTER_REFERENCE_RE = re.compile(r"&(#[xX][0-9A-Fa-f]+|#\d+|quot|amp|lt|gt|apos);")
+# groups: hex digits, decimal digits, entity name
+CHARACTER_REFERENCE_RE = re.compile(
+    r"&(?:#[xX]([0-9A-Fa-f]+)|#(\d+)|(quot|amp|lt|gt|apos));"
+)
 NAMED_REFERENCES = {"quot": '"', "amp": "&", "lt": "<", "gt": ">", "apos": "'"}
 
 
@@ -1125,11 +1128,11 @@ def _decode_references(src):
     """
 
     def decode(match):
-        name = match[1]
-        if name in NAMED_REFERENCES:
+        hex_digits, decimal_digits, name = match.groups()
+        if name:
             return NAMED_REFERENCES[name]
         try:
-            char = chr(int(name, 0) if name[1] in "xX" else int(name[1:]))
+            char = chr(int(hex_digits, 16) if hex_digits else int(decimal_digits))
         except (ValueError, OverflowError):
             return match[0]
         return " " if char in "\r\n" else char
