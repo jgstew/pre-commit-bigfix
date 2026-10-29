@@ -861,3 +861,24 @@ def test_dtd_entity_is_not_expanded_but_its_text_is_scanned():
     )
     found = codes(doc)
     assert "W930" in found and "W929" in found
+
+
+# --- follow-up: comments, PIs and plist DOCTYPEs ------------------------------------
+
+
+@pytest.mark.parametrize("prefix", ["<!-- x -->", "<?x y?>"])
+def test_comment_or_pi_before_actionscript_does_not_hide_it(prefix):
+    body = "download now as a.exe https://x.example/a.exe"
+    doc = bes(actionscript=body).replace(f"<![CDATA[{body}]]>", prefix + body)
+    assert "W910" in codes(doc)
+
+
+def test_plist_doctype_in_createfile_is_not_a_dtd():
+    body = (
+        "createfile until EOF\n"
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        "<plist/>\nEOF"
+    )
+    assert "W929" not in codes(bes(actionscript=body))

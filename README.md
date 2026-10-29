@@ -696,6 +696,8 @@ with `E900`.
 | `W925` | 15 | a decoded payload is gzip, zlib or zip compressed |
 | `W926` | 30 | base64 labelled `data:image/` whose bytes are not that image |
 | `W927` | 10 + inner | a decoded payload holds findings of its own; names the decode path (`base64->gzip->text`) |
+| `W928` | 15 | decoding stopped: 4 MB were decoded, so later payloads were only checked for an executable header |
+| `W929` | 20 | a DTD in the prolog, once per file: its entities are not expanded, and the BigFix Console refuses the file (`bes-conventions-check` `E223`). A DOCTYPE an action writes out, such as a plist's, does not count |
 | `W930` | 25 | a hardcoded secret: `password=`, `token=`, `api_key:` and the like with a literal value (not a `{parameter}`, `$var` or `%VAR%`), a private key, an AWS access key ID. The value is never printed |
 | `W931` | 20 | a command that weakens security: disables UAC, Defender, a firewall, SELinux, Gatekeeper or SIP; deletes shadow copies or clears event logs; adds a user or an administrator; edits `sudoers` or `authorized_keys` |
 | `W932` | 30 | a Description that loads remote content or reaches outside the page: `<script src>` / `<iframe src>` to a URL, `ActiveXObject`, `WScript.Shell`, `XMLHttpRequest`, `fetch(`, `document.cookie` |

@@ -32,10 +32,11 @@ Signals (default points in brackets; --weight CODE=N changes one):
           plus 10 per layer, and names the decode path (base64->gzip->text)
     W928  [15] decoding stopped: MAX_DECODED bytes were spent, so later
           payloads were only checked for an executable header
-    W929  [20] a DTD or entity declaration, once per file: entities are not
+    W929  [20] a DTD in the prolog, once per file: its entities are not
           expanded, so what they hold is hidden from the parsed view (it is
-          still scanned as file text); the BigFix Console refuses a file with
-          a DTD (bes-conventions-check E223)
+          still scanned as file text), and the BigFix Console refuses the file
+          (bes-conventions-check E223); a DOCTYPE an action writes out, such
+          as a plist's, does not count
     W930  [25] a hardcoded secret: password= / token= / api_key: with a literal
           value (not a {parameter}, $var or %VAR%), a private key, an AWS key
     W931  [20] a command that weakens security: disables UAC, Defender, a
@@ -337,7 +338,6 @@ RULES = (
     _rule(
         "W944", [FILE], "an action targeting all computers", r"<AllComputers>\s*true"
     ),
-    _rule("W929", [FILE], "a DTD or entity declaration", r"<!DOCTYPE|<!ENTITY"),
     _rule(
         "W945",
         [SCRIPT],
@@ -789,8 +789,6 @@ class _Scanner:
                 found.append(
                     self.finding(line_of(match.start()), code, f"{label}: {shown!r}")
                 )
-                if code == "W929":
-                    break  # one DTD, however many entities it declares
         return found
 
     def _rules(self, rules, line, text):
@@ -1124,7 +1122,9 @@ def _text_of(element):
     """
     parts = [element.text or ""]
     for child in element:
-        if child.tag is not etree.Entity:
+        # an entity, comment or PI is not part of what BigFix runs; its
+        # content is still scanned as file text
+        if child.tag not in (etree.Entity, etree.Comment, etree.ProcessingInstruction):
             parts.append(_text_of(child))
         parts.append(child.tail or "")
     return "".join(parts)
@@ -1227,6 +1227,16 @@ def score_text(src, weights=None, disabled=()):
     ):
         found.extend(scanner.relevance(element))
     found.extend(_read_only_titles(scanner, root))
+    dtd = bes_common.PROLOG_DOCTYPE_RE.match(src)
+    if dtd:  # once per file, however many entities it declares
+        found.append(
+            scanner.finding(
+                bes_common.lineno(src, dtd.start(1)),
+                "W929",
+                "a DTD in the prolog: its entities are not expanded, and the "
+                "BigFix Console refuses the file (bes-conventions-check E223)",
+            )
+        )
 
     # the whole-file scans read the text with character references decoded,
     # so `&#x202E;` or `&quot;` cannot hide what they spell

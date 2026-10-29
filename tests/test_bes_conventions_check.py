@@ -1550,6 +1550,42 @@ def test_e223_doctype_text_in_a_description_clean(tmp_path):
     assert "E223" not in codes(tmp_path, content)
 
 
+PLIST_BODY = (
+    "\ncreatefile until EOF\n"
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0"><dict/></plist>\n'
+    "EOF\n"
+)
+
+
+def test_e223_plist_doctype_in_an_action_clean(tmp_path):
+    # a plist written by createfile has its own <?xml?> and DOCTYPE; the file's
+    # XML declaration must not be stretched to reach them
+    assert "E223" not in codes(tmp_path, task(body=PLIST_BODY))
+
+
+def test_e223_plist_doctype_after_an_export_comment_clean(tmp_path):
+    content = task(body=PLIST_BODY).replace(
+        "\n<BES", "\n<!--\n  BigFix Fixlet Export\n-->\n<BES", 1
+    )
+    assert "E223" not in codes(tmp_path, content)
+
+
+def test_e223_many_comments_without_a_dtd_is_fast():
+    import time
+
+    src = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n<BES>'
+        + "<!-- a -- b --> <?x ?> " * 400
+        + "</BES>"
+    )
+    start = time.perf_counter()
+    assert checker.check_doctype(src) == []
+    assert time.perf_counter() - start < 0.5
+
+
 def test_e223_can_be_disabled(tmp_path):
     assert "E223" not in codes(tmp_path, _with_dtd(task()), disabled={"E223"})
 

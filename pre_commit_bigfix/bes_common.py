@@ -28,6 +28,16 @@ MUSTACHE_RE = re.compile(
     r"\s*[#/^!&>]?\s*[\w.-]+\s*\}\}"
 )
 
+# a DTD, which can only come in the prolog: before it there may be only a BOM,
+# whitespace, the XML declaration, comments and processing instructions. Each
+# comment or PI stops at its own first `-->` / `?>` and whitespace is one
+# character at a time, so the pattern cannot stretch past the prolog (to a
+# plist's `<?xml ...?><!DOCTYPE plist>` inside an action) or backtrack across
+# a file full of comments.
+PROLOG_DOCTYPE_RE = re.compile(
+    "^\ufeff?(?:\\s|<\\?(?:[^?]|\\?(?!>))*\\?>|<!--(?:[^-]|-(?!->))*-->)*(<!DOCTYPE)\\b"
+)
+
 # directories never searched by discover_bes_files (hidden ones are skipped too)
 DISCOVERY_SKIP_DIRS = frozenset({"__pycache__", "node_modules"})
 

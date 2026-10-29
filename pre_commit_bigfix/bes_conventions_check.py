@@ -533,12 +533,10 @@ FILENAME_ILLEGAL_RE = re.compile(r'[\\/:*?"<>|]')
 XML_DECL_RE = re.compile("^\\ufeff?\\s*<\\?xml\\b([^>]*)\\?>")
 XML_DECL_ENCODING_RE = re.compile(r'encoding\s*=\s*"([^"]*)"', re.IGNORECASE)
 XML_DECL_VERSION_RE = re.compile(r'version\s*=\s*"([^"]*)"', re.IGNORECASE)
-# a DTD, which can only come in the prolog: before it there may be only the XML
-# declaration, comments, processing instructions and whitespace -- so a
-# `<!DOCTYPE html>` inside a CDATA Description does not match
-DOCTYPE_RE = re.compile(
-    "^\\ufeff?(?:\\s|<\\?.*?\\?>|<!--.*?-->)*(<!DOCTYPE)\\b", re.DOTALL
-)
+# a DTD in the prolog only (see bes_common.PROLOG_DOCTYPE_RE), so neither a
+# `<!DOCTYPE html>` in a CDATA Description nor a plist's DOCTYPE in an action
+# matches
+DOCTYPE_RE = bes_common.PROLOG_DOCTYPE_RE
 # trailing spaces/tabs at the end of any line (LF-normalized text)
 TRAILING_WS_RE = re.compile(r"[ \t]+$", re.MULTILINE)
 
