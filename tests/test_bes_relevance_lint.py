@@ -169,19 +169,14 @@ def test_disable_silences_a_code(tmp_path, capsys):
     assert status == 0
 
 
-def test_enable_undoes_a_declared_disable(tmp_path, capsys):
-    """The hook declaration ships `--disable W601`; a repo that wants the rule
-    appends `--enable W601` rather than having to restate the whole list.
+def test_enable_undoes_a_default_disable(tmp_path, capsys):
+    """W601 is off in the hook's code (DEFAULT_DISABLED), not in the manifest's
+    `args`, so `--enable W601` alone switches it back on.
     """
-    _, out = run(
-        tmp_path,
-        'exists (name of files "x") whose (it = "y")',
-        "--disable",
-        "W601",
-        "--enable",
-        "W601",
-        capsys=capsys,
-    )
+    relevance = 'exists (name of files "x") whose (it = "y")'
+    _, out = run(tmp_path, relevance, capsys=capsys)
+    assert "W601" not in codes_in(out)
+    _, out = run(tmp_path, relevance, "--enable", "W601", capsys=capsys)
     assert codes_in(out) == ["W601"]
 
 
@@ -463,3 +458,178 @@ def test_a_suggested_fix_is_printed_once_per_statement(tmp_path, capsys):
 def test_an_unfixable_finding_prints_no_suggestion(tmp_path, capsys):
     _, out = run(tmp_path, "exists bogusinspectorname", capsys=capsys)
     assert not any("suggested fix:" in line for line in out)
+
+
+# --- --auto-fix (bigfix-relevance-analyzer#115 Part B) -----------------------
+
+SETTING = 'exists values of setting "x" of client'
+SETTINGS = 'exists values of settings "x" of client'
+
+# Two fences, each its own site: a respelling that adds nothing (line 4), and
+# a `unique value of` wrap that raises the score from 12 to 20 (line 8). With
+# --max-score 15 between the two, the wrap is refused and the respelling is
+# still written: a file can come back partly fixed.
+TWO_FENCES = (
+    "# x\n\n```relevance\n"
+    'exists values of setting "x" of client\n'
+    "```\n\n```relevance\n"
+    'pathnames of files "x" | "y"\n'
+    "```\n"
+)
+
+FOOTER = "auto-fixed {} issue(s); review and re-stage the changes."
+
+
+def test_the_default_never_writes_and_prints_what_it_always_did(tmp_path, capsys):
+    """Opt-in: without the flag, the file is untouched and the output is
+    exactly the suggestion-only report, `suggested fix:` included.
+    """
+    path = write(tmp_path, bes(SETTING))
+    before = (tmp_path / "x.bes").read_bytes()
+    status = linter.main([path])
+    out = capsys.readouterr().out.splitlines()
+    assert (tmp_path / "x.bes").read_bytes() == before
+    assert status == 0
+    # the analyzer owns the message's wording; everything around it is pinned
+    assert out[0].startswith(f"{path}:5: [W602] warning: ")
+    assert out[0].endswith(" (plural-preferred)")
+    assert out[1:] == [f"    suggested fix: {SETTINGS}", "1 warning(s)."]
+
+
+def test_auto_fix_no_is_the_default_spelled_out(tmp_path, capsys):
+    path = write(tmp_path, bes(SETTING))
+    before = (tmp_path / "x.bes").read_bytes()
+    assert linter.main(["--auto-fix=no", path]) == 0
+    assert (tmp_path / "x.bes").read_bytes() == before
+    assert "auto-fixed" not in capsys.readouterr().out
+
+
+def test_auto_fix_yes_writes_the_fix_and_fails_for_review(tmp_path, capsys):
+    path = write(tmp_path, bes(SETTING))
+    status = linter.main(["--auto-fix=yes", path])
+    out = capsys.readouterr().out.splitlines()
+    assert (tmp_path / "x.bes").read_text(encoding="utf-8") == bes(SETTINGS)
+    assert status == 1
+    assert out == [
+        f"{path}:5: [W602] auto-fixed: setting -> settings (plural-preferred)",
+        "",
+        FOOTER.format(1),
+    ]
+
+
+def test_auto_fix_prints_one_line_per_edit_coded_by_its_rule(tmp_path, capsys):
+    """A wrap is an E611 edit: the code comes from the edit's own rule, and the
+    findings left after the fix are reported as usual.
+    """
+    path = write(tmp_path, bes('exists ("a" &amp; names of files "x")'))
+    status = linter.main(["--auto-fix=yes", path])
+    out = capsys.readouterr().out.splitlines()
+    assert status == 1
+    assert out[0] == (
+        f'{path}:5: [E611] auto-fixed: names of files "x" -> '
+        'unique value of names of files "x" (singular-required)'
+    )
+    assert "unique value of names of files" in (tmp_path / "x.bes").read_text(
+        encoding="utf-8"
+    )
+    assert "E611" not in codes_in(out[1:])
+
+
+def test_a_partly_fixed_file_keeps_the_refused_suggestion(tmp_path, capsys):
+    """Refusals can be per site: the respelling is written, and the wrap that
+    would add a complexity finding stays a suggestion with its reason.
+    """
+    path = write(tmp_path, TWO_FENCES, name="x.md")
+    status = linter.main(["--auto-fix=yes", "--max-score", "15", path])
+    out = capsys.readouterr().out.splitlines()
+    assert (tmp_path / "x.md").read_text(encoding="utf-8") == TWO_FENCES.replace(
+        "setting ", "settings "
+    )
+    assert status == 1
+    assert (
+        out[0] == f"{path}:4: [W602] auto-fixed: setting -> settings (plural-preferred)"
+    )
+    assert (
+        '    suggested fix: unique value of pathnames of files "x" | "y" '
+        "(not auto-fixed: the fix would add a complexity finding)"
+    ) in out
+    assert out[-1] == FOOTER.format(1)
+
+
+def test_auto_fix_when_discovering_defaults_to_no(tmp_path, monkeypatch, capsys):
+    write(tmp_path, bes(SETTING))
+    before = (tmp_path / "x.bes").read_bytes()
+    monkeypatch.chdir(tmp_path)
+    assert linter.main([]) == 0
+    assert (tmp_path / "x.bes").read_bytes() == before
+    assert "suggested fix:" in capsys.readouterr().out
+
+
+def test_auto_fix_yes_fixes_the_walked_files(tmp_path, monkeypatch, capsys):
+    write(tmp_path, bes(SETTING))
+    write(tmp_path, bes("it"), name="broken.bes")  # findings, nothing to fix
+    monkeypatch.chdir(tmp_path)
+    status = linter.main(["--auto-fix=yes"])
+    out = capsys.readouterr().out
+    assert (tmp_path / "x.bes").read_text(encoding="utf-8") == bes(SETTINGS)
+    assert "x.bes:5: [W602] auto-fixed: setting -> settings" in out
+    assert "broken.bes:5: [E602]" in out
+    assert status == 1
+
+
+def test_auto_fix_does_not_switch_w601_back_on(tmp_path, capsys):
+    """W601 is off in code, not in the manifest's `args`, so a repo writing
+    `args: [--auto-fix=yes]` (which replaces the manifest's) does not get it.
+    """
+    _, out = run(
+        tmp_path,
+        'exists (name of files "x") whose (it = "y")',
+        "--auto-fix=yes",
+        capsys=capsys,
+    )
+    assert "W601" not in codes_in(out)
+
+
+def test_disabling_a_rule_disables_its_fix(tmp_path, capsys):
+    path = write(tmp_path, bes(SETTING))
+    before = (tmp_path / "x.bes").read_bytes()
+    status = linter.main(["--auto-fix=yes", "--disable", "W602", path])
+    out = capsys.readouterr().out
+    assert (tmp_path / "x.bes").read_bytes() == before
+    assert "auto-fixed" not in out
+    assert status == 0
+
+
+def test_an_opted_out_file_is_never_written(tmp_path, capsys):
+    path = write(tmp_path, bes(SETTING, marker=linter.SKIP_MARKER))
+    before = (tmp_path / "x.bes").read_bytes()
+    assert linter.main(["--auto-fix=yes", path]) == 0
+    assert (tmp_path / "x.bes").read_bytes() == before
+    assert capsys.readouterr().out == ""
+
+
+def test_a_rel_fix_is_written_with_no_schema_to_check(tmp_path, capsys):
+    """No schema applies to a .rel, so schema_regression is [] and it is written,
+    like every sibling hook's non-BES writes.
+    """
+    path = write(tmp_path, SETTING + "\n", name="x.rel")
+    status = linter.main(["--auto-fix=yes", path])
+    out = capsys.readouterr().out
+    assert (tmp_path / "x.rel").read_text(encoding="utf-8") == SETTINGS + "\n"
+    assert "[E615]" not in out
+    assert status == 1
+
+
+def test_every_fixable_rule_is_mapped():
+    """Each auto-fixed line is coded from CODES[edit.rule], so a rule the fixer
+    can emit and this hook does not map would raise mid-report.
+
+    TextEdit.rule
+    is the analyzer's checker-code-to-rule table, with anything unlisted
+    reported as type-error.
+    """
+    from bigfix_relevance_analyzer.autofix import TextEdit
+    from bigfix_relevance_analyzer.lint import _CHECK_RULES
+
+    for code in [*_CHECK_RULES, "an-unlisted-code"]:
+        assert TextEdit(0, 0, "", code).rule in linter.CODES

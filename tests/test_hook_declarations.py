@@ -136,3 +136,13 @@ def test_bes_siterepo_validate_layout_checks_the_whole_repo():
     assert console_scripts()["bes-siterepo-validate-layout"] == (
         "pre_commit_bigfix.bes_siterepo_validate_layout:main"
     )
+
+
+def test_bes_relevance_lint_declares_no_args():
+    """A repo's `args:` replaces the manifest's rather than appending, so any
+    default here would be silently dropped by `args: [--auto-fix=yes]`.
+
+    W601
+    is off in the hook's code instead (bigfix-relevance-analyzer#115).
+    """
+    assert "args" not in load_hooks()["bes-relevance-lint"]
