@@ -631,8 +631,67 @@ def test_every_fixable_rule_is_mapped():
     is the analyzer's checker-code-to-rule table, with anything unlisted
     reported as type-error.
     """
+    from bigfix_relevance_analyzer import lint
     from bigfix_relevance_analyzer.autofix import TextEdit
-    from bigfix_relevance_analyzer.lint import _CHECK_RULES
 
-    for code in [*_CHECK_RULES, "an-unlisted-code"]:
+    # private, so read defensively: an analyzer refactor that renames it must
+    # not fail this hook's build, only narrow this check to the fallback
+    check_rules = getattr(lint, "_CHECK_RULES", {})
+    for code in [*check_rules, "an-unlisted-code"]:
         assert TextEdit(0, 0, "", code).rule in linter.CODES
+
+
+# --- review of #57 -----------------------------------------------------------
+
+
+def test_an_opted_out_file_inside_a_named_folder_is_never_written(tmp_path, capsys):
+    """A named folder is walked by the analyzer, so the marker must be checked
+    per file found, not only per path given.
+    """
+    folder = tmp_path / "d"
+    folder.mkdir()
+    write(folder, bes(SETTING, marker=linter.SKIP_MARKER), name="skip.bes")
+    write(folder, bes(SETTING), name="fix.bes")
+    before = (folder / "skip.bes").read_bytes()
+    linter.main(["--auto-fix=yes", str(folder)])
+    out = capsys.readouterr().out
+    assert (folder / "skip.bes").read_bytes() == before
+    assert "skip.bes" not in out
+    assert (folder / "fix.bes").read_text(encoding="utf-8") == bes(SETTINGS)
+
+
+def test_an_auto_fixed_line_is_the_line_the_edit_is_on(tmp_path, capsys):
+    """A statement can span lines; the auto-fixed line is the edit's own line,
+    the same one its finding is reported at, not the statement's first.
+    """
+    text = '# x\n\n```relevance\nexists values of\nsetting "x" of client\n```\n'
+    path = write(tmp_path, text, name="m.md")
+    linter.main([path])
+    finding = capsys.readouterr().out.splitlines()[0]
+    assert finding.startswith(f"{path}:5: [W602] ")
+    linter.main(["--auto-fix=yes", path])
+    out = capsys.readouterr().out.splitlines()
+    assert (
+        out[0] == f"{path}:5: [W602] auto-fixed: setting -> settings (plural-preferred)"
+    )
+
+
+def test_auto_fix_yes_over_several_named_files(tmp_path, capsys):
+    """Each file is planned on its own; one with nothing to fix is reported as
+    lint reports it, between the fixed ones.
+    """
+    first = write(tmp_path, bes(SETTING), name="a.bes")
+    broken = write(tmp_path, bes("it"), name="b.bes")
+    last = write(tmp_path, SETTING + "\n", name="c.rel")
+    status = linter.main(["--auto-fix=yes", first, broken, last])
+    out = capsys.readouterr().out.splitlines()
+    assert status == 1
+    assert (
+        out[0]
+        == f"{first}:5: [W602] auto-fixed: setting -> settings (plural-preferred)"
+    )
+    assert out[1].startswith(f"{broken}:5: [E602] ")
+    assert (
+        out[2] == f"{last}:1: [W602] auto-fixed: setting -> settings (plural-preferred)"
+    )
+    assert FOOTER.format(2) in out

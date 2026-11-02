@@ -6,7 +6,7 @@
 
 - `bes-relevance-lint --auto-fix=yes` writes the analyzer's safe fixes (`W602`
   respellings, `E611` `unique value of` wraps) into the files in place, each as
-  the smallest insertion that makes it. **It is opt-in: the default is
+  the smallest edit that makes it. **It is opt-in: the default is
   `--auto-fix=no` in every mode, so nothing changes until a repo writes**
   `args: [--auto-fix=yes]`. Each written edit is reported as
   `path:line: [W602] auto-fixed: setting -> settings (plural-preferred)`, and
@@ -28,6 +28,14 @@
   this hook's `args`** (with `[--strict]`, say), you were getting `W601` because
   your `args` replaced the `--disable W601`; now you no longer get it. Add
   `--enable W601` to your `args` to keep it.
+  The same goes for running `bes-relevance-lint` directly, outside
+  pre-commit, which never read the manifest's `args`.
+
+### Fixed
+
+- `bes-relevance-lint` now honors `pre-commit-skip: bes-relevance-lint` in a
+  file found inside a folder named on the command line; such a file used to
+  be reported anyway. (pre-commit always names files, so it was unaffected.)
 
 ## v2.2.0
 

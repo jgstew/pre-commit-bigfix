@@ -96,7 +96,7 @@ the relevance was meant to say.
 files given or auto-discovering -- unlike the sibling hooks, because a
 relevance fix changes what a statement says, not just how it is formatted, so
 a repo opts in with `args: [--auto-fix=yes]`. The analyzer plans each file
-(plan_fix): every fix is written as the smallest insertion that makes it, and
+(plan_fix): every fix is written as the smallest edit that makes it, and
 one it cannot prove safe -- one that would add a finding, or one under a rule
 --disable turned off -- is refused, site by site, so a file can come back
 partly fixed. The plan is written (write_fix) unless it would turn a
@@ -123,6 +123,7 @@ Exit status:
 
 import argparse
 import itertools
+import re
 import sys
 
 from pre_commit_bigfix import bes_common
@@ -273,6 +274,23 @@ def _opted_out(path):
         return False
 
 
+def _drop_opted_out(findings):
+    """`findings` without those from files carrying the skip marker.
+
+    For files the analyzer found itself -- auto-discovering, or walking a
+    folder named on the command line -- so the marker holds for them too.
+    Each file is read once, however many findings it has.
+    """
+    opted_out = {}
+    kept = []
+    for finding in findings:
+        if finding.path not in opted_out:
+            opted_out[finding.path] = _opted_out(finding.path)
+        if not opted_out[finding.path]:
+            kept.append(finding)
+    return kept
+
+
 def _fix_key(path, line, original):
     """What ties a statement's findings to its fix: (path, site line, text)."""
     return (str(path), line, original)
@@ -309,6 +327,9 @@ def _report(findings, not_fixed=None):
         else:
             errors += 1
     return errors, warnings
+
+
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
 
 
 def _auto_fix(path, findings, config, guard):
@@ -371,9 +392,11 @@ def _auto_fix(path, findings, config, guard):
         )
     # One line per edit, not per statement: a statement can hold several
     # fixes, each under its own rule (a respelling and a `unique value of`).
+    # Each is reported on its own line, as its finding was: a site's `line` is
+    # where the statement starts, and its text keeps its line breaks.
     fixed = [
         (
-            fix.line,
+            fix.line + len(_LINE_BREAK.findall(fix.autofix.original, 0, edit.start)),
             CODES[edit.rule],
             (
                 f"{fix.autofix.original[edit.start : edit.end]} -> {edit.replacement} "
@@ -503,19 +526,18 @@ def main(argv=None):
 
     config = LintConfig(**config_kwargs)
 
+    # Filter after the walk rather than before it: the analyzer owns
+    # discovery, and re-walking here to drop opted-out files first would mean
+    # two definitions of what counts as a file to check. A named file is still
+    # dropped before it is linted, which is all pre-commit ever passes.
     if args.files:
-        findings = lint_paths(
-            [path for path in args.files if not _opted_out(path)], config
+        findings = _drop_opted_out(
+            lint_paths([path for path in args.files if not _opted_out(path)], config)
         )
     else:
-        # Filter after the walk rather than before it: the analyzer owns
-        # discovery, and re-walking here to drop opted-out files first would
-        # mean two definitions of what counts as a file to check.
-        findings = [
-            finding
-            for finding in lint_directory(".", config, max_depth=args.max_depth)
-            if not _opted_out(finding.path)
-        ]
+        findings = _drop_opted_out(
+            lint_directory(".", config, max_depth=args.max_depth)
+        )
 
     if args.auto_fix != "yes":
         error_count, warning_count = _report(findings)
@@ -523,7 +545,10 @@ def main(argv=None):
     else:
         error_count = warning_count = fix_count = 0
         guard = GUARD_CODE not in disabled
-        # a file's findings are contiguous, in path order, in both modes
+        # The analyzer reports each file's findings together, in path order.
+        # A path named twice comes back as two runs, or one when adjacent:
+        # either way it is planned again from what is on disk, so a fix is
+        # written once.
         for path, linted in itertools.groupby(findings, key=lambda f: f.path):
             reported, fixed, refused, not_fixed = _auto_fix(
                 path, list(linted), config, guard

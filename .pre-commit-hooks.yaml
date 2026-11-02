@@ -337,7 +337,7 @@
     (W602 respellings, E611 `unique value of`) are printed as `suggested fix:`
     and, by default, never written: unlike the sibling hooks, a repo opts in
     with `args: [--auto-fix=yes]`, since a relevance fix changes what a
-    statement says. Then each fix is written as a minimal insertion, one line
+    statement says. Then each fix is written as a minimal edit, one line
     `[CODE] auto-fixed: old -> new (rule)` per edit, and the hook fails so the
     change is reviewed and re-staged; a fix the analyzer cannot prove safe
     stays a suggestion with `(not auto-fixed: <reason>)`.

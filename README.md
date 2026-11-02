@@ -631,7 +631,7 @@ relevance fix changes what a statement says, not just how it is formatted:
 ```
 
 With `--auto-fix=yes`, each safe fix is written in place as the smallest
-insertion that makes it (`setting` gains an `s`; a wrap inserts
+edit that makes it (`setting` gains an `s`; a wrap inserts
 `unique value of `), so entities, CDATA and line endings around it are kept.
 The analyzer refuses a fix it cannot prove safe - one that would add a finding
 (a wrap that pushes a statement over `--max-score`, say), or one under a rule
