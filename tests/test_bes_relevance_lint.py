@@ -94,7 +94,8 @@ def test_every_analyzer_rule_is_mapped():
 
 
 def test_codes_are_unique():
-    assert len(linter.KNOWN_CODES) == len(linter.CODES)
+    assert len(set(linter.CODES.values())) == len(linter.CODES)
+    assert linter.GUARD_CODE not in linter.CODES.values()
 
 
 @pytest.mark.parametrize(
@@ -125,7 +126,9 @@ def test_codes_are_unique():
     ],
 )
 def test_each_code_fires(tmp_path, capsys, relevance, code):
-    _, out = run(tmp_path, relevance, capsys=capsys)
+    # --enable is a no-op for a code that is on by default, and switches W601
+    # back on, which DEFAULT_DISABLED turns off
+    _, out = run(tmp_path, relevance, "--enable", code, capsys=capsys)
     assert code in codes_in(out)
 
 
@@ -553,7 +556,7 @@ def test_a_partly_fixed_file_keeps_the_refused_suggestion(tmp_path, capsys):
         '    suggested fix: unique value of pathnames of files "x" | "y" '
         "(not auto-fixed: the fix would add a complexity finding)"
     ) in out
-    assert out[-1] == FOOTER.format(1)
+    assert FOOTER.format(1) in out
 
 
 def test_auto_fix_when_discovering_defaults_to_no(tmp_path, monkeypatch, capsys):

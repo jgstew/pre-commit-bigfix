@@ -109,7 +109,8 @@ HOOKS = (
         "bes-relevance-lint",
         "bes_relevance_lint",
         r"\.(bes|bes\.xml|ojo|besrpt|beswrpt|webreport|bsr|rel)$",
-        args=("--disable", "W601"),
+        # --auto-fix is already off by default; say so anyway
+        read_only=("--auto-fix=no",),
     ),
     Hook(
         "bes-relevance-convert-group",
