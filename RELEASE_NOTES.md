@@ -1,5 +1,42 @@
 # Release Notes
 
+## v2.3.0
+
+### Added
+
+- `bes-relevance-lint --auto-fix=yes` writes the analyzer's safe fixes (`W602`
+  respellings, `E611` `unique value of` wraps) into the files in place, each as
+  the smallest edit that makes it. **It is opt-in: the default is
+  `--auto-fix=no` in every mode, so nothing changes until a repo writes**
+  `args: [--auto-fix=yes]`. Each written edit is reported as
+  `path:line: [W602] auto-fixed: setting -> settings (plural-preferred)`, and
+  an auto-fixed file fails the hook so it is reviewed and re-staged. A fix the
+  analyzer cannot prove safe (one that would add a finding, or under a rule you
+  `--disable`) keeps its `suggested fix:` line with
+  `(not auto-fixed: <reason>)`; refusals are per statement, so a file can be
+  partly fixed. A fix that would turn a BES.xsd-valid file invalid is not
+  written and fails with the new `E615` (`--disable E615` writes it anyway).
+- `bes-relevance-lint` now needs `bigfix-relevance-analyzer >= 1.26.0`, where
+  its fix planner arrived (Python 3.11+ only, as before).
+
+### Changed
+
+- **`W601` is now off in `bes-relevance-lint`'s code, and its hook declares no
+  `args`.** In pre-commit a repo's `args:` *replaces* the hook's own, so
+  `args: [--auto-fix=yes]` would otherwise have silently switched `W601` back
+  on. `--enable W601` still switches it on. **If your config already overrides
+  this hook's `args`** (with `[--strict]`, say), you were getting `W601` because
+  your `args` replaced the `--disable W601`; now you no longer get it. Add
+  `--enable W601` to your `args` to keep it.
+  The same goes for running `bes-relevance-lint` directly, outside
+  pre-commit, which never read the manifest's `args`.
+
+### Fixed
+
+- `bes-relevance-lint` now honors `pre-commit-skip: bes-relevance-lint` in a
+  file found inside a folder named on the command line; such a file used to
+  be reported anyway. (pre-commit always names files, so it was unaffected.)
+
 ## v2.2.0
 
 ### Changed (`pre-commit-bigfix` command)

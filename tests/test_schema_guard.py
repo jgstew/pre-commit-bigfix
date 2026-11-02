@@ -20,6 +20,7 @@ from pre_commit_bigfix import bes_actionscript_validate_prefetch as prefetch
 from pre_commit_bigfix import bes_actionscript_validate_script as script
 from pre_commit_bigfix import bes_conventions_check as conventions
 from pre_commit_bigfix import bes_relevance_convert_group as convert_group
+from pre_commit_bigfix import bes_relevance_lint as relevance_lint
 
 pytest.importorskip("validate_bes_xml")
 
@@ -113,6 +114,7 @@ def test_disabling_the_guard_lets_the_fix_through(
         (prefetch, "E404"),
         (script, "E526"),
         (convert_group, "E704"),
+        (relevance_lint, "E615"),
     ],
 )
 def test_guard_code_is_known_and_documented(hook, guard):
@@ -190,3 +192,95 @@ def test_passes_after_one_that_makes_the_file_valid_are_checked():
     assert [code for _l, code, _m in guard.fixed] == ["W1"]
     assert [code for _l, code, _m in guard.refused] == ["E999"]
     assert "W2" in guard.refused[0][2]
+
+
+# --- bes-relevance-lint: the analyzer plans, the guard decides (#115 Part B) --
+#
+# The hook has no check_file and no text-to-text fixer for CASES to swap: it
+# calls the analyzer's plan_fix (a module global) and writes the plan with
+# write_fix. So these three mirror the CASES tests by swapping the planner for
+# one that bends the real plan's fixed bytes.
+
+SETTING = 'exists values of setting "x" of client'
+
+
+def copy_fixable_example(tmp_path):
+    """Example-test.bes (schema-valid) with one W602-fixable <Relevance>."""
+    path = tmp_path / "example-test.bes"
+    text = EXAMPLE.read_text(encoding="utf-8")
+    path.write_text(
+        text.replace(
+            "<Relevance>False</Relevance>", f"<Relevance>{SETTING}</Relevance>"
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def bent_planner(monkeypatch, transform):
+    """Swap relevance_lint.plan_fix for the real one with `transform` applied
+    to what it would write.
+    """
+    import dataclasses
+
+    real = relevance_lint.plan_fix
+
+    def planner(path, config):
+        plan = real(path, config)
+        fixed = transform(plan.fixed.decode("utf-8")).encode("utf-8")
+        return dataclasses.replace(plan, fixed=fixed)
+
+    monkeypatch.setattr(relevance_lint, "plan_fix", planner)
+
+
+@pytest.fixture
+def analyzer():
+    pytest.importorskip(
+        "bigfix_relevance_analyzer",
+        reason="bes-relevance-lint's analyzer needs Python 3.11+",
+    )
+
+
+def test_relevance_lint_breaking_fix_is_not_written(
+    analyzer, tmp_path, monkeypatch, capsys
+):
+    path = copy_fixable_example(tmp_path)
+    original = path.read_bytes()
+    bent_planner(monkeypatch, breaking)
+    status = relevance_lint.main(["--auto-fix=yes", str(path)])
+    out = capsys.readouterr().out
+    assert path.read_bytes() == original
+    assert status == 1
+    assert "auto-fixed" not in out.replace("not auto-fixed", "")
+    guard_lines = [line for line in out.splitlines() if "[E615]" in line]
+    assert len(guard_lines) == 1
+    assert "BES.xsd" in guard_lines[0]
+    assert "W602" in guard_lines[0]  # names the fix that was held back
+    # the original findings are reported, with the fix left as a suggestion
+    assert "[W602] warning:" in out
+    assert "(not auto-fixed: " in out
+
+
+def test_relevance_lint_schema_valid_fix_is_written(
+    analyzer, tmp_path, monkeypatch, capsys
+):
+    path = copy_fixable_example(tmp_path)
+    bent_planner(monkeypatch, harmless)
+    status = relevance_lint.main(["--auto-fix=yes", str(path)])
+    out = capsys.readouterr().out
+    written = path.read_bytes()
+    assert b"<!-- touched -->" in written
+    assert b"settings" in written
+    assert "[W602] auto-fixed: setting -> settings" in out
+    assert "[E615]" not in out
+    assert status == 1
+
+
+def test_relevance_lint_disabling_the_guard_lets_the_fix_through(
+    analyzer, tmp_path, monkeypatch, capsys
+):
+    path = copy_fixable_example(tmp_path)
+    bent_planner(monkeypatch, breaking)
+    relevance_lint.main(["--auto-fix=yes", "--disable", "E615", str(path)])
+    assert b"<Title>again</Title>" in path.read_bytes()
+    assert "[E615]" not in capsys.readouterr().out

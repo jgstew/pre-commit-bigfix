@@ -592,6 +592,7 @@ of the file.
 | `E612` | an ActionScript `{` with anything after it on its line and no `}` to close it there, which fails the action |
 | `E613` | a `<?Relevance` with no closing `?>`, so its relevance was not linted |
 | `E614` | a BES file that is not well-formed XML, so nothing in it was linted (**off by default**; `--enable E614`) |
+| `E615` | an `--auto-fix` was not written because it would turn a BES.xsd-valid file invalid; fix by hand, or `--disable E615` to write it anyway |
 | `W600` | a name no inspector dump defines |
 | `W601` | a property written singular over an object that may be plural |
 | `W602` | a singular spelling mid-chain (under a `whose` filter, or where a plural is built from it), where the plural reads safer |
@@ -603,7 +604,7 @@ of the file.
 
 `W600` is a warning rather than an error because a repo running a newer client
 than the analyzer's dump snapshot legitimately uses names it has never heard
-of. `W601` is **disabled by default** in the hook declaration: across 1,108
+of. `W601` is **disabled by default**: across 1,108
 `.bes` files of real content it fires 6,127 times, which drowns everything
 else. Switch it back on with `--enable W601`.
 
@@ -614,11 +615,34 @@ says the relevance that could be extracted is sound, not that the file parses.
 A file opts out of every check here with
 `<!-- pre-commit-skip: bes-relevance-lint -->` anywhere in it. There is no
 per-rule marker: `--disable` takes a code repo-wide, and a single file that
-legitimately needs relevance this complex is what `--max-score` is for. Files
-are never rewritten, but where the analyzer can work out a safe rewrite of a
-whole statement (today, the singular spellings behind `W602`) the fixed
-statement is printed once under its first finding as `suggested fix: ...`.
+legitimately needs relevance this complex is what `--max-score` is for.
 E-codes fail the hook; pass `--strict` to also fail on warnings.
+
+Where the analyzer can work out a safe rewrite of a statement (the singular
+spellings behind `W602`, and the `unique value of` / singular-aggregate
+rewrites behind `E611`), the fixed statement is printed once under its first
+finding as `suggested fix: ...`. By default that is all: **unlike the sibling
+hooks, this one never rewrites a file unless the repo opts in**, because a
+relevance fix changes what a statement says, not just how it is formatted:
+
+```yaml
+      - id: bes-relevance-lint
+        args: [--auto-fix=yes]
+```
+
+With `--auto-fix=yes`, each safe fix is written in place as the smallest
+edit that makes it (`setting` gains an `s`; a wrap inserts
+`unique value of `), so entities, CDATA and line endings around it are kept.
+The analyzer refuses a fix it cannot prove safe - one that would add a finding
+(a wrap that pushes a statement over `--max-score`, say), or one under a rule
+you `--disable` - and refuses site by site, so a file can come back partly
+fixed. Each written edit is reported as
+`path:line: [W602] auto-fixed: setting -> settings (plural-preferred)`; a fix
+that was not written keeps its `suggested fix:` line with
+`(not auto-fixed: <reason>)`. A fix that would turn a BES.xsd-valid file
+invalid is not written, and is reported as `E615`; files no schema applies to
+(`.rel`, `.bsr`, ...) are written unchecked, as every sibling hook does. Any
+auto-fix fails the hook so the change is reviewed and re-staged.
 
 This hook needs **Python 3.11 or newer** - the analyzer requires it, while the
 rest of this package still runs on 3.8. No specific interpreter is pinned, since

@@ -44,13 +44,15 @@ Checks:
     E614  a BES file that is not well-formed XML, so nothing in it was linted.
           Off by default -- bes-schema-validate owns file validity -- and
           switched back on with --enable E614
+    E615  an --auto-fix was not written, because it would turn a BES.xsd-valid
+          file invalid; fix by hand, or --disable E615 to write it anyway
     W600  a name no inspector dump defines. A warning rather than an error
           because a repo running a newer client than the analyzer's snapshot
           legitimately uses names it has never heard of
     W601  a property written singular over an object that may be plural.
-          Disabled by default in .pre-commit-hooks.yaml: it fires ~6 times per
-          file across real content, which drowns everything else. Enable it
-          deliberately with --enable W601
+          Disabled by default: it fires ~6 times per file across real content,
+          which drowns everything else. Enable it deliberately with
+          --enable W601
     W602  a singular spelling mid-chain -- under a `whose` filter, or where a
           plural is built from it -- where the plural reads safer
     W603  two version-looking strings compared as strings, not as versions
@@ -84,26 +86,47 @@ anywhere in it, the same marker the sibling hooks honor. There is no per-rule
 marker: --disable takes the code repo-wide, and a single file that legitimately
 needs relevance this complex is what --max-score is for.
 
-There is no auto-fix: files are never rewritten. Where the analyzer can work
-out a safe rewrite of a whole statement (today, the singular spellings behind
-W602 and the `unique value of` / singular-aggregate rewrites behind E611), the fixed statement is printed once under that statement's first
-finding as `suggested fix: ...`, for a human to copy in. Everything else needs
-a human to decide what the relevance was meant to say.
+Where the analyzer can work out a safe rewrite of a statement (the singular
+spellings behind W602, and the `unique value of` / singular-aggregate rewrites
+behind E611), the fixed statement is printed once under that statement's first
+finding as `suggested fix: ...`. Everything else needs a human to decide what
+the relevance was meant to say.
+
+--auto-fix=yes writes those fixes in place. It defaults to no in every mode,
+files given or auto-discovering -- unlike the sibling hooks, because a
+relevance fix changes what a statement says, not just how it is formatted, so
+a repo opts in with `args: [--auto-fix=yes]`. The analyzer plans each file
+(plan_fix): every fix is written as the smallest edit that makes it, and
+one it cannot prove safe -- one that would add a finding, or one under a rule
+--disable turned off -- is refused, site by site, so a file can come back
+partly fixed. The plan is written (write_fix) unless it would turn a
+BES.xsd-valid file invalid, which is reported as E615 with the original
+findings; a file no schema applies to (.rel, .bsr, ...) is written unchecked.
+Each written edit prints `path:line: [CODE] auto-fixed: old -> new (rule)`; a
+fix not written keeps its `suggested fix:` line, with `(not auto-fixed:
+<reason>)`. An auto-fixed file fails the hook so the change is reviewed and
+re-staged.
 
 Usage:
-    bes-relevance-lint [--strict] [--disable E604] [--enable W601] [FILES...]
+    bes-relevance-lint [--strict] [--auto-fix=yes|no] [--disable E604]
+                       [--enable W601] [FILES...]
 
 Exit status:
-    0  no E-code findings (and, without --strict, no warnings either), or the
-       interpreter is older than 3.11, where the analyzer cannot be installed
-       and the hook skips with a notice rather than failing a build that has
-       no way to go green
-    1  an E-code fired, a warning fired under --strict, or the analyzer is
-       missing on a 3.11+ interpreter, where it should have been installed
+    0  no E-code findings and nothing auto-fixed (and, without --strict, no
+       warnings either), or the interpreter is older than 3.11, where the
+       analyzer cannot be installed and the hook skips with a notice rather
+       than failing a build that has no way to go green
+    1  an E-code fired, a file was auto-fixed, a warning fired under
+       --strict, or the analyzer is missing on a 3.11+ interpreter, where it
+       should have been installed
 """
 
 import argparse
+import itertools
+import re
 import sys
+
+from pre_commit_bigfix import bes_common
 
 try:
     from bigfix_relevance_analyzer import (
@@ -111,11 +134,14 @@ try:
         Severity,
         lint_directory,
         lint_paths,
+        plan_fix,
+        write_fix,
     )
 
     IMPORT_ERROR = None
 except ImportError as exc:  # pragma: no cover - exercised only on an old Python
     LintConfig = lint_directory = lint_paths = Severity = None
+    plan_fix = write_fix = None
     IMPORT_ERROR = exc
 
 __all__ = ["main"]
@@ -155,7 +181,12 @@ CODES = {
     "unterminated-code-fence": "W607",
 }
 
-KNOWN_CODES = frozenset(CODES.values())
+# The hook's own code, not an analyzer rule: an --auto-fix the analyzer
+# planned that was not written because it would turn a BES.xsd-valid file
+# invalid -- the guard every rewriting sibling hook has under its own code.
+GUARD_CODE = "E615"
+
+KNOWN_CODES = frozenset(CODES.values()) | {GUARD_CODE}
 
 # The reverse direction, for --disable/--enable: a repo names an E-code, the
 # analyzer's LintConfig wants its own.
@@ -163,8 +194,12 @@ ANALYZER_CODES = {code: name for name, code in CODES.items()}
 
 # Off unless a repo names them in --enable. E614 is a BES file that is not
 # well-formed XML: bes-schema-validate already reports that, and this hook must
-# not duplicate its findings, so unparsable XML stays skipped here.
-DEFAULT_DISABLED = frozenset({"E614"})
+# not duplicate its findings, so unparsable XML stays skipped here. W601 fires
+# ~6 times per file across real content, which drowns everything else. It is
+# off here rather than as `args: [--disable, W601]` in .pre-commit-hooks.yaml
+# because a repo's `args:` replaces the manifest's: one writing
+# `args: [--auto-fix=yes]` would have silently switched it back on.
+DEFAULT_DISABLED = frozenset({"E614", "W601"})
 
 
 MIN_ANALYZER_PYTHON = (3, 11)
@@ -209,13 +244,14 @@ def _split_codes(raw):
 def _severities(disabled, enabled):
     """Per-code overrides for LintConfig, in the analyzer's own vocabulary."""
     severities = {}
-    for code in disabled:
+    # GUARD_CODE is the hook's own, with no analyzer rule behind it
+    for code in disabled & set(ANALYZER_CODES):
         severities[ANALYZER_CODES[code]] = Severity.IGNORE
-    for code in enabled:
+    for code in enabled & set(ANALYZER_CODES):
         # Restore the analyzer's own default rather than forcing a severity:
-        # --enable exists to undo a default --disable from the hook
-        # declaration, not to promote a warning into an error. --strict is
-        # what does that, for every warning at once.
+        # --enable exists to undo one of this hook's DEFAULT_DISABLED, not to
+        # promote a warning into an error. --strict is what does that, for
+        # every warning at once.
         severities.pop(ANALYZER_CODES[code], None)
     return severities
 
@@ -238,11 +274,36 @@ def _opted_out(path):
         return False
 
 
-def _report(findings):
+def _drop_opted_out(findings):
+    """`findings` without those from files carrying the skip marker.
+
+    For files the analyzer found itself -- auto-discovering, or walking a
+    folder named on the command line -- so the marker holds for them too.
+    Each file is read once, however many findings it has.
+    """
+    opted_out = {}
+    kept = []
+    for finding in findings:
+        if finding.path not in opted_out:
+            opted_out[finding.path] = _opted_out(finding.path)
+        if not opted_out[finding.path]:
+            kept.append(finding)
+    return kept
+
+
+def _fix_key(path, line, original):
+    """What ties a statement's findings to its fix: (path, site line, text)."""
+    return (str(path), line, original)
+
+
+def _report(findings, not_fixed=None):
     """Print each finding in this repo's format.
 
-    Returns (errors, warnings).
+    `not_fixed` maps a statement's _fix_key to why --auto-fix did not write
+    its fix, which is added to its `suggested fix:` line. Returns (errors,
+    warnings).
     """
+    not_fixed = not_fixed or {}
     errors = warnings = 0
     # Every fixable finding from one statement carries the same whole-statement
     # rewrite, so print it once per statement rather than once per finding.
@@ -255,15 +316,97 @@ def _report(findings):
         fix = getattr(finding, "autofix", None)
         if fix is not None:
             site_line = finding.site.line if finding.site is not None else None
-            key = (str(finding.path), site_line, fix.original)
+            key = _fix_key(finding.path, site_line, fix.original)
             if key not in suggested:
                 suggested.add(key)
-                print(f"    suggested fix: {fix.fixed}")
+                reason = not_fixed.get(key)
+                tail = f" (not auto-fixed: {reason})" if reason else ""
+                print(f"    suggested fix: {fix.fixed}{tail}")
         if finding.severity is Severity.WARNING:
             warnings += 1
         else:
             errors += 1
     return errors, warnings
+
+
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def _auto_fix(path, findings, config, guard):
+    """Write the analyzer's safe fixes into one file, unless BES.xsd forbids it.
+
+    `findings` are the file's lint findings; a file none of them offers a fix
+    for is not read again. Otherwise the analyzer plans every fix (plan_fix,
+    which writes nothing and refuses what is unsafe, site by site), and the
+    plan is written (write_fix) unless, with `guard`, it would turn a
+    schema-valid file invalid. Returns (findings, fixed, refused, not_fixed):
+    the findings to report, which are the fixed file's when it was written;
+    `fixed` and `refused` as (line, code, message) for bes_common.report; and
+    `not_fixed`, each unwritten fix's reason by _fix_key.
+    """
+    if not any(getattr(finding, "autofix", None) for finding in findings):
+        return findings, [], [], {}
+    plan = plan_fix(path, config)
+    applied, unapplied, findings = plan.applied, plan.unapplied, plan.findings
+    refused = []
+    not_fixed = {}
+    if plan.changed:
+        # [] for a file no schema applies to (.rel, .bsr, ...), and for one
+        # that was not schema-valid to begin with: both are written unchecked.
+        errors = (
+            bes_common.schema_regression(plan.original, plan.fixed, str(path))
+            if guard
+            else []
+        )
+        if errors:
+            codes = ", ".join(
+                sorted(
+                    {CODES[edit.rule] for fix in applied for edit in fix.autofix.edits}
+                )
+            )
+            refused.append(
+                (
+                    1,
+                    GUARD_CODE,
+                    (
+                        f"auto-fix ({codes}) not written: it would make the file fail "
+                        f"BES.xsd validation ({errors[0]}); fix by hand, or --disable "
+                        f"{GUARD_CODE} to write it anyway"
+                    ),
+                )
+            )
+            for fix in applied:
+                key = _fix_key(fix.path, fix.line, fix.autofix.original)
+                not_fixed[key] = f"it would fail BES.xsd validation ({GUARD_CODE})"
+            applied, findings = (), plan.original_findings
+        else:
+            result = write_fix(plan)
+            applied, unapplied, findings = (
+                result.applied,
+                result.unapplied,
+                result.findings,
+            )
+    for fix in unapplied:
+        not_fixed.setdefault(
+            _fix_key(fix.path, fix.line, fix.autofix.original), fix.reason
+        )
+    # One line per edit, not per statement: a statement can hold several
+    # fixes, each under its own rule (a respelling and a `unique value of`).
+    # Each is reported on its own line, as its finding was: a site's `line` is
+    # where the statement starts, and its text keeps its line breaks.
+    fixed = [
+        (
+            fix.line + len(_LINE_BREAK.findall(fix.autofix.original, 0, edit.start)),
+            CODES[edit.rule],
+            (
+                f"{fix.autofix.original[edit.start : edit.end]} -> {edit.replacement} "
+                f"({edit.rule})"
+            ),
+        )
+        for fix in applied
+        for edit in fix.autofix.edits
+    ]
+    return findings, fixed, refused, not_fixed
 
 
 def main(argv=None):
@@ -283,6 +426,15 @@ def main(argv=None):
         help="treat warnings as failures (non-zero exit); default: advisory",
     )
     parser.add_argument(
+        "--auto-fix",
+        choices=["yes", "no"],
+        default="no",
+        help=(
+            "write the analyzer's safe fixes into the files in place (default: "
+            "no, in every mode -- unlike the sibling hooks, a repo opts in)"
+        ),
+    )
+    parser.add_argument(
         "--disable",
         default="",
         metavar="CODES",
@@ -293,8 +445,8 @@ def main(argv=None):
         default="",
         metavar="CODES",
         help=(
-            "comma-separated check IDs to switch back on, undoing a --disable "
-            "this hook declares by default, e.g. --enable W601"
+            "comma-separated check IDs to switch back on, undoing one this "
+            "hook disables by default, e.g. --enable W601"
         ),
     )
     parser.add_argument(
@@ -374,28 +526,47 @@ def main(argv=None):
 
     config = LintConfig(**config_kwargs)
 
+    # Filter after the walk rather than before it: the analyzer owns
+    # discovery, and re-walking here to drop opted-out files first would mean
+    # two definitions of what counts as a file to check. A named file is still
+    # dropped before it is linted, which is all pre-commit ever passes.
     if args.files:
-        findings = lint_paths(
-            [path for path in args.files if not _opted_out(path)], config
+        findings = _drop_opted_out(
+            lint_paths([path for path in args.files if not _opted_out(path)], config)
         )
     else:
-        # Filter after the walk rather than before it: the analyzer owns
-        # discovery, and re-walking here to drop opted-out files first would
-        # mean two definitions of what counts as a file to check.
-        findings = [
-            finding
-            for finding in lint_directory(".", config, max_depth=args.max_depth)
-            if not _opted_out(finding.path)
-        ]
+        findings = _drop_opted_out(
+            lint_directory(".", config, max_depth=args.max_depth)
+        )
 
-    error_count, warning_count = _report(findings)
+    if args.auto_fix != "yes":
+        error_count, warning_count = _report(findings)
+        fix_count = 0
+    else:
+        error_count = warning_count = fix_count = 0
+        guard = GUARD_CODE not in disabled
+        # The analyzer reports each file's findings together, in path order.
+        # A path named twice comes back as two runs, or one when adjacent:
+        # either way it is planned again from what is on disk, so a fix is
+        # written once.
+        for path, linted in itertools.groupby(findings, key=lambda f: f.path):
+            reported, fixed, refused, not_fixed = _auto_fix(
+                path, list(linted), config, guard
+            )
+            issues, _warnings, fixes = bes_common.report([(path, refused, fixed)])
+            errors, warnings = _report(reported, not_fixed)
+            error_count += issues + errors
+            warning_count += warnings
+            fix_count += fixes
 
+    if fix_count:
+        print(f"\nauto-fixed {fix_count} issue(s); review and re-stage the changes.")
     if warning_count:
         print(f"{warning_count} warning(s).")
     if error_count:
         print(f"{error_count} issue(s).")
-    # E-codes always fail; warnings fail only under --strict
-    return 1 if (error_count or (warning_count and args.strict)) else 0
+    # E-codes and any fix always fail; warnings fail only under --strict
+    return 1 if (error_count or fix_count or (warning_count and args.strict)) else 0
 
 
 if __name__ == "__main__":
