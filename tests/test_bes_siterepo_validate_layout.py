@@ -2029,7 +2029,9 @@ def test_e809_disable_e801_leaves_duplicates_alone(tmp_path):
 
 def test_e809_name_taken_is_e806(tmp_path):
     repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/Name.bes": None})
-    (repo / "Fixlets/A/6 NAME.bes").write_text("untracked", encoding="utf-8")
+    # the same case: the disk check is only case-insensitive where the file
+    # system is (macOS, Windows), not on Linux
+    (repo / "Fixlets/A/6 Name.bes").write_text("untracked", encoding="utf-8")
     found = assign(repo)
     assert found == {"Fixlets/A/Name.bes": ["E800", "E806"]}
 
