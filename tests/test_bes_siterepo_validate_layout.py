@@ -1756,3 +1756,336 @@ def test_no_title_left_reports_the_limit_that_was_hit(tmp_path):
     # the path limit triggered it (268 > 260): E802, the path code
     found = messages(root, files=[name], check=True, prefix="", max_path=260)
     assert [c for p, c, m in found] == ["E802"]
+
+
+# --- E809 new IDs -------------------------------------------------------------
+
+
+def commit(repo, message="x"):
+    """Commit everything staged in `repo`; return the new commit's hash."""
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", message)
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def history(repo, base_ref=None, **environ):
+    """A GitHistory for `repo` given only `environ` (CI sets GITHUB_BASE_REF)."""
+    return hook.GitHistory(str(repo), base_ref, environ=environ)
+
+
+def assign(repo, *args, base_ref=None, environ=None, **kwargs):
+    """Like run(), with E809 on and git mv for tracked files."""
+    kwargs.setdefault("tracked", set(hook.git_ls_files(repo)))
+    return run(
+        repo, *args, history=history(repo, base_ref, **(environ or {})), **kwargs
+    )
+
+
+def bes_files(repo):
+    return [p for p in hook.git_ls_files(repo) if p.endswith(".bes")]
+
+
+def test_e809_no_id_gets_one_above_the_highest(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/Name.bes": None})
+    commit(repo)
+    # the fix replaces E800: the file is renamed and staged
+    assert assign(repo) == {"Fixlets/A/Name.bes": ["E809"]}
+    assert bes_files(repo) == ["Fixlets/A/5- A.bes", "Fixlets/A/6 Name.bes"]
+    assert "R" in git(repo, "status", "--porcelain")
+
+
+def test_e809_skips_a_deleted_files_id(tmp_path):
+    repo = make_repo(
+        tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/50- Old.bes": None}
+    )
+    commit(repo)
+    git(repo, "rm", "-q", "Fixlets/A/50- Old.bes")
+    commit(repo)
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/51 Name.bes" in bes_files(repo)
+
+
+def test_e809_skips_a_renamed_files_old_id(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/90- Old.bes": None})
+    commit(repo)
+    git(repo, "mv", "Fixlets/A/90- Old.bes", "Fixlets/A/3- Old.bes")
+    commit(repo)
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/91 Name.bes" in bes_files(repo)
+
+
+def test_e809_skips_ids_on_other_branches(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None})
+    commit(repo)
+    main = git(repo, "branch", "--show-current").strip()
+    git(repo, "switch", "-qc", "side")
+    (repo / "Fixlets/B").mkdir()
+    (repo / "Fixlets/B/200- X.bes").write_text(bes(), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    git(repo, "switch", "-q", main)
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/201 Name.bes" in bes_files(repo)
+
+
+def test_e809_skips_ids_of_any_case_in_any_folder(tmp_path):
+    # a deleted .BES outside the .bes folder still used its ID
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "tests/300- Y.BES": None})
+    commit(repo)
+    git(repo, "rm", "-q", "tests/300- Y.BES")
+    commit(repo)
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/301 Name.bes" in bes_files(repo)
+
+
+def test_e809_ignores_out_of_range_ids(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/9999999999- Big.bes": None,
+            "Fixlets/A/7- A.bes": None,
+            "Fixlets/A/Name.bes": None,
+        },
+    )
+    # 9999999999 is out of range (W806); counting it would leave no ID to give
+    assign(repo)
+    assert "Fixlets/A/8 Name.bes" in bes_files(repo)
+
+
+def test_e809_consecutive_ids_in_path_order(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/5- A.bes": None,
+            "Fixlets/B/Two.bes": None,
+            "Fixlets/A/One.bes": None,
+        },
+    )
+    assign(repo)
+    assert bes_files(repo) == [
+        "Fixlets/A/5- A.bes",
+        "Fixlets/A/6 One.bes",
+        "Fixlets/B/7 Two.bes",
+    ]
+
+
+def test_e809_min_id_sets_a_floor(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/Name.bes": None})
+    assign(repo, min_id=9000)
+    assert "Fixlets/A/9000 Name.bes" in bes_files(repo)
+
+
+def test_e809_no_id_left_once_every_id_is_used(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {f"Fixlets/A/{hook.MAX_ID}- Last.bes": None, "Fixlets/A/Name.bes": None},
+    )
+    found = messages(repo, history=history(repo))
+    assert sorted(c for p, c, m in found if p == "Fixlets/A/Name.bes") == [
+        "E800",
+        "E806",
+    ]
+    assert "Fixlets/A/Name.bes" in bes_files(repo)
+
+
+def test_e809_duplicate_the_file_on_the_base_branch_keeps_the_id(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/B/7- Old.bes": None})
+    commit(repo)
+    (repo / "Fixlets/A/7- New.bes").parent.mkdir(parents=True)
+    (repo / "Fixlets/A/7- New.bes").write_text(bes("New"), encoding="utf-8")
+    git(repo, "add", "-A")
+    # A/ sorts first, but B/ is on the base branch (HEAD): A/ is renumbered,
+    # keeping its separator and name, and neither reports E801 any more
+    assert assign(repo) == {"Fixlets/A/7- New.bes": ["E809"]}
+    assert bes_files(repo) == ["Fixlets/A/8- New.bes", "Fixlets/B/7- Old.bes"]
+
+
+def test_e809_duplicate_all_new_the_first_by_path_keeps_the_id(tmp_path):
+    # no commit yet: every file is new
+    repo = make_repo(
+        tmp_path,
+        {
+            "Fixlets/A/7- B.bes": None,
+            "Fixlets/A/07- A.bes": None,
+            "Fixlets/A/7 C.bes": None,
+        },
+    )
+    found = messages(repo, history=history(repo), tracked=set(hook.git_ls_files(repo)))
+    # 07- A sorts first and keeps 7 (its padding stripped by E803); the
+    # others get 8 and 9 in path order
+    assert bes_files(repo) == [
+        "Fixlets/A/7- A.bes",
+        "Fixlets/A/8 C.bes",
+        "Fixlets/A/9- B.bes",
+    ]
+    assert sorted((p, c) for p, c, m in found) == [
+        ("Fixlets/A/07- A.bes", "E803"),
+        ("Fixlets/A/7 C.bes", "E809"),
+        ("Fixlets/A/7- B.bes", "E809"),
+    ]
+
+
+def test_e809_duplicate_already_on_the_base_branch_is_reported_only(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- A.bes": None, "Fixlets/A/7- B.bes": None})
+    commit(repo)
+    assert assign(repo) == {
+        "Fixlets/A/7- A.bes": ["E801"],
+        "Fixlets/A/7- B.bes": ["E801"],
+    }
+
+
+def test_e809_base_ref_from_the_environment(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- Old.bes": None})
+    base = commit(repo)
+    (repo / "Fixlets/A/7- New.bes").write_text(bes("New"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)  # both committed: against HEAD, nothing would be new
+    assert assign(repo, check=True) == {
+        "Fixlets/A/7- New.bes": ["E801"],
+        "Fixlets/A/7- Old.bes": ["E801"],
+    }
+    git(repo, "update-ref", "refs/remotes/origin/main", base)
+    for environ in (
+        {"PRE_COMMIT_FROM_REF": base},
+        {"GITHUB_BASE_REF": "main"},
+        # a ref that is not a commit (a new branch's push) is skipped
+        {"PRE_COMMIT_FROM_REF": "0" * 40, "GITHUB_BASE_REF": "main"},
+    ):
+        found = assign(repo, check=True, environ=environ)
+        assert found["Fixlets/A/7- New.bes"] == ["E801", "E809"], environ
+        assert found["Fixlets/A/7- Old.bes"] == ["E801"], environ
+    found = assign(repo, check=True, base_ref=base)
+    assert found["Fixlets/A/7- New.bes"] == ["E801", "E809"]
+    # both set and both commits: PRE_COMMIT_FROM_REF wins over
+    # GITHUB_BASE_REF (here HEAD, where nothing is new)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    found = assign(
+        repo,
+        check=True,
+        environ={"PRE_COMMIT_FROM_REF": base, "GITHUB_BASE_REF": "main"},
+    )
+    assert found["Fixlets/A/7- New.bes"] == ["E801", "E809"]
+    assert assign(repo, check=True, environ={"GITHUB_BASE_REF": "main"}) == {
+        "Fixlets/A/7- New.bes": ["E801"],
+        "Fixlets/A/7- Old.bes": ["E801"],
+    }
+
+
+def test_e809_base_ref_argument_wins_and_must_resolve(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- Old.bes": None})
+    base = commit(repo)
+    gh = history(repo, "no-such-ref", PRE_COMMIT_FROM_REF=base)
+    assert gh.base_paths()[0] is None and "no-such-ref" in gh.base_paths()[1]
+    (repo / "Fixlets/A/7- New.bes").write_text(bes("New"), encoding="utf-8")
+    git(repo, "add", "-A")
+    found = assign(repo, check=True, base_ref="no-such-ref")
+    assert found == {
+        "Fixlets/A/7- New.bes": ["E801", "E806"],
+        "Fixlets/A/7- Old.bes": ["E801", "E806"],
+    }
+
+
+def test_e809_shallow_clone_assigns_nothing(tmp_path):
+    origin = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None})
+    commit(origin)
+    (origin / "Fixlets/A/6- B.bes").write_text(bes(), encoding="utf-8")
+    git(origin, "add", "-A")
+    commit(origin)
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", "--depth", "1", origin.as_uri(), str(clone))
+    (clone / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(clone, "add", "-A")
+    found = messages(clone, history=history(clone))
+    assert sorted(c for p, c, m in found) == ["E800", "E806"]
+    assert "fetch-depth: 0" in [m for p, c, m in found if c == "E806"][0]
+    assert "Fixlets/A/Name.bes" in bes_files(clone)
+
+
+def test_e809_check_and_disable_change_nothing(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/Name.bes": None})
+    found = messages(repo, check=True, history=history(repo))
+    assert sorted(c for p, c, m in found) == ["E800", "E809"]
+    assert (
+        "would be renamed to 6 Name.bes" in [m for p, c, m in found if c == "E809"][0]
+    )
+    for disabled in ({"E809"}, {"E800"}):
+        found = assign(repo, disabled=disabled)
+        assert found == ({} if "E800" in disabled else {"Fixlets/A/Name.bes": ["E800"]})
+    assert "Fixlets/A/Name.bes" in bes_files(repo)
+
+
+def test_e809_disable_e801_leaves_duplicates_alone(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- A.bes": None, "Fixlets/A/7- B.bes": None})
+    assert assign(repo, disabled={"E801"}) == {}
+    assert bes_files(repo) == ["Fixlets/A/7- A.bes", "Fixlets/A/7- B.bes"]
+
+
+def test_e809_name_taken_is_e806(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, "Fixlets/A/Name.bes": None})
+    (repo / "Fixlets/A/6 NAME.bes").write_text("untracked", encoding="utf-8")
+    found = assign(repo)
+    assert found == {"Fixlets/A/Name.bes": ["E800", "E806"]}
+
+
+def test_e809_combines_with_the_length_fix(tmp_path):
+    name = "Fixlets/A/Name with a long title.bes"
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None, name: bes("Short")})
+    max_path = hook.server_path_length("", name) - 1
+    found = messages(
+        repo,
+        prefix="",
+        max_path=max_path,
+        history=history(repo),
+        tracked=set(hook.git_ls_files(repo)),
+    )
+    assert sorted(c for p, c, m in found) == ["E805", "E809"]  # no E802
+    assert "Fixlets/A/6 Short.bes" in bes_files(repo)
+
+
+def test_e809_reads_no_history_for_a_clean_site(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None})
+    calls = []
+    real = hook._git
+
+    def spy(root, *args):
+        calls.append(args)
+        return real(root, *args)
+
+    monkeypatch.setattr(hook, "_git", spy)
+    assert run(repo, history=history(repo)) == {}
+    assert not [args for args in calls if args[0] in ("log", "ls-tree", "rev-parse")]
+
+
+def test_e809_main_in_a_pull_request_run(tmp_path, monkeypatch, capsys):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- Old.bes": None})
+    base = commit(repo)
+    (repo / "Fixlets/A/7- New.bes").write_text(bes("New"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.setenv("PRE_COMMIT_FROM_REF", base)
+    assert hook.main([]) == 1
+    output = capsys.readouterr().out
+    assert (
+        "[E809] auto-fixed: assigned ID 8 (duplicate of Fixlets/A/7- Old.bes)" in output
+    )
+    assert "E801" not in output
+    assert bes_files(repo) == ["Fixlets/A/7- Old.bes", "Fixlets/A/8- New.bes"]
+
+
+@pytest.mark.parametrize("value", ["0", str(hook.MAX_ID + 1)])
+def test_e809_min_id_out_of_range_is_rejected(tmp_path, monkeypatch, capsys, value):
+    repo = make_repo(tmp_path, {"Fixlets/A/5- A.bes": None})
+    monkeypatch.chdir(repo)
+    with pytest.raises(SystemExit) as error:
+        hook.main(["--min-id", value])
+    assert error.value.code == 2
+    assert "--min-id must be in 1..2147483647" in capsys.readouterr().err

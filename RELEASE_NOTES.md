@@ -1,5 +1,31 @@
 # Release Notes
 
+## v2.4.0
+
+### Added
+
+- `bes-siterepo-validate-layout` gives a `.bes` file a new ID (`E809`, a fix,
+  on by default like `E803`-`E805`) when it has none (`E800`: `Name.bes`
+  becomes `<ID> Name.bes`) or shares one (`E801`). In a duplicate group the
+  one file on the base branch keeps its ID and the new files are renumbered
+  (`42- X.bes` -> `1043- X.bes`), so deployed content, and the actions and
+  baselines that refer to it, keep their IDs; when every file in the group is
+  new, the first by path keeps it, and when two or more are already on the
+  base branch only `E801` is reported. The new ID is one more than the highest
+  any `.bes` path has had in the tree or in git history (every branch and tag,
+  every site), so a deleted or renamed file's ID is never reused. The base
+  branch comes from the new `--base-ref`, else `PRE_COMMIT_FROM_REF`
+  (`pre-commit run --from-ref`), else `origin/$GITHUB_BASE_REF`, else `HEAD`.
+  The new `--min-id N` sets a floor for IDs from before the git repo.
+  (#60)
+- In a shallow clone (`actions/checkout`'s default), or with a `--base-ref`
+  that is not a commit, no ID is assigned and `E806` says why; CI needs
+  `fetch-depth: 0`. A run that already failed on `E800` or `E801` still
+  fails, so no run that passed before fails now.
+- `--disable E809` keeps the old report-only behavior (for a site that
+  assigns IDs after merge from a counter file, as CommunityContent does).
+  Disabling `E800` or `E801` also stops `E809` for those files.
+
 ## v2.3.0
 
 ### Added

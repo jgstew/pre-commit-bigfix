@@ -438,9 +438,13 @@
     plus the repo-relative path) at most 259 characters, and each name at
     most 255 bytes in UTF-8. Renames .bes files by default, at
     most once each, with git mv: zero padding stripped (E803), non-ASCII
-    folded (E804), an over-long name shortened to "<ID> <Title>.bes" (E805);
-    E806 a rename skipped (name taken, unstaged changes, or a temporary
-    index from git commit -a). E802 a .bes path the rename cannot fix, E807
+    folded (E804), an over-long name shortened to "<ID> <Title>.bes" (E805),
+    a new ID for a file with none or a duplicate (E809: the file on the base
+    branch, --base-ref or PRE_COMMIT_FROM_REF, keeps it; the new ID is above
+    every ID in git history, so a deleted or renamed file's is never reused;
+    --min-id sets a floor); E806 a rename skipped (name taken, unstaged
+    changes, a temporary index from git commit -a, or a shallow clone for
+    E809). E802 a .bes path the rename cannot fix, E807
     another file's path too long, E808 a name over 255 bytes. Warnings:
     W800 .bes outside the .bes folder, W801 .bes at the wrong depth, W802
     other files in the .bes folder (.xsd too), W803 a renamed folder that
@@ -450,7 +454,7 @@
     --check is a dry run. Out of scope: schemas, GroupRelevance and //
     comments (other hooks here), case conflicts and Windows-illegal names
     (check-case-conflict, check-illegal-windows-names), more than one object
-    per file, assigning IDs (deferred), and setting up a blank repo.
+    per file, reading an ID counter file, and setting up a blank repo.
   entry: bes-siterepo-validate-layout
   language: python
   pass_filenames: false
