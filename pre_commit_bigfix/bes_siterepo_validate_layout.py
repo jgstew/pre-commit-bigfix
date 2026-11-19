@@ -36,13 +36,17 @@ Checks (E-codes fail the hook; W-codes are advisory unless --strict):
     E806  a rename was skipped: the new name is taken, ignoring case (by a
           tracked file, another planned rename or an untracked file), the
           file has unstaged changes pre-commit set aside, the commit uses a
-          temporary index (git commit -a, git commit <paths>), or the
-          rename failed
+          temporary index (git commit -a, git commit <paths>), the
+          rename failed, or E809 cannot choose an ID safely (a shallow
+          clone, an unknown base branch)
     E807  any other tracked file whose server path is over the limit, in or
           outside the site roots (the server clones the whole repo); it is
           not renamed, since actions may refer to it by name
     E808  a file or folder name over 255 bytes in UTF-8 that the rename
           cannot fix; a folder is reported once
+    E809  fix: a new ID for a file with no ID (E800), or with a duplicate
+          ID (E801) when it is not the file keeping the ID; the new ID is
+          above every ID in git history (see "New IDs" below)
     W800  a .bes file outside the .bes folder; it is not gathered
     W801  a .bes file directly in the .bes folder, or deeper than
           <BesFileDir>/<fxf>/<digest>/ (server behavior undocumented)
@@ -79,10 +83,26 @@ E803, E804 and, if the path or name is still too long, E805. E805 builds
 <Title> (or the current name without its ID, if the Title has no letter or
 digit), made ASCII and Windows-safe, cut to fit both limits, with trailing
 spaces, dots and hyphens dropped. A name that already fits is left alone,
-even when it differs from <Title>. The ID never changes and no file moves
-between folders. Files without an ID are not given one: --assign-ids is
-deferred (assigning IDs is a policy decision; CommunityContent uses a
-counter file, and max+1 would reuse the IDs of deleted content).
+even when it differs from <Title>. Only E809 changes an ID, and no file
+moves between folders.
+
+New IDs (E809): a file with no ID becomes `<ID> <name>`; it was never
+gathered, so nothing deployed refers to it. In a duplicate group the one
+file on the base branch (by path, or renamed from one there as git diff
+-M sees it) keeps the ID and the others get new ones, since renumbering
+deployed content orphans the actions and baselines that refer to it; with
+none on the base branch, the first by path keeps it. Two or more on the
+base branch, or the ID on the base branch with no file here matching it:
+E806 says why, and nothing is renumbered. A new ID is one more than the
+highest any .bes path has had, now or in git history (`git log --all
+--full-history -m`, repo-wide), so the ID of a deleted or renamed file is never
+reused, and gaps are never filled; --min-id sets a floor for IDs from
+before the repo. The base branch is the first of
+--base-ref, PRE_COMMIT_FROM_REF (pre-commit run --from-ref) and
+origin/$GITHUB_BASE_REF (a GitHub pull_request run) that is a commit here,
+else HEAD (a local commit: the staged files are new). A shallow clone has
+incomplete history, so no ID is assigned there (E806); CI needs
+fetch-depth: 0. History is read only when a file needs an ID.
 
 How files are renamed: a tracked file with `git mv`, anything else (only a
 file list a caller passes in) with a plain rename. git mv stages the
@@ -155,6 +175,7 @@ KNOWN_CODES = frozenset(
         "E806",
         "E807",
         "E808",
+        "E809",
         "W800",
         "W801",
         "W802",
@@ -194,7 +215,7 @@ ASCII_TABLE = {
 }
 # characters Windows forbids in a file name (control characters too)
 WINDOWS_FORBIDDEN = frozenset('<>:"/\\|?*')
-FIX_CODES = ("E803", "E804", "E805")
+FIX_CODES = ("E803", "E804", "E805", "E809")
 
 SiteConfig = collections.namedtuple(
     "SiteConfig", "bes_dir nonclient_dir other_dir named issue"
@@ -262,6 +283,147 @@ def _git(repo_root, *args):
     except OSError:  # git not installed
         return None
     return result.stdout if result.returncode == 0 else None
+
+
+class GitHistory:
+    """What the E809 fix needs from git, read only when it is first asked.
+
+    base_paths(): the files here that are on the base branch, by the same
+    path or renamed from one there (git diff -M, against the index): the
+    files that keep their ID in a duplicate group. used_ids(): every ID any
+    .bes path in history has had, so an assigned ID is never one a deleted
+    or renamed file used. Each returns (value, None), or (None, reason) when
+    git cannot tell. After base_paths(), `base_tree` holds the base
+    branch's own paths and `base_label` names it ("HEAD" when no base
+    branch was given).
+    """
+
+    def __init__(self, root, base_ref=None, environ=None):
+        self.root = root
+        self.base_ref = base_ref
+        self.environ = os.environ if environ is None else environ
+        self._base = self._used = None
+        self.base_tree = set()
+        self.base_label = "HEAD"
+
+    def _commit(self, ref):
+        out = _git(self.root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        return os.fsdecode(out).strip() if out else None
+
+    def _resolve_base(self):
+        """Return (commit or "" for an unborn HEAD, None) or (None, reason).
+
+        The base is the first of --base-ref, PRE_COMMIT_FROM_REF (pre-commit
+        run --from-ref) and origin/$GITHUB_BASE_REF (a GitHub pull_request
+        run) that is a commit here, else HEAD: a local commit, where the new
+        files are the staged ones. Its tree is used as it is, not its merge
+        base with HEAD: a PR run checks out the merge into the base, so the
+        two are the same commit.
+        """
+        if self.base_ref:
+            candidates = [(self.base_ref, "--base-ref")]
+        else:
+            candidates = [
+                (self.environ.get("PRE_COMMIT_FROM_REF"), "PRE_COMMIT_FROM_REF")
+            ]
+            github = self.environ.get("GITHUB_BASE_REF")
+            candidates.append(
+                (f"origin/{github}" if github else None, "GITHUB_BASE_REF")
+            )
+        for ref, source in candidates:
+            if not ref:
+                continue
+            commit = self._commit(ref)
+            if commit is not None:
+                self.base_label = f"{ref}, from {source}"
+                return commit, None
+            if source == "--base-ref":
+                return None, f"--base-ref {ref} is not a commit in this clone"
+            # an env ref may not be one, e.g. the all-zero `before` of a new
+            # branch's push: try the next
+        return self._commit("HEAD") or "", None
+
+    def base_paths(self):
+        if self._base is None:
+            commit, reason = self._resolve_base()
+            if commit is None:
+                self._base = (None, reason)
+            elif not commit:
+                self._base = (set(), None)  # no commit yet: every file is new
+            else:
+                out = _git(self.root, "ls-tree", "-r", "-z", "--name-only", commit)
+                # -z: R<score>, old path, new path; other statuses one path
+                diff = _git(
+                    self.root,
+                    "diff",
+                    "--cached",
+                    "-M",
+                    "--name-status",
+                    "-z",
+                    commit,
+                    "--",
+                    ":(icase)*.bes",
+                )
+                if out is None or diff is None:
+                    self._base = (None, f"git could not read the base {commit}")
+                else:
+                    self.base_tree = {
+                        os.fsdecode(name) for name in out.split(b"\0") if name
+                    }
+                    names = set(self.base_tree)
+                    fields = [os.fsdecode(field) for field in diff.split(b"\0")]
+                    while fields and fields[0]:
+                        status = fields.pop(0)
+                        if status[0] in "RC":
+                            fields.pop(0)  # the old path; the new one follows
+                        path = fields.pop(0)
+                        if status[0] == "R":
+                            names.add(path)
+                    self._base = (names, None)
+        return self._base
+
+    def used_ids(self):
+        if self._used is None:
+            shallow = _git(self.root, "rev-parse", "--is-shallow-repository")
+            if shallow is None or os.fsdecode(shallow).strip() != "false":
+                self._used = (
+                    None,
+                    (
+                        "this clone is shallow (or git could not say), so git "
+                        "history may hold IDs it cannot see; fetch all of it "
+                        "(actions/checkout: fetch-depth: 0, or git fetch --unshallow)"
+                    ),
+                )
+                return self._used
+            # --all: every ref and HEAD. --full-history: with a pathspec, git
+            # otherwise follows only one parent of a merge whose files match
+            # it, skipping the other side's commits (git 2.39 lists them
+            # with -m alone too, but only --full-history is documented to).
+            # -m: a merge's own diff, for a file only a merge resolution
+            # added or removed.
+            # --no-renames skips rename detection, which is slower and finds
+            # no more IDs: an old name was listed by the commit that added
+            # it. :(icase) also matches .BES (W808)
+            out = _git(
+                self.root,
+                "log",
+                "--all",
+                "--full-history",
+                "-m",
+                "--no-renames",
+                "--format=",
+                "--name-only",
+                "-z",
+                "--",
+                ":(icase)*.bes",
+            )
+            if out is None:
+                self._used = (None, "git log failed, so git history is unknown")
+            else:
+                paths = {os.fsdecode(name) for name in out.split(b"\0") if name.strip()}
+                ids = {_id_of(path) for path in paths} - {None}
+                self._used = (ids, None)
+        return self._used
 
 
 def repo_root():
@@ -465,8 +627,12 @@ def _id_of(path):
 
 
 def _check_ids(results, bes_paths):
-    """E800, W806 and E801 for the .bes files of one site's .bes folder."""
+    """E800, W806 and E801 for the .bes files of one site's .bes folder.
+
+    Return (paths with no ID, [paths sharing an ID]) for the E809 fix.
+    """
     by_id = collections.defaultdict(list)
+    no_id = []
     for path in bes_paths:
         name = path.rsplit("/", 1)[-1]
         match = ID_PREFIX_RE.match(name)
@@ -478,6 +644,7 @@ def _check_ids(results, bes_paths):
                 "or hyphen (`42- Name.bes` or `42 Name.bes`); the server "
                 "skips it",
             )
+            no_id.append(path)
             continue
         number = int(match.group(1))
         by_id[number].append(path)
@@ -499,6 +666,96 @@ def _check_ids(results, bes_paths):
                 "integers, so leading zeros do not count); the server skips "
                 "duplicates",
             )
+    return no_id, [paths for paths in by_id.values() if len(paths) > 1]
+
+
+def _plan_ids(results, no_id, duplicates, files, history, min_id=1):
+    """E809: choose a new ID for each file that needs one; return {path: (ID, why)}.
+
+    A file with no ID gets one: the server never gathered it, so nothing
+    deployed refers to it. In a duplicate group the one file on the base
+    branch keeps its ID (all new: the first by path); the others are
+    renumbered, since only new content can change ID without orphaning
+    actions and baselines. Two or more on the base branch: E801 alone, for
+    a person to decide. New IDs are one more than the highest ever used, in
+    `files` or anywhere in git history (repo-wide: gaps are harmless,
+    reuse is not), and never fill a gap: content from before the repo
+    leaves none in history. Where git cannot tell, E806.
+    """
+    wanted = {path: "no ID" for path in no_id}
+    base, reason = history.base_paths() if duplicates else (set(), None)
+    for group in duplicates:
+        if base is None:
+            for path in group:
+                results.issue(
+                    path,
+                    "E806",
+                    f"not given a new ID: the base branch is unknown ({reason}), "
+                    "so it is not known which file keeps the ID",
+                )
+            continue
+        on_base = [path for path in group if path in base]
+        number = _id_of(group[0])
+        if len(on_base) > 1:
+            names = ", ".join(sorted(on_base))
+            if history.base_label == "HEAD":
+                why = (
+                    f"{names} are all committed, and with no base branch "
+                    "given (HEAD) none of them is new; on a feature branch, "
+                    "run with --base-ref <its base branch, e.g. origin/main> "
+                    "so the hook can tell which is"
+                )
+            else:
+                why = (
+                    f"{names} are all on the base branch ({history.base_label}); "
+                    f"which keeps ID {number} is for a person to decide"
+                )
+            for path in sorted(group):
+                results.issue(path, "E806", f"not given a new ID: {why}")
+            continue
+        if not on_base:
+            elsewhere = sorted(
+                path
+                for path in history.base_tree
+                if _is_bes(path) and _id_of(path) == number
+            )
+            if elsewhere:
+                # a base file changed past what git -M pairs as a rename may
+                # be one of these: renumbering it would orphan its actions
+                why = (
+                    f"ID {number} is on the base branch ({history.base_label}) "
+                    f"as {', '.join(elsewhere)}, and git sees none of these "
+                    "files as that file renamed; decide by hand which, if "
+                    "any, it is"
+                )
+                for path in sorted(group):
+                    results.issue(path, "E806", f"not given a new ID: {why}")
+                continue
+        keeper = on_base[0] if on_base else min(group)
+        for path in sorted(group):
+            if path != keeper:
+                wanted[path] = f"duplicate of {keeper}"
+    if not wanted:
+        return {}
+    used, reason = history.used_ids()
+    if used is None:
+        for path in sorted(wanted):
+            results.issue(path, "E806", f"not given a new ID: {reason}")
+        return {}
+    # an ID out of range (W806) would push every new ID out of range too
+    ids = used | {_id_of(path) for path in files}
+    highest = max((n for n in ids if n is not None and n <= MAX_ID), default=0)
+    next_id = max(highest, min_id - 1) + 1
+    planned = {}
+    for path in sorted(wanted):
+        if next_id > MAX_ID:
+            results.issue(
+                path, "E806", f"not given a new ID: every ID up to {MAX_ID} is used"
+            )
+            continue
+        planned[path] = (next_id, f"assigned ID {next_id} ({wanted[path]})")
+        next_id += 1
+    return planned
 
 
 def _check_layout(results, site, site_files, config):
@@ -600,15 +857,20 @@ def _check_layout(results, site, site_files, config):
     return bes_paths
 
 
-def _shortest_name(path):
-    """The shortest name the length fix could give a .bes file: `<ID> X.bes`."""
+def _shortest_name(path, number=None):
+    """The shortest name the length fix could give a .bes file: `<ID> X.bes`.
+
+    `number` is an ID E809 assigns, in place of the one in the name.
+    """
     folder, _, name = path.rpartition("/")
     extension = os.path.splitext(name)[1]
-    short = f"{_id_of(path)} X{extension}"
+    short = f"{_id_of(path) if number is None else number} X{extension}"
     return f"{folder}/{short}" if folder else short
 
 
-def _check_limits(results, files, gathered, prefix, max_path, disabled=frozenset()):
+def _check_limits(
+    results, files, gathered, prefix, max_path, disabled=frozenset(), assigned=None
+):
     """E802, E807 and E808: names and paths a root server cannot hold.
 
     Path: the server path must be at most `max_path` (Windows). Name: each
@@ -620,8 +882,10 @@ def _check_limits(results, files, gathered, prefix, max_path, disabled=frozenset
     limit is an error too (E807, E808): the server clones the whole repo, so
     one long path anywhere fails the sync. Those are not renamed, since
     actions may refer to them by name, and a folder is not renamed since
-    that changes its .fxf or digest.
+    that changes its .fxf or digest. `assigned` maps a file E809 gives an
+    ID to (ID, why); such a file has an ID to shorten to as well.
     """
+    assigned = assigned or {}
     long_folders = set()
     for path in files:
         parts = path.split("/")
@@ -637,9 +901,16 @@ def _check_limits(results, files, gathered, prefix, max_path, disabled=frozenset
                     "byte limit of Linux file systems, so a RHEL root server "
                     "cannot check it out; rename it by hand",
                 )
-        fixable = path in gathered and _id_of(path) is not None
+        fixable = path in gathered and (_id_of(path) is not None or path in assigned)
         _check_path_length(
-            results, path, path in gathered, fixable, prefix, max_path, disabled
+            results,
+            path,
+            path in gathered,
+            fixable,
+            prefix,
+            max_path,
+            disabled,
+            assigned.get(path, (None,))[0],
         )
         size = name_bytes(parts[-1])
         if size <= NAME_MAX:
@@ -662,11 +933,14 @@ def _check_limits(results, files, gathered, prefix, max_path, disabled=frozenset
         )
 
 
-def _check_path_length(results, path, gathered, fixable, prefix, max_path, disabled):
+def _check_path_length(
+    results, path, gathered, fixable, prefix, max_path, disabled, number=None
+):
     """E802 or E807 for `path` if its server path is over `max_path`.
 
     `gathered`: it is a .bes file in a site's .bes folder; `fixable`: one
-    with an ID, which the E805 rename can shorten.
+    with an ID, which the E805 rename can shorten; `number`: the ID E809
+    assigns it, if any.
     """
     length = server_path_length(prefix, path)
     if length <= max_path:
@@ -689,7 +963,7 @@ def _check_path_length(results, path, gathered, fixable, prefix, max_path, disab
                 "actions may refer to it by name)",
             )
         return
-    shortest = _shortest_name(path)
+    shortest = _shortest_name(path, number)
     shortest_length = server_path_length(prefix, shortest)
     if shortest_length > max_path:
         results.issue(
@@ -713,14 +987,18 @@ class _Renamer:
 
     The new name combines E803 (zero padding stripped from the ID), E804
     (non-ASCII folded) and, when the server path is still too long, E805
-    (`<ID> <Title>` cut to fit). The ID never changes and the file never
-    leaves its folder. A name already taken, ignoring case, by a tracked
-    file, another planned rename or anything on disk is E806 instead.
+    (`<ID> <Title>` cut to fit). The ID changes only for a file in
+    `assigned` (E809, see _plan_ids), and the file never leaves its folder.
+    A name already taken, ignoring case, by a tracked file, another planned
+    rename or anything on disk is E806 instead.
     """
 
-    def __init__(self, root, files, prefix, max_path, disabled, held=frozenset()):
+    def __init__(
+        self, root, files, prefix, max_path, disabled, held=frozenset(), assigned=None
+    ):
         self.root = root
         self.held = held
+        self.assigned = assigned or {}
         self.temporary_index = False
         self.prefix = prefix
         self.max_path = max_path
@@ -735,12 +1013,20 @@ class _Renamer:
     def _new_name(self, results, path):
         """Return (new name, [(code, reason)]) for `path`; reasons may be []."""
         folder, _, name = path.rpartition("/")
-        digits = ID_PREFIX_RE.match(name).group(1)
-        number = int(digits)
+        match = ID_PREFIX_RE.match(name)
+        digits = match.group(1) if match else ""
+        # with no ID, E809 makes the whole name the part after it: `<ID> Name`
+        rest = name[len(digits) :] if match else f" {name}"
         new, reasons = name, []
-        if "E803" not in self.disabled and digits != str(number):
-            new = str(number) + new[len(digits) :]
-            reasons.append(("E803", f"zero-padded ID {digits} is {number}"))
+        if path in self.assigned:
+            number, why = self.assigned[path]
+            new = f"{number}{rest}"
+            reasons.append(("E809", why))
+        else:
+            number = int(digits)
+            if "E803" not in self.disabled and digits != str(number):
+                new = str(number) + rest
+                reasons.append(("E803", f"zero-padded ID {digits} is {number}"))
         if "E804" not in self.disabled and not new.isascii():
             new = fold_ascii(new)
             reasons.append(("E804", "non-ASCII characters in the file name"))
@@ -768,7 +1054,7 @@ class _Renamer:
                 # a Title of only forbidden characters would give `42 ___`
                 if title is None or not any(c.isalnum() for c in safe_title(title)):
                     # the current name, without its ID prefix
-                    title = os.path.splitext(name[len(digits) :])[0].lstrip(" -")
+                    title = os.path.splitext(rest)[0].lstrip(" -")
                 short = safe_title(title)[:room].rstrip(" .-")
                 if short:
                     new = f"{number} {short}{extension}"
@@ -784,8 +1070,9 @@ class _Renamer:
 
     def plan(self, results, path):
         """Plan the rename of gathered .bes file `path`, if it needs one."""
-        if ID_PREFIX_RE.match(path.rsplit("/", 1)[-1]) is None:
-            return  # E800: no ID to keep
+        no_id = ID_PREFIX_RE.match(path.rsplit("/", 1)[-1]) is None
+        if no_id and path not in self.assigned:
+            return  # E800, and E809 is not giving it an ID
         new, reasons = self._new_name(results, path)
         if not reasons:
             return
@@ -1036,6 +1323,8 @@ def check_repo(
     tracked=frozenset(),
     held=frozenset(),
     temporary_index=False,
+    history=None,
+    min_id=1,
 ):
     """Check the sites in repo `root`; return a list of (path, issues, fixed).
 
@@ -1051,6 +1340,12 @@ def check_repo(
     is not renamed (E806); with `temporary_index` (see uses_real_index)
     nothing is (E806). Codes in `disabled` are dropped; for a fix code
     that also stops that part of the rename.
+
+    `history` (a GitHistory, or anything with its two methods) turns on
+    E809: files with no ID or a duplicate ID get a new one (see _plan_ids),
+    no lower than `min_id`. Without it, as without E809, those are only
+    reported. A file renamed by E809 no longer reports E800 or E801, nor
+    does the one file left with a duplicate's ID.
     """
     if prefix is None:
         prefix = server_prefix(
@@ -1058,20 +1353,48 @@ def check_repo(
         )
     results = _Results()
     gathered = set()
+    no_id, duplicates = [], []
     for site, site_files in _assign_sites(files, site_roots).items():
         config = read_site_config(root, site, files)
         if config.issue:
             results.issue(_join(site, SITE_CONFIG), *config.issue[1:])
         bes_paths = _check_layout(results, site, site_files, config)
-        _check_ids(results, bes_paths)
+        site_no_id, site_duplicates = _check_ids(results, bes_paths)
+        no_id += site_no_id
+        duplicates += site_duplicates
         gathered.update(bes_paths)
-    _check_limits(results, files, gathered, prefix, max_path, disabled)
-    renamer = _Renamer(root, files, prefix, max_path, disabled, held)
+    # disabling E800 or E801 says those files are fine as they are
+    no_id = [] if "E800" in disabled else no_id
+    duplicates = [] if "E801" in disabled else duplicates
+    assigned = {}
+    if history is not None and "E809" not in disabled:
+        assigned = _plan_ids(results, no_id, duplicates, files, history, min_id)
+    _check_limits(results, files, gathered, prefix, max_path, disabled, assigned)
+    renamer = _Renamer(root, files, prefix, max_path, disabled, held, assigned)
     renamer.temporary_index = temporary_index
     for path in sorted(gathered):
         renamer.plan(results, path)
     renamer.apply(results, check, tracked)
+    _drop_fixed_id_issues(results, duplicates)
     return results.as_list(disabled)
+
+
+def _drop_fixed_id_issues(results, duplicates):
+    """Drop E800 and E801 from files E809 renamed, and from a group's last file."""
+    renumbered = {
+        path
+        for path, fixed in results.fixed.items()
+        if any(code == "E809" for _line, code, _msg in fixed)
+    }
+    settled = set(renumbered)
+    for group in duplicates:
+        left = [path for path in group if path not in renumbered]
+        if len(left) == 1:
+            settled.add(left[0])
+    for path in settled:
+        results.issues[path] = [
+            issue for issue in results.issues[path] if issue[1] not in ("E800", "E801")
+        ]
 
 
 def main(argv=None, list_files=git_ls_files):
@@ -1133,7 +1456,28 @@ def main(argv=None, list_files=git_ls_files):
         metavar="N",
         help=f"longest allowed server path (default: {DEFAULT_MAX_PATH})",
     )
+    parser.add_argument(
+        "--base-ref",
+        metavar="REF",
+        help=(
+            "the branch or commit a PR merges into, for E809: a file on it "
+            "keeps a duplicate ID (default: PRE_COMMIT_FROM_REF, else "
+            "origin/$GITHUB_BASE_REF, else HEAD)"
+        ),
+    )
+    parser.add_argument(
+        "--min-id",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "lowest ID E809 assigns, for IDs used before the site was in git "
+            "(default: 1)"
+        ),
+    )
     args = parser.parse_args(argv)
+    if not 1 <= args.min_id <= MAX_ID:
+        parser.error(f"--min-id must be in 1..{MAX_ID}")
     # a file name that is not UTF-8 holds lone surrogates; show them escaped
     # rather than fail on print
     if hasattr(sys.stdout, "reconfigure"):
@@ -1183,6 +1527,8 @@ def main(argv=None, list_files=git_ls_files):
             tracked=tracked,
             held=set() if args.check else pre_commit_stashed_paths(root),
             temporary_index=not uses_real_index(root),
+            history=GitHistory(root, args.base_ref),
+            min_id=args.min_id,
         )
     )
     if fix_count:

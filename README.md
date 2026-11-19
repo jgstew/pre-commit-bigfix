@@ -805,13 +805,14 @@ warning (`W808`), since RHEL is case-sensitive.
 | --- | --- |
 | `E800` | a `.bes` file in the `.bes` folder whose name does not start with a numeric ID and a space or hyphen; `42- Name.bes` and `42 Name.bes` both work |
 | `E801` | two or more `.bes` files in one site share an ID, compared as integers, so `0042` and `42` collide; each names the others |
-| `E802` | a `.bes` file's server path is too long and the rename cannot fix it: even `<ID> X.bes` is too long (the folders are), it has no ID, or `E805` is disabled. Renaming a folder changes its `.fxf` or digest, so that is left to you |
+| `E802` | a `.bes` file's server path is too long and the rename cannot fix it: even `<ID> X.bes` is too long (the folders are), it has no ID (and `E809` gives it none), or `E805` is disabled. Renaming a folder changes its `.fxf` or digest, so that is left to you |
 | `E803` | fix: zero padding in the ID (`0042- X.bes` -> `42- X.bes`); done even when the ID is a duplicate (`E801`), since the ID does not change |
 | `E804` | fix: non-ASCII characters in the name, folded to ASCII |
 | `E805` | fix: the server path is too long, or the name is over 255 bytes, so the file is renamed `<ID> <Title>.bes` |
-| `E806` | a rename was skipped: the new name is taken (ignoring case), the file has unstaged changes pre-commit set aside, the commit uses a temporary index (`git commit -a`, `git commit <paths>`), or the rename failed |
+| `E806` | a rename was skipped: the new name is taken (ignoring case), the file has unstaged changes pre-commit set aside, the commit uses a temporary index (`git commit -a`, `git commit <paths>`), the rename failed, or `E809` could not choose an ID safely (shallow clone, unknown base branch) |
 | `E807` | another tracked file's server path is too long, inside the site roots or not (the server clones the whole repo). It is not renamed, since actions may refer to it by name |
 | `E808` | a file or folder name over 255 bytes in UTF-8 (Linux `NAME_MAX`) that the rename cannot fix; each folder once |
+| `E809` | fix: a file with no ID (`E800`), or a duplicate (`E801`) that is not the one keeping the ID, gets a new ID no file in git history has used; see **New IDs** |
 | `W800` | a `.bes` file outside the `.bes` folder; the server does not gather it |
 | `W801` | a `.bes` file directly in the `.bes` folder, or deeper than `<BesFileDir>/<fxf>/<digest>/` (how the server handles either is undocumented) |
 | `W802` | a file in the `.bes` folder other than `.bes` or `digest.xml`; an `.xsd` too, since `bes-schema-validate` already has the schemas |
@@ -845,6 +846,8 @@ count in full. The options:
 | `--repo-name` | the last part of the `origin` remote URL without `.git`, or the repo folder's name |
 | `--branch` | `main` |
 | `--max-path` | `259` |
+| `--base-ref` | `PRE_COMMIT_FROM_REF`, else `origin/$GITHUB_BASE_REF`, else `HEAD` (see **New IDs**) |
+| `--min-id` | `1` (see **New IDs**) |
 
 **Renames.** By default each `.bes` file in the `.bes` folder is renamed at
 most once, combining the fixes it needs: zero padding stripped from the ID
@@ -855,7 +858,7 @@ cut to fit both limits (`E805`). The title comes from the file's `<Title>`,
 or from its current name if the title has no letter or digit; it is made
 ASCII and safe on Windows, cut short, and any trailing space, dot or hyphen
 is dropped. A name that already fits is left alone, even when it differs
-from the title. The ID never changes and no file moves between folders.
+from the title. Only `E809` changes an ID, and no file moves between folders.
 
 Tracked files are renamed with `git mv`, so the renames are staged and the
 next commit carries them whole; a plain rename would leave an unstaged
@@ -875,10 +878,61 @@ renamed (`E806`) where the rename would be lost:
 Any rename makes the hook exit 1, so review the renames and commit again.
 `--check` is a dry run that reports what would be renamed.
 
-Files with no ID are reported (`E800`), not given one. An opt-in
-`--assign-ids` is deferred: choosing IDs is a policy decision, best backed
-by a counter file as CommunityContent does, since taking the highest ID plus
-one could reuse a deleted item's ID.
+**New IDs (`E809`).** A file with no ID, or a duplicate ID, gets a new one
+in the same rename, which also applies `E804` and `E805`:
+
+- No ID: `Name.bes` becomes `<ID> Name.bes`. The server never gathered it,
+  so nothing deployed refers to it.
+- Duplicate ID: the one file on the base branch keeps the ID, and the others
+  get new ones (`42- X.bes` -> `1043- X.bes`). Renumbering only new content
+  keeps actions and baselines that refer to the old ID working. A file
+  renamed from one on the base branch counts as on it, as `git diff -M`
+  pairs them. When every file in the group is new, the first by path keeps
+  the ID. Nothing is renumbered, and `E806` says why, when two or more are
+  already on the base branch (which one keeps the ID is for a person to
+  decide), or when the ID is on the base branch but git sees no file here as
+  that file renamed (it may be one, changed too much to pair).
+- The new ID is one more than the highest ID any `.bes` path has had in git
+  history (`git log --all --full-history -m`: every branch and tag, both
+  sides of every merge, every site in the repo) or has now, so it never
+  reuses the ID of a deleted or renamed file. It sees only the branches and
+  tags this clone has fetched: fetch first. Gaps are never filled. For a site whose older IDs predate the git
+  repo, set a floor with `--min-id`.
+- The base branch is the first of `--base-ref`, `PRE_COMMIT_FROM_REF` (set by `pre-commit run --from-ref`)
+  and `origin/$GITHUB_BASE_REF` (set in a GitHub `pull_request` run) that is
+  a commit in the clone. Without any, it is `HEAD`: in a local commit, the
+  staged files are the new ones. Once both files of a duplicate are
+  committed on a feature branch, `HEAD` sees neither as new: run with
+  `--base-ref origin/main` (or the branch it merges into), as `E806` says.
+- In a shallow clone, git history is incomplete, so no ID is assigned
+  (`E806`); likewise for duplicates when `--base-ref` is not a commit.
+- `--disable E809` reports `E800` and `E801` only, as before. Disabling
+  `E800` or `E801` also stops `E809` for those files.
+
+In GitHub Actions, check out the full history (the default is one commit),
+and give pre-commit the PR's base so that it knows which files are new:
+
+```yaml
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: >-
+            --from-ref ${{ github.event.pull_request.base.sha }}
+            --to-ref ${{ github.event.pull_request.head.sha }}
+```
+
+The hook renames the files on the runner and fails, and the log names each
+new file name, for the author to apply (or run the hook locally with
+`--base-ref` naming the PR's base branch). To commit
+the fix back to a PR branch instead, check out `github.head_ref` with
+`contents: write`, then commit and push any change. Fork PRs cannot be
+pushed to, and a push with `GITHUB_TOKEN` starts no new workflow run. Two
+open PRs can choose the same ID; the one merged second then has a duplicate
+on the base branch and is renumbered when it runs again, so require branches
+to be up to date before merging. A site that assigns IDs after merge from a
+counter file, as CommunityContent does, should use `--disable E809`.
 
 Not checked here: more than one object in a `.bes` file, or Baselines
 (repository sites are thought to handle both); schemas, GroupRelevance and

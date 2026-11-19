@@ -24,7 +24,8 @@ permissions:
 
 jobs:
   test_build:
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no Python 3.8 for setup-python; 24.04 does
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         py-version: ["3.8", "3.12"]
