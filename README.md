@@ -885,19 +885,25 @@ in the same rename, which also applies `E804` and `E805`:
   so nothing deployed refers to it.
 - Duplicate ID: the one file on the base branch keeps the ID, and the others
   get new ones (`42- X.bes` -> `1043- X.bes`). Renumbering only new content
-  keeps actions and baselines that refer to the old ID working. When every
-  file in the group is new, the first by path keeps the ID. When two or more
-  are already on the base branch, only `E801` is reported: which one keeps
-  the ID is for a person to decide.
+  keeps actions and baselines that refer to the old ID working. A file
+  renamed from one on the base branch counts as on it, as `git diff -M`
+  pairs them. When every file in the group is new, the first by path keeps
+  the ID. Nothing is renumbered, and `E806` says why, when two or more are
+  already on the base branch (which one keeps the ID is for a person to
+  decide), or when the ID is on the base branch but git sees no file here as
+  that file renamed (it may be one, changed too much to pair).
 - The new ID is one more than the highest ID any `.bes` path has had in git
-  history (`git log --all --no-renames`, every branch and tag, every site in
-  the repo) or has now, so it never reuses the ID of a deleted or renamed
-  file. Gaps are never filled. For a site whose older IDs predate the git
+  history (`git log --all --full-history -m`: every branch and tag, both
+  sides of every merge, every site in the repo) or has now, so it never
+  reuses the ID of a deleted or renamed file. It sees only the branches and
+  tags this clone has fetched: fetch first. Gaps are never filled. For a site whose older IDs predate the git
   repo, set a floor with `--min-id`.
 - The base branch is the first of `--base-ref`, `PRE_COMMIT_FROM_REF` (set by `pre-commit run --from-ref`)
   and `origin/$GITHUB_BASE_REF` (set in a GitHub `pull_request` run) that is
   a commit in the clone. Without any, it is `HEAD`: in a local commit, the
-  staged files are the new ones.
+  staged files are the new ones. Once both files of a duplicate are
+  committed on a feature branch, `HEAD` sees neither as new: run with
+  `--base-ref origin/main` (or the branch it merges into), as `E806` says.
 - In a shallow clone, git history is incomplete, so no ID is assigned
   (`E806`); likewise for duplicates when `--base-ref` is not a commit.
 - `--disable E809` reports `E800` and `E801` only, as before. Disabling
@@ -918,7 +924,8 @@ and give pre-commit the PR's base so that it knows which files are new:
 ```
 
 The hook renames the files on the runner and fails, and the log names each
-new file name, for the author to apply (or run the hook locally). To commit
+new file name, for the author to apply (or run the hook locally with
+`--base-ref` naming the PR's base branch). To commit
 the fix back to a PR branch instead, check out `github.head_ref` with
 `contents: write`, then commit and push any change. Fork PRs cannot be
 pushed to, and a push with `GITHUB_TOKEN` starts no new workflow run. Two

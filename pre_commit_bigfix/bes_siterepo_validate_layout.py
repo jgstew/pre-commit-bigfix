@@ -88,12 +88,14 @@ moves between folders.
 
 New IDs (E809): a file with no ID becomes `<ID> <name>`; it was never
 gathered, so nothing deployed refers to it. In a duplicate group the one
-file on the base branch keeps the ID and the others get new ones, since
-renumbering deployed content orphans the actions and baselines that refer
-to it; with none on the base branch, the first by path keeps it, and with
-two or more only E801 is reported. A new ID is one more than the highest
-any .bes path has had, now or in git history (`git log --all
---no-renames`, repo-wide), so the ID of a deleted or renamed file is never
+file on the base branch (by path, or renamed from one there as git diff
+-M sees it) keeps the ID and the others get new ones, since renumbering
+deployed content orphans the actions and baselines that refer to it; with
+none on the base branch, the first by path keeps it. Two or more on the
+base branch, or the ID on the base branch with no file here matching it:
+E806 says why, and nothing is renumbered. A new ID is one more than the
+highest any .bes path has had, now or in git history (`git log --all
+--full-history -m`, repo-wide), so the ID of a deleted or renamed file is never
 reused, and gaps are never filled; --min-id sets a floor for IDs from
 before the repo. The base branch is the first of
 --base-ref, PRE_COMMIT_FROM_REF (pre-commit run --from-ref) and
@@ -286,10 +288,14 @@ def _git(repo_root, *args):
 class GitHistory:
     """What the E809 fix needs from git, read only when it is first asked.
 
-    base_paths(): the paths on the base branch, the files that keep their
-    ID in a duplicate group. used_ids(): every ID any .bes path in history
-    has had, so an assigned ID is never one a deleted or renamed file used.
-    Each returns (value, None), or (None, reason) when git cannot tell.
+    base_paths(): the files here that are on the base branch, by the same
+    path or renamed from one there (git diff -M, against the index): the
+    files that keep their ID in a duplicate group. used_ids(): every ID any
+    .bes path in history has had, so an assigned ID is never one a deleted
+    or renamed file used. Each returns (value, None), or (None, reason) when
+    git cannot tell. After base_paths(), `base_tree` holds the base
+    branch's own paths and `base_label` names it ("HEAD" when no base
+    branch was given).
     """
 
     def __init__(self, root, base_ref=None, environ=None):
@@ -297,6 +303,8 @@ class GitHistory:
         self.base_ref = base_ref
         self.environ = os.environ if environ is None else environ
         self._base = self._used = None
+        self.base_tree = set()
+        self.base_label = "HEAD"
 
     def _commit(self, ref):
         out = _git(self.root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
@@ -327,6 +335,7 @@ class GitHistory:
                 continue
             commit = self._commit(ref)
             if commit is not None:
+                self.base_label = f"{ref}, from {source}"
                 return commit, None
             if source == "--base-ref":
                 return None, f"--base-ref {ref} is not a commit in this clone"
@@ -343,10 +352,33 @@ class GitHistory:
                 self._base = (set(), None)  # no commit yet: every file is new
             else:
                 out = _git(self.root, "ls-tree", "-r", "-z", "--name-only", commit)
-                if out is None:
-                    self._base = (None, f"git ls-tree {commit} failed")
+                # -z: R<score>, old path, new path; other statuses one path
+                diff = _git(
+                    self.root,
+                    "diff",
+                    "--cached",
+                    "-M",
+                    "--name-status",
+                    "-z",
+                    commit,
+                    "--",
+                    ":(icase)*.bes",
+                )
+                if out is None or diff is None:
+                    self._base = (None, f"git could not read the base {commit}")
                 else:
-                    names = {os.fsdecode(name) for name in out.split(b"\0") if name}
+                    self.base_tree = {
+                        os.fsdecode(name) for name in out.split(b"\0") if name
+                    }
+                    names = set(self.base_tree)
+                    fields = [os.fsdecode(field) for field in diff.split(b"\0")]
+                    while fields and fields[0]:
+                        status = fields.pop(0)
+                        if status[0] in "RC":
+                            fields.pop(0)  # the old path; the new one follows
+                        path = fields.pop(0)
+                        if status[0] == "R":
+                            names.add(path)
                     self._base = (names, None)
         return self._base
 
@@ -363,13 +395,21 @@ class GitHistory:
                     ),
                 )
                 return self._used
-            # --all: every ref and HEAD. --no-renames skips rename detection,
-            # which is slower and finds no more IDs: an old name was listed
-            # by the commit that added it. :(icase) also matches .BES (W808)
+            # --all: every ref and HEAD. --full-history: with a pathspec, git
+            # otherwise follows only one parent of a merge whose files match
+            # it, skipping the other side's commits (git 2.39 lists them
+            # with -m alone too, but only --full-history is documented to).
+            # -m: a merge's own diff, for a file only a merge resolution
+            # added or removed.
+            # --no-renames skips rename detection, which is slower and finds
+            # no more IDs: an old name was listed by the commit that added
+            # it. :(icase) also matches .BES (W808)
             out = _git(
                 self.root,
                 "log",
                 "--all",
+                "--full-history",
+                "-m",
                 "--no-renames",
                 "--format=",
                 "--name-only",
@@ -655,8 +695,42 @@ def _plan_ids(results, no_id, duplicates, files, history, min_id=1):
                 )
             continue
         on_base = [path for path in group if path in base]
+        number = _id_of(group[0])
         if len(on_base) > 1:
-            continue  # the base branch already has the duplicate
+            names = ", ".join(sorted(on_base))
+            if history.base_label == "HEAD":
+                why = (
+                    f"{names} are all committed, and with no base branch "
+                    "given (HEAD) none of them is new; on a feature branch, "
+                    "run with --base-ref <its base branch, e.g. origin/main> "
+                    "so the hook can tell which is"
+                )
+            else:
+                why = (
+                    f"{names} are all on the base branch ({history.base_label}); "
+                    f"which keeps ID {number} is for a person to decide"
+                )
+            for path in sorted(group):
+                results.issue(path, "E806", f"not given a new ID: {why}")
+            continue
+        if not on_base:
+            elsewhere = sorted(
+                path
+                for path in history.base_tree
+                if _is_bes(path) and _id_of(path) == number
+            )
+            if elsewhere:
+                # a base file changed past what git -M pairs as a rename may
+                # be one of these: renumbering it would orphan its actions
+                why = (
+                    f"ID {number} is on the base branch ({history.base_label}) "
+                    f"as {', '.join(elsewhere)}, and git sees none of these "
+                    "files as that file renamed; decide by hand which, if "
+                    "any, it is"
+                )
+                for path in sorted(group):
+                    results.issue(path, "E806", f"not given a new ID: {why}")
+                continue
         keeper = on_base[0] if on_base else min(group)
         for path in sorted(group):
             if path != keeper:

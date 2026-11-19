@@ -1936,9 +1936,19 @@ def test_e809_duplicate_already_on_the_base_branch_is_reported_only(tmp_path):
     repo = make_repo(tmp_path, {"Fixlets/A/7- A.bes": None, "Fixlets/A/7- B.bes": None})
     commit(repo)
     assert assign(repo) == {
-        "Fixlets/A/7- A.bes": ["E801"],
-        "Fixlets/A/7- B.bes": ["E801"],
+        "Fixlets/A/7- A.bes": ["E801", "E806"],
+        "Fixlets/A/7- B.bes": ["E801", "E806"],
     }
+    # the base here is HEAD, so the message says how to name the real base
+    found = messages(repo, history=history(repo))
+    e806 = [m for p, c, m in found if c == "E806"]
+    assert all("run with --base-ref" in m for m in e806)
+    assert "Fixlets/A/7- B.bes" in e806[0]  # names the files on the base
+    # with an explicit base, the message says a person must decide
+    found = messages(repo, history=history(repo, "HEAD"))
+    e806 = [m for p, c, m in found if c == "E806"]
+    assert e806 and not any("run with --base-ref" in m for m in e806)
+    assert "for a person to decide" in e806[0]
 
 
 def test_e809_base_ref_from_the_environment(tmp_path):
@@ -1948,8 +1958,8 @@ def test_e809_base_ref_from_the_environment(tmp_path):
     git(repo, "add", "-A")
     commit(repo)  # both committed: against HEAD, nothing would be new
     assert assign(repo, check=True) == {
-        "Fixlets/A/7- New.bes": ["E801"],
-        "Fixlets/A/7- Old.bes": ["E801"],
+        "Fixlets/A/7- New.bes": ["E801", "E806"],
+        "Fixlets/A/7- Old.bes": ["E801", "E806"],
     }
     git(repo, "update-ref", "refs/remotes/origin/main", base)
     for environ in (
@@ -1973,8 +1983,8 @@ def test_e809_base_ref_from_the_environment(tmp_path):
     )
     assert found["Fixlets/A/7- New.bes"] == ["E801", "E809"]
     assert assign(repo, check=True, environ={"GITHUB_BASE_REF": "main"}) == {
-        "Fixlets/A/7- New.bes": ["E801"],
-        "Fixlets/A/7- Old.bes": ["E801"],
+        "Fixlets/A/7- New.bes": ["E801", "E806"],
+        "Fixlets/A/7- Old.bes": ["E801", "E806"],
     }
 
 
@@ -2091,3 +2101,104 @@ def test_e809_min_id_out_of_range_is_rejected(tmp_path, monkeypatch, capsys, val
         hook.main(["--min-id", value])
     assert error.value.code == 2
     assert "--min-id must be in 1..2147483647" in capsys.readouterr().err
+
+
+def merge(repo, branch, *args):
+    """Merge `branch` into the current branch with a merge commit."""
+    git(
+        repo,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "merge",
+        "-q",
+        "--no-ff",
+        *args,
+        branch,
+        "-m",
+        f"merge {branch}",
+    )
+
+
+def test_e809_skips_an_id_deleted_beside_a_merged_branch(tmp_path):
+    # with a pathspec, git log follows only the merge's parent whose .bes
+    # files match the merge: here feat's, so main's add and delete of 6 are
+    # never listed without --full-history
+    repo = make_repo(tmp_path, {"Fixlets/A/1- A.bes": None})
+    commit(repo)
+    main = git(repo, "branch", "--show-current").strip()
+    git(repo, "switch", "-qc", "feat")
+    (repo / "Fixlets/A/5- F.bes").write_text(bes("F"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    git(repo, "switch", "-q", main)
+    (repo / "Fixlets/A/6- X.bes").write_text(bes("X"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    git(repo, "rm", "-q", "Fixlets/A/6- X.bes")
+    commit(repo)
+    merge(repo, "feat")
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/7 Name.bes" in bes_files(repo)
+
+
+def test_e809_skips_an_id_that_only_a_merge_commit_had(tmp_path):
+    # 8 is added while resolving one merge and dropped in another: no
+    # ordinary commit lists it, only a merge's own diff (git log -m)
+    repo = make_repo(tmp_path, {"Fixlets/A/1- A.bes": None})
+    commit(repo)
+    main = git(repo, "branch", "--show-current").strip()
+    for branch, name in (("one", "2- B.bes"), ("two", "3- C.bes")):
+        git(repo, "switch", "-qc", branch, main)
+        (repo / "Fixlets/A" / name).write_text(bes(name), encoding="utf-8")
+        git(repo, "add", "-A")
+        commit(repo)
+    git(repo, "switch", "-q", main)
+    merge(repo, "one", "--no-commit")
+    (repo / "Fixlets/A/8- M.bes").write_text(bes("M"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    merge(repo, "two", "--no-commit")
+    git(repo, "rm", "-q", "Fixlets/A/8- M.bes")
+    commit(repo)
+    (repo / "Fixlets/A/Name.bes").write_text(bes("Name"), encoding="utf-8")
+    git(repo, "add", "-A")
+    assign(repo)
+    assert "Fixlets/A/9 Name.bes" in bes_files(repo)
+
+
+def test_e809_a_base_file_renamed_in_the_pr_keeps_its_id(tmp_path):
+    repo = make_repo(tmp_path, {"Fixlets/A/7- Zeta.bes": bes("Zeta")})
+    base = commit(repo)
+    git(repo, "mv", "Fixlets/A/7- Zeta.bes", "Fixlets/A/7- Zeta v2.bes")
+    (repo / "Fixlets/A/7- Alpha.bes").write_text(bes("Alpha"), encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    # Alpha sorts first, but Zeta v2 is Zeta renamed: Zeta v2 keeps 7
+    found = assign(repo, environ={"PRE_COMMIT_FROM_REF": base})
+    assert found == {"Fixlets/A/7- Alpha.bes": ["E809"]}
+    assert bes_files(repo) == ["Fixlets/A/7- Zeta v2.bes", "Fixlets/A/8- Alpha.bes"]
+
+
+def test_e809_a_base_id_with_no_matching_file_is_reported_only(tmp_path):
+    # 7 is on the base branch, but neither file here is that file (no
+    # rename git can see): which one is it, if either, is for a person
+    repo = make_repo(tmp_path, {"Fixlets/A/7- Zeta.bes": bes("Zeta")})
+    base = commit(repo)
+    git(repo, "rm", "-q", "Fixlets/A/7- Zeta.bes")
+    (repo / "Fixlets/A").mkdir(parents=True)  # git rm removed the emptied folders
+    (repo / "Fixlets/A/7- A.bes").write_text("a\n" * 50, encoding="utf-8")
+    (repo / "Fixlets/A/7- B.bes").write_text("b\n" * 50, encoding="utf-8")
+    git(repo, "add", "-A")
+    commit(repo)
+    found = messages(repo, history=history(repo, PRE_COMMIT_FROM_REF=base))
+    assert sorted((p, c) for p, c, m in found) == [
+        ("Fixlets/A/7- A.bes", "E801"),
+        ("Fixlets/A/7- A.bes", "E806"),
+        ("Fixlets/A/7- B.bes", "E801"),
+        ("Fixlets/A/7- B.bes", "E806"),
+    ]
+    assert "Fixlets/A/7- Zeta.bes" in [m for p, c, m in found if c == "E806"][0]

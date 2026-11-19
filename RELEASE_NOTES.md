@@ -9,11 +9,15 @@
   becomes `<ID> Name.bes`) or shares one (`E801`). In a duplicate group the
   one file on the base branch keeps its ID and the new files are renumbered
   (`42- X.bes` -> `1043- X.bes`), so deployed content, and the actions and
-  baselines that refer to it, keep their IDs; when every file in the group is
-  new, the first by path keeps it, and when two or more are already on the
-  base branch only `E801` is reported. The new ID is one more than the highest
-  any `.bes` path has had in the tree or in git history (every branch and tag,
-  every site), so a deleted or renamed file's ID is never reused. The base
+  baselines that refer to it, keep their IDs. A file renamed from one on the
+  base branch (as `git diff -M` pairs them) counts as on it. When every file
+  in the group is new, the first by path keeps it. When two or more are
+  already on the base branch, or the ID is there but no file here matches it,
+  nothing is renumbered and `E806` says why (and, on `HEAD`, to pass
+  `--base-ref`). The new ID is one more than the highest any `.bes` path has
+  had in the tree or in git history (every fetched branch and tag, both sides
+  of every merge, every site), so a deleted or renamed file's ID is never
+  reused. The base
   branch comes from the new `--base-ref`, else `PRE_COMMIT_FROM_REF`
   (`pre-commit run --from-ref`), else `origin/$GITHUB_BASE_REF`, else `HEAD`.
   The new `--min-id N` sets a floor for IDs from before the git repo.
