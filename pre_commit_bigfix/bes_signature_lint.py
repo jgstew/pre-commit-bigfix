@@ -38,9 +38,9 @@ Checks:
     W107  an MsiProductList filter that is not `*`, does not start with `*`,
           and is not a {GUID}: filter matches the product code, not the name
     W108  XmlValue, which fails on plists with an external DTD
-    W109  a version 1 (time-based) uniqueId that is new: absent from
-          `git show HEAD:<path>`, or the file is untracked. Use uuid.uuid4().
-          Skipped outside git
+    W109  a version 1 (time-based) uniqueId that is new: in no signature file
+          of the repo at HEAD (so a renamed file's IDs are not new). Use
+          uuid.uuid4(). Skipped outside git
     W110  the leading comment's ProductName / Release differ from
           <Software name> / version
     W111  a Signature `modified` earlier than its `created`
@@ -50,7 +50,8 @@ reported at the <Signature> start tag (W110 at the <Software> tag), since a
 body is usually one long line.
 
 E102 and W101 compare every passed file against every signature file in the
-repo (`git ls-files`, or a walk of the current folder outside git), matched by
+repo holding each passed file (`git ls-files` there; outside git, a walk of
+the folder holding its Signatures/ folder), matched by
 the hook's own `files:` pattern, but report only on the files passed in. So an
 old duplicate between two unchanged files surfaces only with --all-files or
 when one of them is edited. A file keeping its own IDs across edits is never a
@@ -72,7 +73,6 @@ import argparse
 import datetime
 import os
 import re
-import subprocess
 import sys
 
 from lxml import etree
@@ -100,7 +100,7 @@ SIGNATURE_FILE_RE = re.compile(r"(^|/)Signatures/[^/]+\.xml$")
 # `<Signature` inside either is not taken for a tag
 _MASK_RE = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>", re.DOTALL)
 _SIGNATURE_RE = re.compile(
-    r"<Signature\b[^>]*>(.*?)</Signature\s*>|<Signature\b[^>]*/>", re.DOTALL
+    r"<Signature\b[^>]*(?<!/)>(.*?)</Signature\s*>|<Signature\b[^>]*/>", re.DOTALL
 )
 _SOFTWARE_RE = re.compile(r"<Software\b")
 _CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
@@ -108,7 +108,12 @@ _VAR_USE_RE = re.compile(r"\$\(([^)]*)\)")
 _GUID_RE = re.compile(r"^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$")
 # the raw text of the body is searched for these, since the CDATA keeps
 # character references literally
-_LF_CROP_RE = re.compile(r"<StringCrop\b[^>]*\bendString=\"&#10;\"")
+_LF_CROP_RE = re.compile(
+    r"<StringCrop\b[^>]*\bendString\s*=\s*([\"'])&#(?:10|x0*a);\1", re.IGNORECASE
+)
+_CR_RE = re.compile(r"&#(?:13|x0*d);", re.IGNORECASE)
+# a version 1 uniqueId anywhere in a file, for W109's lookup at HEAD
+_V1_ID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}"
 _EXPORTED = ("INSTALL_PATH", "DETAILED_VER", "IS_INSTALLED")
 
 _SAFE_PARSER = etree.XMLParser(
@@ -152,26 +157,37 @@ def _catalog_ids(root):
     return ids
 
 
-def _repo_signature_files():
-    """Every signature file in the repo, relative to the current folder."""
-    try:
-        out = subprocess.run(
-            ["git", "ls-files", "-z"],
-            capture_output=True,
-            check=True,
-        ).stdout.decode("utf-8", errors="replace")
-        paths = [p for p in out.split("\0") if p]
-    except (OSError, subprocess.CalledProcessError):
+def _is_signature_file(path):
+    return bool(SIGNATURE_FILE_RE.search(os.path.normpath(path).replace(os.sep, "/")))
+
+
+def _repo_root(path, cache):
+    """The top folder of the git repo holding `path`, or None outside git.
+
+    `cache` maps folders already asked about, so files sharing a folder cost
+    one git call.
+    """
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder not in cache:
+        out = bes_common.run_git(folder, "rev-parse", "--show-toplevel")
+        cache[folder] = os.fsdecode(out).strip() if out else None
+    return cache[folder]
+
+
+def _signature_files_under(root, in_git):
+    """Every signature file git tracks under `root` (or, outside git, that a
+    walk of it finds), as paths relative to the current folder.
+    """
+    if in_git:
+        out = bes_common.run_git(root, "ls-files", "-z")
+        names = os.fsdecode(out or b"").split("\0")
+        paths = [os.path.join(root, name) for name in names if name]
+    else:
         paths = []
-        for dirpath, dirnames, filenames in os.walk("."):
+        for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for filename in filenames:
-                paths.append(os.path.join(dirpath, filename))
-    return sorted(
-        os.path.normpath(p)
-        for p in paths
-        if SIGNATURE_FILE_RE.search(os.path.normpath(p).replace(os.sep, "/"))
-    )
+            paths.extend(os.path.join(dirpath, name) for name in filenames)
+    return sorted(os.path.relpath(path) for path in paths if _is_signature_file(path))
 
 
 def _same_file_key(path):
@@ -179,15 +195,33 @@ def _same_file_key(path):
     return os.path.normcase(os.path.realpath(path))
 
 
-def _build_index(passed_roots):
-    """{(kind, id): [(path, software name)]} over the repo plus the passed files.
+def _index_roots(paths, root_cache):
+    """{(folder, in_git)} to index for `paths`: each file's git repo, or
+    outside git the folder that holds its Signatures/ folder.
+    """
+    roots = set()
+    for path in paths:
+        top = _repo_root(path, root_cache)
+        if top is not None:
+            roots.add((top, True))
+        else:
+            signatures = os.path.dirname(os.path.abspath(path))
+            roots.add((os.path.dirname(signatures), False))
+    return roots
+
+
+def _build_index(passed_roots, root_cache):
+    """{(kind, id): [(path, software name)]} over the passed files' repos.
 
     A passed file is read from disk with its unstaged changes, like the rest;
     `passed_roots` saves parsing those twice.
     """
+    others = []
+    for folder, in_git in sorted(_index_roots(passed_roots, root_cache)):
+        others.extend(_signature_files_under(folder, in_git))
     index = {}
     seen = set()
-    for path in list(passed_roots) + _repo_signature_files():
+    for path in list(passed_roots) + others:
         if _same_file_key(path) in seen:
             continue
         seen.add(_same_file_key(path))
@@ -201,27 +235,26 @@ def _build_index(passed_roots):
     return index
 
 
-def _git_head_text(path):
-    """The text of `path` at HEAD, "" when untracked or new, None outside git."""
-    folder = os.path.dirname(os.path.abspath(path))
-    try:
-        inside = subprocess.run(
-            ["git", "-C", folder, "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-            check=False,
-        )
-    except OSError:
-        return None
-    if inside.returncode != 0 or inside.stdout.strip() != b"true":
-        return None
-    shown = subprocess.run(
-        ["git", "-C", folder, "show", "HEAD:./" + os.path.basename(path)],
-        capture_output=True,
-        check=False,
+def _head_v1_ids(top):
+    """Every version 1 uniqueId in any signature file at HEAD in repo `top`.
+
+    One git grep over the whole tree, so a renamed or moved file's IDs are
+    still found, and the cost does not grow with the files passed in. Empty
+    when there is no commit yet.
+    """
+    out = bes_common.run_git(
+        top,
+        "grep",
+        "-h",
+        "-o",
+        "-I",
+        "-E",
+        _V1_ID_RE,
+        "HEAD",
+        "--",
+        ":(glob)**/Signatures/*.xml",
     )
-    if shown.returncode != 0:
-        return ""
-    return shown.stdout.decode("utf-8", errors="replace")
+    return set(os.fsdecode(out or b"").split())
 
 
 def _is_v1(unique_id):
@@ -308,7 +341,7 @@ def _lint_body(body, max_chars):
             found.append(
                 ("W102", 'ReadFile with no FileInfoCompare field="size" guard')
             )
-        if _LF_CROP_RE.search(body) and "&#13;" not in body:
+        if _LF_CROP_RE.search(body) and not _CR_RE.search(body):
             found.append(
                 (
                     "W103",
@@ -395,7 +428,7 @@ def _describe(others):
     return ", ".join(f'{path} (Software "{name}")' for path, name in others)
 
 
-def lint_file(path, src, root, index, max_chars, head_text):
+def lint_file(path, src, root, index, max_chars, head_ids):
     """[(lineno, code, message)] for one parsed signature file."""
     issues = []
     masked = _MASK_RE.sub(lambda m: " " * len(m.group(0)), src)
@@ -442,11 +475,7 @@ def lint_file(path, src, root, index, max_chars, head_text):
                         f"Software uniqueId {unique_id} also used by {_describe(others)}",
                     )
                 )
-            if (
-                head_text is not None
-                and _is_v1(unique_id)
-                and unique_id not in head_text
-            ):
+            if head_ids is not None and _is_v1(unique_id) and unique_id not in head_ids:
                 issues.append((line, "W109", _v1_message("Software", unique_id)))
 
     # the header is the first comment before the root element
@@ -496,7 +525,7 @@ def lint_file(path, src, root, index, max_chars, head_text):
                         f"uniqueId {unique_id} also used by {_describe(others)}",
                     )
                 )
-        if head_text is not None and _is_v1(unique_id) and unique_id not in head_text:
+        if head_ids is not None and _is_v1(unique_id) and unique_id not in head_ids:
             issues.append((line, "W109", _v1_message("Signature", unique_id)))
         created = _parse_datetime(signature.get("created"))
         modified = _parse_datetime(signature.get("modified"))
@@ -568,10 +597,13 @@ def main(argv=None):
     enabled -= unknown
     disabled |= DEFAULT_DISABLED - enabled
 
-    files = [os.path.normpath(path) for path in args.files]
+    # one entry per file however it was spelled, keeping the first spelling
+    files = {}
+    for path in args.files:
+        files.setdefault(_same_file_key(path), os.path.normpath(path))
     parsed = {}
     results = []
-    for path in dict.fromkeys(files):
+    for path in files.values():
         try:
             _raw, src, _crlf = bes_common.read_source(path)
         except OSError as exc:
@@ -594,10 +626,22 @@ def main(argv=None):
             continue
         parsed[path] = (src, root)
 
-    index = _build_index({path: root for path, (_src, root) in parsed.items()})
+    root_cache = {}
+    # only E102 and W101 read the index; skip reading the repo without them
+    if {"E102", "W101"} <= disabled:
+        index = {}
+    else:
+        index = _build_index(
+            {path: root for path, (_src, root) in parsed.items()}, root_cache
+        )
+    head_ids_by_repo = {}
     for path, (src, root) in parsed.items():
-        head_text = None if "W109" in disabled else _git_head_text(path)
-        issues = lint_file(path, src, root, index, args.max_signature_chars, head_text)
+        # W109's IDs at HEAD, read once per repo; None outside git
+        top = None if "W109" in disabled else _repo_root(path, root_cache)
+        if top is not None and top not in head_ids_by_repo:
+            head_ids_by_repo[top] = _head_v1_ids(top)
+        head_ids = head_ids_by_repo.get(top)
+        issues = lint_file(path, src, root, index, args.max_signature_chars, head_ids)
         issues = [issue for issue in issues if issue[1] not in disabled]
         results.append((path, issues, []))
 

@@ -807,7 +807,7 @@ is. This hook does, and adds rules no XSD can express. It never changes a file.
 | `W106` | on | an `RpmProductList filter` that does not end in `*` |
 | `W107` | on | an `MsiProductList filter` that is not `*`, does not start with `*`, and is not a `{GUID}` |
 | `W108` | on | `XmlValue`, which fails on plists with an external DTD |
-| `W109` | on | a version 1 (time-based) `uniqueId` that is new: absent from `git show HEAD:<path>`, or the file is untracked. Skipped outside git |
+| `W109` | on | a version 1 (time-based) `uniqueId` that is new: in no signature file of the repo at `HEAD`, so a renamed file's IDs are not new. Skipped outside git |
 | `W110` | on | the leading comment's `ProductName: "..."` / `Release: "..."` differ from `<Software name>` / `version` |
 | `W111` | on | a `Signature` `modified` earlier than its `created` |
 
@@ -817,7 +817,8 @@ the number of failures, capped at 255. Findings are reported at the
 `<Signature>` start tag (`W110` at the `<Software>` tag).
 
 `E102` and `W101` compare each file passed in against every signature file
-git tracks in the repo (outside git, every one under the current folder), but
+git tracks in that file's repo, wherever it is run from (outside git, every
+one under the folder holding its `Signatures/` folder), but
 report only on the files passed in. So under pre-commit an existing duplicate
 between two unchanged files is reported only by `--all-files`, or when one of
 the files is edited. Keeping a signature's own ID when updating it in place is
