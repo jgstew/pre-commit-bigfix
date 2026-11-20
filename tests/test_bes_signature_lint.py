@@ -335,3 +335,123 @@ def test_exit_code_capped(repo, capsys):
 def test_examples_folder_copy_is_clean(repo, capsys):
     shutil.copy(CLEAN, repo / "Signatures" / "c.xml")
     assert run(capsys, "--strict", "Signatures/c.xml")[0] == 0
+
+
+# --- PR #65 review ---------------------------------------------------------
+
+
+def test_index_is_per_repo_not_cwd(tmp_path, monkeypatch, capsys):
+    # two clones of one repo under a parent folder that is not a git repo:
+    # running from the parent must not report each clone against the other
+    for clone in ("one", "two"):
+        (tmp_path / clone / "Signatures").mkdir(parents=True)
+        (tmp_path / clone / "Signatures" / "s.xml").write_text(catalog())
+    git(tmp_path / "one", "init", "-q")
+    monkeypatch.chdir(tmp_path)
+    rc, out, codes = run(capsys, "one/Signatures/s.xml")
+    assert (rc, codes) == (0, []), out
+
+
+def test_index_reads_the_files_repo_from_outside_it(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    (repo / "Signatures").mkdir(parents=True)
+    (repo / "Signatures" / "old.xml").write_text(
+        catalog(software_id="1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5")
+    )
+    (repo / "Signatures" / "new.xml").write_text(catalog())
+    git(repo, "init", "-q")
+    git(repo, "add", "Signatures/old.xml")
+    monkeypatch.chdir(tmp_path)
+    _rc, out, codes = run(capsys, "repo/Signatures/new.xml")
+    assert codes == ["E102"], out
+    assert "repo/Signatures/old.xml" in out
+
+
+def test_w109_follows_a_rename(repo, capsys):
+    write(repo, catalog(signature(unique_id=V1_ID)), "old.xml")
+    git(repo, "init", "-q")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "x")
+    git(repo, "mv", "Signatures/old.xml", "Signatures/new.xml")
+    rc, out, codes = run(capsys, "--strict", "Signatures/new.xml")
+    assert (rc, codes) == (0, []), out
+
+
+def test_self_closing_signature_before_a_normal_one(repo, capsys):
+    # the body is exactly at the limit; counting the whitespace around the
+    # CDATA would push it over
+    body = "<r/>" + " " * (3829 - len("<r/>"))
+    empty = '    <Signature uniqueId="1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"/>\n'
+    path = write(repo, catalog(empty, signature(body=body)))
+    _rc, out, codes = run(capsys, "--disable", "W100", "--enable", "E100", path)
+    assert "E100" not in codes, out
+
+
+@pytest.mark.parametrize(
+    "crop, cr, flagged",
+    [
+        ('endString="&#10;"', 'endString="&#xD;"', False),
+        ('endString="&#10;"', 'endString="&#x0d;"', False),
+        ("endString='&#10;'", 'endString=""', True),
+        ('endString="&#xA;"', 'endString=""', True),
+        ('endString = "&#x0a;"', 'endString=""', True),
+    ],
+)
+def test_w103_entity_spellings(repo, capsys, crop, cr, flagged):
+    body = CLEAN_BODY.replace('endString="&#10;"', crop, 1).replace(
+        'endString="&#13;"', cr, 1
+    )
+    _rc, out, codes = run(capsys, write(repo, catalog(signature(body=body))))
+    assert codes == (["W103"] if flagged else []), out
+
+
+def test_index_skipped_when_its_checks_are_off(repo, capsys, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("index built")
+
+    monkeypatch.setattr(bes_signature_lint, "_build_index", boom)
+    path = write(repo, catalog())
+    assert run(capsys, "--disable", "E102,W101", path)[0] == 0
+
+
+def test_git_calls_do_not_grow_with_files(repo, capsys, monkeypatch):
+    git(repo, "init", "-q")
+    paths = [
+        write(
+            repo,
+            catalog(
+                signature(unique_id=f"7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c{n:02d}"),
+                software_id=f"3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e{n:02d}",
+            ),
+            f"s{n}.xml",
+        )
+        for n in range(10)
+    ]
+    calls = []
+    real_run = subprocess.run
+
+    def counting(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "git":
+            calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", counting)
+    assert run(capsys, *paths)[0] == 0
+    assert len(calls) <= 4, calls
+
+
+def test_git_helper_is_shared(tmp_path):
+    from pre_commit_bigfix import bes_common, bes_siterepo_validate_layout
+
+    assert bes_common.run_git(tmp_path, "rev-parse", "--show-toplevel") is None
+    git(tmp_path, "init", "-q")
+    assert bes_common.run_git(tmp_path, "rev-parse", "--is-inside-work-tree") == (
+        b"true\n"
+    )
+    assert bes_siterepo_validate_layout._git is bes_common.run_git
+
+
+def test_same_file_two_spellings_linted_once(repo, capsys):
+    path = write(repo, catalog(signature(body="<Instance/>")))
+    rc, out, _codes = run(capsys, path, str(repo / path))
+    assert rc == 1 and out.count("[E104]") == 1, out
