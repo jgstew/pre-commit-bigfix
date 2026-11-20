@@ -124,6 +124,11 @@ HOOKS = (
         r"\.bes$",
     ),
     Hook(
+        "bes-signature-lint",
+        "bes_signature_lint",
+        r"(^|/)Signatures/[^/]+\.xml$",
+    ),
+    Hook(
         "bes-siterepo-validate-layout",
         "bes_siterepo_validate_layout",
         None,

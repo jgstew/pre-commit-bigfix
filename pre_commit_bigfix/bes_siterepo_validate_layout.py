@@ -274,15 +274,8 @@ def repo_name_from_url(url):
     return stem if extension.lower() == ".git" else name
 
 
-def _git(repo_root, *args):
-    """Run git in `repo_root`; return its stdout bytes, or None if it failed."""
-    try:
-        result = subprocess.run(
-            ["git", *args], cwd=repo_root, capture_output=True, check=False
-        )
-    except OSError:  # git not installed
-        return None
-    return result.stdout if result.returncode == 0 else None
+# run git in a folder; stdout bytes, or None if it failed
+_git = bes_common.run_git
 
 
 class GitHistory:

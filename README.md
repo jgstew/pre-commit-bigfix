@@ -21,6 +21,7 @@ repos:
       - id: bes-relevance-lint
       - id: bes-relevance-convert-group
       - id: bes-content-score-risk
+      - id: bes-signature-lint
       # only in a Git External Custom Site (repository site) repo:
       - id: bes-siterepo-validate-layout
 ```
@@ -779,6 +780,55 @@ The signals favor recall over precision: it is better to flag something a
 reviewer then accepts than to miss something malicious. Content written by
 `createfile` is scanned like any other script content, so a configuration
 file that only lists tool names (a Sysmon config, say) can still score.
+
+### bes-signature-lint
+
+Lints BigFix Inventory signature files (`Signatures/*.xml`).
+`bes-schema-validate` already checks their outer layer against
+`SoftwareIdentityCatalog.xsd`, but that schema types `<ExtendedSignature>` as
+any content, so nothing looks inside the CDATA body, where the detection logic
+is. This hook does, and adds rules no XSD can express. It never changes a file.
+
+| code | default | check |
+| --- | --- | --- |
+| `E100` | on | a CDATA body longer than `--max-signature-chars` (default 3829, the most BigFix Inventory imports): Python `len()` of the text between `<![CDATA[` and `]]>`, whitespace included |
+| `E101` | on | a body that is not well-formed XML when wrapped as `<r>BODY</r>` (single-instance bodies have several top-level elements) |
+| `E102` | on | a `Signature` `uniqueId` used twice in one file, or also used by another signature file in the repo |
+| `E103` | on | `$(NAME)` or `withVariable="NAME"` with no `Variable`/`Iterator` `name="NAME"` in the same body |
+| `E104` | on | an `<Instance>` with no element children, which the scanner rejects |
+| `E105` | on | `<RpmProductInfo field="version">`, which returns `version.release` joined with a dot; use `field="displayVersion"` and crop at `-` |
+| `E106` | off | the file is not well-formed XML, so nothing was linted (`bes-schema-validate` reports it) |
+| `W100` | on | a body longer than 90% of the limit |
+| `W101` | on | a `Software` `uniqueId` duplicated, by the same rules as `E102` (a warning until `Software` IDs are confirmed global) |
+| `W102` | on | `ReadFile` in a body with no `FileInfoCompare field="size"` guard |
+| `W103` | on | `ReadFile` plus a `StringCrop endString="&#10;"`, with no `&#13;` in the body |
+| `W104` | on | a `DETAILED_VER` variable with no `<Condition withVariable="DETAILED_VER"><Action do="SKIP" onValue=""/>` |
+| `W105` | off | a body that does not export all of `INSTALL_PATH`, `DETAILED_VER` and `IS_INSTALLED` |
+| `W106` | on | an `RpmProductList filter` that does not end in `*` |
+| `W107` | on | an `MsiProductList filter` that is not `*`, does not start with `*`, and is not a `{GUID}` |
+| `W108` | on | `XmlValue`, which fails on plists with an external DTD |
+| `W109` | on | a version 1 (time-based) `uniqueId` that is new: in no signature file of the repo at `HEAD`, so a renamed file's IDs are not new. Skipped outside git |
+| `W112` | on | a `Signature` or `Software` `uniqueId` with an uppercase hex digit; use lowercase |
+| `W110` | on | the leading comment's `ProductName: "..."` / `Release: "..."` differ from `<Software name>` / `version` |
+| `W111` | on | a `Signature` `modified` earlier than its `created` |
+
+E-codes fail the hook; `--strict` also fails on warnings. `--disable CODES`
+skips checks and `--enable CODES` turns on `E106` or `W105`. The exit code is
+the number of failures, capped at 255. Findings are reported at the
+`<Signature>` start tag (`W110` at the `<Software>` tag).
+
+`E102` and `W101` compare each file passed in against every signature file
+git tracks in that file's repo, wherever it is run from (outside git, every
+one under the folder holding its `Signatures/` folder), but
+report only on the files passed in. So under pre-commit an existing duplicate
+between two unchanged files is reported only by `--all-files`, or when one of
+the files is edited. Keeping a signature's own ID when updating it in place is
+how an update replaces it on import, so that is never a collision: only the
+same ID in two files, or twice in one file. IDs are compared ignoring case,
+for `E102`, `W101` and `W109`.
+
+A file that is not a `<SoftwareIdentityCatalog>` is skipped, and a file opts
+out of every check with `pre-commit-skip: bes-signature-lint`.
 
 ### bes-siterepo-validate-layout
 

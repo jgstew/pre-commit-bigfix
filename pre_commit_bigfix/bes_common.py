@@ -15,6 +15,7 @@ import bisect
 import functools
 import os
 import re
+import subprocess
 import sys
 
 # an unrendered mustache template ({{ placeholder }}) is not real content yet.
@@ -40,6 +41,17 @@ PROLOG_DOCTYPE_RE = re.compile(
 
 # directories never searched by discover_bes_files (hidden ones are skipped too)
 DISCOVERY_SKIP_DIRS = frozenset({"__pycache__", "node_modules"})
+
+
+def run_git(cwd, *args):
+    """Run git in `cwd`; return its stdout bytes, or None if it failed."""
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, check=False
+        )
+    except OSError:  # git not installed
+        return None
+    return result.stdout if result.returncode == 0 else None
 
 
 def read_source(path):
