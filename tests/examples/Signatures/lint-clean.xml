@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Description: "An invented signature that every bes-signature-lint check passes."
+ProductName: "Example Widget"
+Release: "1.AFFECTED"
+-->
+<SoftwareIdentityCatalog exportTimeStamp="2026-11-20T00:00:00Z">
+  <Software name="Example Widget" vendor="Example Vendor" uniqueId="3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f" version="1.AFFECTED">
+    <Signature uniqueId="7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d" modified="2026-11-20T00:00:00Z" created="2026-11-19T00:00:00Z">
+      <ExtendedSignature>
+        <![CDATA[<MultipleInstance><Iterator export="true" name="INSTALL_PATH"><FindFilePathEx names="widget.txt"/></Iterator><Instance><Variable export="false" name="size"><FileInfoCompare absolutePath="$(INSTALL_PATH)widget.txt" field="size" relation="le" value="512000"/></Variable><Condition withVariable="size"><Action do="SKIP" onValue="false"/></Condition><Variable export="false" name="text"><ReadFile path="$(INSTALL_PATH)widget.txt"/></Variable><Variable export="false" name="line"><StringCrop endString="&#10;" inputString="$(text)" seekFrom="left" startString="Version: "/></Variable><Variable export="true" name="DETAILED_VER"><StringCrop endString="&#13;" inputString="$(line)" seekFrom="left" startString=""/></Variable><Condition withVariable="DETAILED_VER"><Action do="SKIP" onValue=""/></Condition><Variable export="true" name="IS_INSTALLED"><Compare relation="lt" type="version"><ValueOf value="$(DETAILED_VER)"/><ValueOf value="1.2.0"/></Compare></Variable><Condition withVariable="IS_INSTALLED"><Action do="SKIP" onValue="false"/></Condition></Instance></MultipleInstance>]]>
+      </ExtendedSignature>
+    </Signature>
+  </Software>
+</SoftwareIdentityCatalog>

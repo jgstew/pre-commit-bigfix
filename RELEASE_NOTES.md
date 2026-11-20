@@ -1,5 +1,19 @@
 # Release Notes
 
+## v2.5.0
+
+### Added
+
+- `bes-signature-lint`, a new hook for BigFix Inventory signature files
+  (`Signatures/*.xml`) that checks the `<ExtendedSignature>` CDATA bodies the
+  outer schema cannot see: a body over BigFix Inventory's 3829-character
+  import limit (`E100`, `--max-signature-chars`), a body that is not
+  well-formed (`E101`), a `Signature` `uniqueId` reused within a file or by
+  any other signature file in the repo (`E102`), undefined variables
+  (`E103`), an empty `<Instance>` (`E104`), `RpmProductInfo field="version"`
+  (`E105`), and warnings `W100`-`W111` for scanner pitfalls and conventions.
+  `E106` and `W105` are off by default. (#64)
+
 ## v2.4.0
 
 ### Added

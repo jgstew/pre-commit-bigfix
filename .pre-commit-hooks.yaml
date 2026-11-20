@@ -425,6 +425,33 @@
   pass_filenames: True
   types: [text]
   files: \.bes$
+- id: bes-signature-lint
+  name: Lint BigFix Inventory signature bodies
+  description: >
+    Checks the <ExtendedSignature> CDATA bodies of BigFix Inventory signature
+    files (Signatures/*.xml), which bes-schema-validate's
+    SoftwareIdentityCatalog.xsd types as any content. E100 a body over
+    --max-signature-chars (default 3829, the most BigFix Inventory imports);
+    E101 a body that is not well-formed XML (wrapped in a dummy root); E102 a
+    Signature uniqueId used twice in a file or by another signature file in
+    the repo (reported only on the files passed in); E103 a `$(NAME)` or
+    withVariable with no Variable/Iterator; E104 an empty <Instance>; E105
+    RpmProductInfo field="version"; E106 unparsable XML (off by default).
+    Warnings: W100 a body within 10% of the limit; W101 a duplicate Software
+    uniqueId; W102 ReadFile with no size guard; W103 a ReadFile crop at LF
+    with no CR crop; W104 DETAILED_VER with no skip on empty; W105 missing
+    INSTALL_PATH/DETAILED_VER/IS_INSTALLED exports (off by default); W106 an
+    RpmProductList filter without a trailing `*`; W107 an MsiProductList
+    filter that is not `*` or a {GUID}; W108 XmlValue; W109 a new version 1
+    uniqueId (git only); W110 header ProductName/Release differ from
+    <Software>; W111 modified before created. Never changes files. A file
+    opts out with `pre-commit-skip: bes-signature-lint`. E-codes fail the
+    hook; pass --strict to also fail on warnings.
+  entry: bes-signature-lint
+  language: python
+  pass_filenames: True
+  types: [text]
+  files: (^|/)Signatures/[^/]+\.xml$
 - id: bes-siterepo-validate-layout
   name: Validate a BigFix Git External Custom Site's layout and file names
   description: >
