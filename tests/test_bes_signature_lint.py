@@ -455,3 +455,91 @@ def test_same_file_two_spellings_linted_once(repo, capsys):
     path = write(repo, catalog(signature(body="<Instance/>")))
     rc, out, _codes = run(capsys, path, str(repo / path))
     assert rc == 1 and out.count("[E104]") == 1, out
+
+
+# --- uniqueId case (PR #65 review) ----------------------------------------
+
+UPPER_V1_ID = "CCCCCCCC-BBBB-1CCC-8DDD-EEEEEEEEEEEE"
+
+
+def test_w109_finds_an_uppercase_id_at_head(repo, capsys):
+    path = write(repo, catalog(signature(unique_id=UPPER_V1_ID)), "upper.xml")
+    git(repo, "init", "-q")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "x")
+    _rc, out, codes = run(capsys, "--disable", "W112", path)
+    assert "W109" not in codes, out
+
+
+def test_w109_head_lookup_ignores_case(repo, capsys):
+    # committed lowercase, now written uppercase: the same ID, not a new one
+    write(repo, catalog(signature(unique_id=UPPER_V1_ID.lower())))
+    git(repo, "init", "-q")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "x")
+    path = write(repo, catalog(signature(unique_id=UPPER_V1_ID)))
+    _rc, out, codes = run(capsys, "--disable", "W112", path)
+    assert "W109" not in codes, out
+
+
+def test_e102_ignores_case_in_one_file(repo, capsys):
+    path = write(repo, catalog(signature(), signature(unique_id=SIGNATURE_ID.upper())))
+    _rc, out, codes = run(capsys, "--disable", "W112", path)
+    assert codes == ["E102"] and out.count("[E102]") == 2, out
+
+
+def test_e102_ignores_case_across_files(repo, capsys):
+    other = "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+    write(
+        repo,
+        catalog(signature(unique_id=SIGNATURE_ID.upper()), software_id=other),
+        "old.xml",
+    )
+    _rc, out, codes = run(
+        capsys, "--disable", "W112", write(repo, catalog(), "new.xml")
+    )
+    assert codes == ["E102"] and "old.xml" in out, out
+
+
+def test_w101_ignores_case_across_files(repo, capsys):
+    other = "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+    write(
+        repo,
+        catalog(signature(unique_id=other), software_id=SOFTWARE_ID.upper()),
+        "old.xml",
+    )
+    _rc, out, codes = run(
+        capsys, "--disable", "W112", write(repo, catalog(), "new.xml")
+    )
+    assert codes == ["W101"], out
+
+
+def test_w101_ignores_case_in_one_file(repo, capsys):
+    other = "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+    text = catalog().replace(
+        "  </Software>\n",
+        "  </Software>\n"
+        f'  <Software name="Example Widget" vendor="Example Vendor" '
+        f'uniqueId="{SOFTWARE_ID.upper()}" version="1.AFFECTED">\n'
+        + signature(unique_id=other)
+        + "  </Software>\n",
+    )
+    _rc, out, codes = run(capsys, "--disable", "W112", write(repo, text))
+    assert codes == ["W101"] and out.count("[W101]") == 2, out
+
+
+def test_w112_uppercase_ids(repo, capsys):
+    text = catalog(
+        signature(unique_id=SIGNATURE_ID.upper()), software_id=SOFTWARE_ID.upper()
+    )
+    rc, out, codes = run(capsys, write(repo, text))
+    assert (rc, codes) == (0, ["W112"]), out
+    lines = sorted(re.findall(r"s\.xml:(\d+): \[W112\]", out))
+    # the <Software> tag (line 7) and the <Signature> tag (line 8)
+    assert lines == ["7", "8"], out
+    assert bes_signature_lint.main(["--strict", "Signatures/s.xml"]) == 1
+    assert run(capsys, "--disable", "W112", "Signatures/s.xml")[0] == 0
+
+
+def test_w112_quiet_on_lowercase(repo, capsys):
+    assert run(capsys, "--strict", write(repo, catalog()))[0] == 0
