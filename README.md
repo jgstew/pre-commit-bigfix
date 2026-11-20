@@ -808,6 +808,7 @@ is. This hook does, and adds rules no XSD can express. It never changes a file.
 | `W107` | on | an `MsiProductList filter` that is not `*`, does not start with `*`, and is not a `{GUID}` |
 | `W108` | on | `XmlValue`, which fails on plists with an external DTD |
 | `W109` | on | a version 1 (time-based) `uniqueId` that is new: in no signature file of the repo at `HEAD`, so a renamed file's IDs are not new. Skipped outside git |
+| `W112` | on | a `Signature` or `Software` `uniqueId` with an uppercase hex digit; use lowercase |
 | `W110` | on | the leading comment's `ProductName: "..."` / `Release: "..."` differ from `<Software name>` / `version` |
 | `W111` | on | a `Signature` `modified` earlier than its `created` |
 
@@ -823,7 +824,8 @@ report only on the files passed in. So under pre-commit an existing duplicate
 between two unchanged files is reported only by `--all-files`, or when one of
 the files is edited. Keeping a signature's own ID when updating it in place is
 how an update replaces it on import, so that is never a collision: only the
-same ID in two files, or twice in one file.
+same ID in two files, or twice in one file. IDs are compared ignoring case,
+for `E102`, `W101` and `W109`.
 
 A file that is not a `<SoftwareIdentityCatalog>` is skipped, and a file opts
 out of every check with `pre-commit-skip: bes-signature-lint`.

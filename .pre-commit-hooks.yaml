@@ -444,7 +444,8 @@
     RpmProductList filter without a trailing `*`; W107 an MsiProductList
     filter that is not `*` or a {GUID}; W108 XmlValue; W109 a new version 1
     uniqueId (git only); W110 header ProductName/Release differ from
-    <Software>; W111 modified before created. Never changes files. A file
+    <Software>; W111 modified before created; W112 an uppercase uniqueId
+    (IDs are compared ignoring case). Never changes files. A file
     opts out with `pre-commit-skip: bes-signature-lint`. E-codes fail the
     hook; pass --strict to also fail on warnings.
   entry: bes-signature-lint

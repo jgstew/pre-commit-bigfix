@@ -41,6 +41,8 @@ Checks:
     W109  a version 1 (time-based) uniqueId that is new: in no signature file
           of the repo at HEAD (so a renamed file's IDs are not new). Use
           uuid.uuid4(). Skipped outside git
+    W112  a Signature or Software uniqueId with an uppercase hex digit; use
+          lowercase. E102, W101 and W109 compare IDs ignoring case
     W110  the leading comment's ProductName / Release differ from
           <Software name> / version
     W111  a Signature `modified` earlier than its `created`
@@ -88,7 +90,7 @@ NEAR_LIMIT = 0.9
 
 KNOWN_CODES = frozenset(
     ["E100", "E101", "E102", "E103", "E104", "E105", "E106"]
-    + [f"W{n}" for n in range(100, 112)]
+    + [f"W{n}" for n in range(100, 113)]
 )
 DEFAULT_DISABLED = frozenset({"E106", "W105"})
 
@@ -113,7 +115,9 @@ _LF_CROP_RE = re.compile(
 )
 _CR_RE = re.compile(r"&#(?:13|x0*d);", re.IGNORECASE)
 # a version 1 uniqueId anywhere in a file, for W109's lookup at HEAD
-_V1_ID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}"
+_V1_ID_RE = (
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-1[0-9A-Fa-f]{3}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+)
 _EXPORTED = ("INSTALL_PATH", "DETAILED_VER", "IS_INSTALLED")
 
 _SAFE_PARSER = etree.XMLParser(
@@ -231,7 +235,8 @@ def _build_index(passed_roots, root_cache):
         if root is None or _local(root) != "SoftwareIdentityCatalog":
             continue
         for kind, unique_id, name in _catalog_ids(root):
-            index.setdefault((kind, unique_id), []).append((path, name))
+            # IDs differing only by case count as the same ID
+            index.setdefault((kind, unique_id.lower()), []).append((path, name))
     return index
 
 
@@ -254,7 +259,7 @@ def _head_v1_ids(top):
         "--",
         ":(glob)**/Signatures/*.xml",
     )
-    return set(os.fsdecode(out or b"").split())
+    return {found.lower() for found in os.fsdecode(out or b"").split()}
 
 
 def _is_v1(unique_id):
@@ -417,6 +422,10 @@ def _lint_body(body, max_chars):
     return found
 
 
+def _upper_message(kind, unique_id):
+    return f"{kind} uniqueId {unique_id} has uppercase hex digits; use lowercase"
+
+
 def _v1_message(kind, unique_id):
     return (
         f"new {kind} uniqueId {unique_id} is a version 1 (time-based) UUID; "
@@ -449,7 +458,7 @@ def lint_file(path, src, root, index, max_chars, head_ids):
     sw_line_of = {id(el): line for el, line in zip(software_elements, sw_lines)}
 
     def collisions(kind, unique_id):
-        uses = index.get((kind, unique_id), [])
+        uses = index.get((kind, unique_id.lower()), [])
         here = _same_file_key(path)
         others = [use for use in uses if _same_file_key(use[0]) != here]
         twice_here = sum(1 for use in uses if _same_file_key(use[0]) == here) > 1
@@ -457,6 +466,8 @@ def lint_file(path, src, root, index, max_chars, head_ids):
 
     for software, line in zip(software_elements, sw_lines):
         unique_id = software.get("uniqueId")
+        if unique_id and unique_id != unique_id.lower():
+            issues.append((line, "W112", _upper_message("Software", unique_id)))
         if unique_id:
             others, twice = collisions("Software", unique_id)
             if twice:
@@ -475,7 +486,11 @@ def lint_file(path, src, root, index, max_chars, head_ids):
                         f"Software uniqueId {unique_id} also used by {_describe(others)}",
                     )
                 )
-            if head_ids is not None and _is_v1(unique_id) and unique_id not in head_ids:
+            if (
+                head_ids is not None
+                and _is_v1(unique_id)
+                and unique_id.lower() not in head_ids
+            ):
                 issues.append((line, "W109", _v1_message("Software", unique_id)))
 
     # the header is the first comment before the root element
@@ -507,6 +522,8 @@ def lint_file(path, src, root, index, max_chars, head_ids):
     ):
         unique_id = signature.get("uniqueId", "")
         label = f"signature #{number} ({unique_id})"
+        if unique_id != unique_id.lower():
+            issues.append((line, "W112", _upper_message("Signature", unique_id)))
         if unique_id:
             others, twice = collisions("Signature", unique_id)
             if twice:
@@ -525,7 +542,11 @@ def lint_file(path, src, root, index, max_chars, head_ids):
                         f"uniqueId {unique_id} also used by {_describe(others)}",
                     )
                 )
-        if head_ids is not None and _is_v1(unique_id) and unique_id not in head_ids:
+        if (
+            head_ids is not None
+            and _is_v1(unique_id)
+            and unique_id.lower() not in head_ids
+        ):
             issues.append((line, "W109", _v1_message("Signature", unique_id)))
         created = _parse_datetime(signature.get("created"))
         modified = _parse_datetime(signature.get("modified"))

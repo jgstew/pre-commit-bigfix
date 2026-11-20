@@ -12,7 +12,8 @@
   any other signature file in the repo (`E102`), undefined variables
   (`E103`), an empty `<Instance>` (`E104`), `RpmProductInfo field="version"`
   (`E105`), and warnings `W100`-`W111` for scanner pitfalls and conventions.
-  `E106` and `W105` are off by default. (#64)
+  `W112` warns on an uppercase `uniqueId`, and IDs are compared ignoring
+  case. `E106` and `W105` are off by default. (#64)
 
 ## v2.4.0
 

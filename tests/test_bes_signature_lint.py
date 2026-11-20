@@ -537,7 +537,8 @@ def test_w112_uppercase_ids(repo, capsys):
     lines = sorted(re.findall(r"s\.xml:(\d+): \[W112\]", out))
     # the <Software> tag (line 7) and the <Signature> tag (line 8)
     assert lines == ["7", "8"], out
-    assert bes_signature_lint.main(["--strict", "Signatures/s.xml"]) == 1
+    # one failure per W112 under --strict
+    assert bes_signature_lint.main(["--strict", "Signatures/s.xml"]) == 2
     assert run(capsys, "--disable", "W112", "Signatures/s.xml")[0] == 0
 
 
